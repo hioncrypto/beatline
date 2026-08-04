@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="BeatLine">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="72%">
+      <stop offset="0%" stop-color="#1a2f26"/>
+      <stop offset="100%" stop-color="#070c0a"/>
+    </radialGradient>
+  </defs>
+  <rect width="128" height="128" fill="url(#bg)"/>
+  <!-- Beat line -->
+  <rect x="22" y="60" width="84" height="8" rx="4" fill="#e8f5ee"/>
+  <!-- Stylized B bowls -->
+  <path d="M40 28 H62 C78 28 86 36 86 46 C86 54 80 58 70 60 H40 Z" fill="#1ac96b"/>
+  <path d="M40 60 H72 C86 60 94 68 94 78 C94 92 82 100 64 100 H40 Z" fill="#c84848"/>
+  <!-- Stem -->
+  <rect x="40" y="28" width="10" height="72" rx="2" fill="#e8f5ee"/>
+  <!-- Re-draw beat line over stem for strike-through -->
+  <rect x="22" y="60" width="84" height="8" rx="4" fill="#e8f5ee"/>
+</svg>

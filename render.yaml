@@ -1,0 +1,20 @@
+# BeatLine — Deploy to Render (stable public URL)
+# https://render.com/deploy?repo=https://github.com/hioncrypto/beatline
+#
+# Free plan: URL stays the same. Sleeps after ~15m idle; wakes on next visit.
+
+services:
+  - type: web
+    name: beatline
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 server.py
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: PYTHONUNBUFFERED
+        value: "1"

@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.8";
+  const APP_VERSION = "9.9";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -55,7 +55,7 @@
     },
     {
       title: "Set size, then buy",
-      body: "Tap Buy Above, Best, or Buy Below. Best Side suggests an advantageous dollar size when the edge is clear — confirm or edit it in the buy sheet, then slide to fill. Same-side taps add to the open position (avg entry).",
+      body: "Use the Trade size slider to compare win, cost, and ROI across dollar amounts. Then tap Buy Above, Best, or Buy Below — confirm or edit dollars in the sheet and slide to fill. Same-side taps add to the open position (avg entry).",
     },
     {
       title: "Rolling P/L",
@@ -105,6 +105,7 @@
     oddsHint: document.getElementById("odds-hint"),
     edgeLine: document.getElementById("edge-line"),
     roiPanel: document.getElementById("roi-panel"),
+    stakeSlider: document.getElementById("stake-slider"),
     stakeValue: document.getElementById("stake-value"),
     bestSide: document.getElementById("best-side"),
     bestSideLabel: document.getElementById("best-side-label"),
@@ -2707,9 +2708,9 @@
   let lastRoiBids = { above: null, below: null };
   const STAKE_KEY = "kalshiTradeStake";
   let tradeStake = Number(localStorage.getItem(STAKE_KEY));
-  if (!Number.isFinite(tradeStake)) tradeStake = 10;
+  if (!Number.isFinite(tradeStake)) tradeStake = 1;
   tradeStake = Math.max(1, Math.min(100, Math.round(tradeStake)));
-  if (tradeStake < 1) tradeStake = 10;
+  if (tradeStake < 1) tradeStake = 1;
 
   function dollars(n) {
     if (n == null || !Number.isFinite(n)) return "—";
@@ -3276,7 +3277,7 @@
       if (el.bestSideLabel) el.bestSideLabel.textContent = "No clear edge";
       if (el.bestSideAmount) {
         el.bestSideAmount.textContent =
-          tradeStake > 0 ? `Holding $${tradeStake}` : "Open Buy to set size";
+          tradeStake > 0 ? `Holding $${tradeStake}` : "Set a trade size";
       }
       // Still show what we'd risk on the better-priced side, marked as a wait.
       renderBestSideSuggest(best.side, suggestStakeForEdge(best), {
@@ -3359,7 +3360,7 @@
           ? `Tap to add $${suggestStake}`
           : `Tap to buy $${suggestStake}`;
       } else if (tradeStake <= 0) {
-        el.bestSideAmount.textContent = "Open Buy to set size";
+        el.bestSideAmount.textContent = "Set a trade size";
       } else {
         el.bestSideAmount.textContent = `${
           sameAsOpen ? "Add" : "Buy"
@@ -3448,8 +3449,8 @@
       return false;
     }
     if (r.empty) {
-      if (summaryEl) summaryEl.textContent = "Open Buy to set dollars";
-      if (detailEl) detailEl.textContent = "Best Side sizes the advantageous entry";
+      if (summaryEl) summaryEl.textContent = "Slide to size a trade";
+      if (detailEl) detailEl.textContent = "Set a dollar amount above";
       return true;
     }
     const roiTxt =
@@ -3461,56 +3462,40 @@
     }
     if (detailEl) {
       detailEl.innerHTML =
-        `${r.contracts} contracts · $${Math.round(stakeUsd)} preview<br>` +
+        `${r.contracts} contracts<br>` +
         `Cost ${dollars(r.cost)} + fee ${dollars(r.fee)}<br>` +
         `Total ${dollars(r.total)} · lose = ${dollars(r.total)}`;
     }
     return true;
   }
 
-  function previewStakeForSide(side) {
-    if (
-      lastBestPick &&
-      lastBestPick.side === side &&
-      lastBestPick.suggestedStake != null &&
-      Number.isFinite(Number(lastBestPick.suggestedStake))
-    ) {
-      return Math.max(1, Math.round(Number(lastBestPick.suggestedStake)));
-    }
-    return Math.max(1, Math.round(tradeStake) || 10);
-  }
-
   function syncStakeUi() {
-    if (!el.stakeValue) return;
-    if (lastBestPick && lastBestPick.suggestedStake != null) {
-      el.stakeValue.textContent = `Best $${Math.round(lastBestPick.suggestedStake)}`;
-    } else {
-      el.stakeValue.textContent = `Preview $${Math.max(1, Math.round(tradeStake) || 10)}`;
+    if (el.stakeSlider) {
+      el.stakeSlider.value = String(tradeStake);
+      el.stakeSlider.setAttribute("aria-valuenow", String(tradeStake));
     }
+    if (el.stakeValue) el.stakeValue.textContent = `$${tradeStake}`;
   }
 
   function renderRoi() {
     if (!el.roiPanel) return;
-    // Refresh Best Side first so ROI previews can follow the advantageous size.
-    refreshBestSide();
     syncStakeUi();
-    const stakeAbove = previewStakeForSide("above");
-    const stakeBelow = previewStakeForSide("below");
     const okA = fillRoiCard(
       el.roiAbovePrice,
       el.roiAboveSummary,
       el.roiAboveDetail,
       lastRoiAsks.above,
-      stakeAbove
+      tradeStake
     );
     const okB = fillRoiCard(
       el.roiBelowPrice,
       el.roiBelowSummary,
       el.roiBelowDetail,
       lastRoiAsks.below,
-      stakeBelow
+      tradeStake
     );
     el.roiPanel.hidden = !(okA || okB);
+    refreshBestSide();
     renderDemoUi();
     syncBuyDock();
   }
@@ -4479,6 +4464,12 @@
       el.rotateGate.addEventListener("click", () => {
         ensurePortraitLock(true);
       });
+    }
+    if (el.stakeSlider) {
+      syncStakeUi();
+      const onStake = () => setTradeStake(el.stakeSlider.value);
+      el.stakeSlider.addEventListener("input", onStake);
+      el.stakeSlider.addEventListener("change", onStake);
     }
     if (el.menuBtn) {
       el.menuBtn.addEventListener("click", () => {

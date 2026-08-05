@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.18";
+  const APP_VERSION = "9.19";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -1676,6 +1676,10 @@
     const summaryH = el.summaryPanel
       ? el.summaryPanel.getBoundingClientRect().height
       : 0;
+    const bestH =
+      el.bestSide && !el.bestSide.hidden
+        ? el.bestSide.getBoundingClientRect().height
+        : 0;
     const dock = document.querySelector(".buy-dock");
     const dockH = dock ? dock.getBoundingClientRect().height : 78;
     const openPlH =
@@ -1684,13 +1688,24 @@
         : 0;
     const handleBudget = 32;
     // Leave only a thin trade strip so the chart can grow nearly full-height.
+    // Best Side lives outside the trade strip now, so minTrade can stay small.
     const minTrade = 52;
     const minChart = 120;
     const maxChart = Math.max(
       minChart,
-      shellH - topH - summaryH - dockH - openPlH - handleBudget - minTrade
+      shellH - topH - summaryH - bestH - dockH - openPlH - handleBudget - minTrade
     );
-    return { minChart, maxChart, minTrade, shellH, topH, summaryH, dockH, openPlH };
+    return {
+      minChart,
+      maxChart,
+      minTrade,
+      shellH,
+      topH,
+      summaryH,
+      bestH,
+      dockH,
+      openPlH,
+    };
   }
 
   function applyChartHeight(px, { persist = true } = {}) {
@@ -1707,7 +1722,7 @@
       setTimeout(resizeChart, 40);
       return;
     }
-    const { minChart, maxChart, minTrade, shellH, topH, summaryH, dockH, openPlH } =
+    const { minChart, maxChart, minTrade, shellH, topH, summaryH, bestH, dockH, openPlH } =
       chartHeightLimits();
     chartHeightPx = Math.round(Math.min(maxChart, Math.max(minChart, px)));
     el.chartWrap.style.setProperty("flex", `0 0 ${chartHeightPx}px`, "important");
@@ -1718,13 +1733,22 @@
     if (el.tradePanel) {
       const leftover = Math.max(
         minTrade,
-        shellH - topH - summaryH - chartHeightPx - dockH - openPlH - 32
+        shellH - topH - summaryH - bestH - chartHeightPx - dockH - openPlH - 32
       );
       el.tradePanel.style.maxHeight = `${Math.round(leftover)}px`;
     }
     document.body.classList.add("chart-height-locked");
     if (persist) saveChartHeightPx(chartHeightPx);
     setTimeout(resizeChart, 40);
+  }
+
+  /** Reflow chart + trade strip after open-P/L drawer height changes. */
+  function reflowAfterOpenPlChange() {
+    if (chartHeightPx != null) {
+      applyChartHeight(chartHeightPx, { persist: false });
+    } else {
+      setTimeout(resizeChart, 60);
+    }
   }
 
   function wireChartResizeHandle(handle, mode) {
@@ -1831,14 +1855,13 @@
         ? "Show trade metrics"
         : "Slide trade metrics away";
     }
-    // Only resize on a real collapse toggle — re-applying on every P/L tick
-    // was reflowing the trade strip and making Best Side blink away.
+    // Only reflow on a real collapse toggle — re-applying on every P/L tick
+    // was crushing the trade strip. Best Side is outside that strip now, but
+    // chart leftover height still needs updating when the drawer moves.
     if ((changed || opts.forceResize) && !opts.skipResize) {
-      setTimeout(resizeChart, 60);
-      // Keep Best Side in view after the open-P/L strip changes height.
-      setTimeout(() => {
-        if (el.tradePanel) el.tradePanel.scrollTop = 0;
-      }, 80);
+      reflowAfterOpenPlChange();
+      // Match open-pl CSS transition so leftover height uses final drawer size.
+      setTimeout(reflowAfterOpenPlChange, 220);
     }
   }
 
@@ -1872,18 +1895,28 @@
 
   function renderOpenPlBar(pos, mark) {
     if (!el.openPlBar) return;
+    const hadOpen = document.body.classList.contains("has-open-pl");
     if (!pos) {
       el.openPlBar.hidden = true;
       document.body.classList.remove("has-open-pl");
       document.body.classList.remove("open-pl-collapsed");
       clearBreakevenLines();
       if (lastTarget != null) applyTargetLine(lastTarget, "TO BEAT");
+      if (hadOpen) {
+        setTimeout(reflowAfterOpenPlChange, 40);
+        setTimeout(reflowAfterOpenPlChange, 220);
+      }
       return;
     }
     el.openPlBar.hidden = false;
     document.body.classList.add("has-open-pl");
     // Sync collapse chrome without a layout resize on every mark tick.
     setOpenPlCollapsed(openPlCollapsed, { skipResize: true });
+    if (!hadOpen) {
+      // First paint of the drawer — reserve space so Best Side isn't covered.
+      setTimeout(reflowAfterOpenPlChange, 40);
+      setTimeout(reflowAfterOpenPlChange, 220);
+    }
     const side = pos.side === "above" ? "Above" : "Below";
     const accounted = pos.accounted !== false && demo.on;
     const sess = sessionPlBreakdown(mark);
@@ -3907,12 +3940,20 @@
 
   function refreshBestSide() {
     if (!el.bestSide) return;
+    const wasVisible = !el.bestSide.hidden;
     const spotRaw = el.spotValue && el.spotValue.dataset.last;
     const spot = spotRaw != null ? Number(spotRaw) : null;
     const beat = lastTarget;
     const secs = secondsLeft();
     const aboveAsk = lastRoiAsks.above;
     const belowAsk = lastRoiAsks.below;
+
+    const syncBestSideLayout = () => {
+      const nowVisible = !el.bestSide.hidden;
+      if (nowVisible !== wasVisible) {
+        setTimeout(reflowAfterOpenPlChange, 40);
+      }
+    };
 
     if (
       spot == null ||
@@ -3932,6 +3973,7 @@
       lastBestSideKey = null;
       lastBestPick = null;
       markClearEdgeGone();
+      syncBestSideLayout();
       return;
     }
 
@@ -3949,6 +3991,7 @@
       setDockBestDetail("—", null);
       lastBestPick = null;
       markClearEdgeGone();
+      syncBestSideLayout();
       return;
     }
 
@@ -3963,6 +4006,7 @@
       !(secs > 12 * 60 && Math.abs(best.ev) < 0.03);
 
     el.bestSide.hidden = false;
+    syncBestSideLayout();
     el.bestSide.classList.toggle("is-below", clear && best.side === "below");
     el.bestSide.classList.toggle("is-none", !clear);
     el.bestSide.classList.toggle("is-above", clear && best.side === "above");

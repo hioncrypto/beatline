@@ -2182,10 +2182,6 @@ h1 {
     rgba(8, 14, 11, 0.72);
   text-align: center;
   transition: border-color 0.2s ease, background 0.2s ease;
-  /* Stay visible while the trade strip scrolls / open-P/L reflows. */
-  position: sticky;
-  top: 0;
-  z-index: 3;
 }
 
 .best-side.is-below {
@@ -2692,11 +2688,11 @@ body.has-open-pl .summary-panel:not(.is-collapsed) {
 }
 
 body.has-open-pl .trade-panel {
-  max-height: min(28dvh, 240px);
+  max-height: min(22dvh, 190px);
 }
 
 body.has-open-pl.open-pl-collapsed .trade-panel {
-  max-height: min(34dvh, 280px);
+  max-height: min(28dvh, 230px);
 }
 
 body.has-open-pl .app-shell > .chart-wrap {
@@ -2704,8 +2700,15 @@ body.has-open-pl .app-shell > .chart-wrap {
   min-height: clamp(160px, 36dvh, 300px) !important;
 }
 
-body.has-open-pl .best-side {
-  margin-top: 6px;
+.app-shell > .best-side {
+  flex: 0 0 auto;
+  margin: 2px 8px 4px;
+  padding: 10px 12px 9px;
+  z-index: 4;
+}
+
+body.has-open-pl .app-shell > .best-side {
+  margin-top: 2px;
   padding: 8px 10px;
 }
 
@@ -2854,7 +2857,7 @@ body.portrait-app #chart {
 }
 
 /*
-  Trade strip: odds + Best Side + stake + ROI.
+  Trade strip: odds + stake + ROI (Best Side sits above, outside this scroll).
   Caps height so the BTC chart stays usable; scroll for full ROI cards.
 */
 .trade-panel {
@@ -2907,7 +2910,7 @@ body.portrait-app #chart {
 
 .best-side {
   display: block;
-  margin: 8px 0 0;
+  margin: 2px 8px 4px;
   padding: 10px 12px 9px;
   border-radius: 12px;
   border: 1px solid rgba(26, 201, 107, 0.35);
@@ -2915,6 +2918,8 @@ body.portrait-app #chart {
     linear-gradient(135deg, rgba(26, 201, 107, 0.14), rgba(8, 14, 11, 0.35)),
     rgba(8, 14, 11, 0.72);
   text-align: center;
+  flex: 0 0 auto;
+  flex-shrink: 0;
 }
 
 .best-side.is-below {

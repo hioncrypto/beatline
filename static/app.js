@@ -10,9 +10,9 @@
   const BG_ARMED_KEY = "kalshiBgAlertsArmed";
   const DEMO_KEY = "kalshiDemoState";
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
-  const HISTORY_LIMIT = 60;
+  const HISTORY_LIMIT = 2000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.25";
+  const APP_VERSION = "9.26";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -354,6 +354,36 @@
     }
   }
 
+  function tradeHistoryId(h) {
+    if (!h || typeof h !== "object") return "";
+    if (h.id) return String(h.id);
+    return [
+      h.at || "",
+      h.kind || "",
+      h.side || "",
+      h.ticker || "",
+      h.pl ?? "",
+      h.text || "",
+    ].join("|");
+  }
+
+  /** Keep the full ledger across devices/sync — never drop older days on merge. */
+  function mergeTradeHistory(...lists) {
+    const byId = new Map();
+    for (const list of lists) {
+      if (!Array.isArray(list)) continue;
+      for (const h of list) {
+        if (!h || typeof h !== "object") continue;
+        const id = tradeHistoryId(h);
+        if (!id || byId.has(id)) continue;
+        byId.set(id, h);
+      }
+    }
+    return Array.from(byId.values())
+      .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0))
+      .slice(0, HISTORY_LIMIT);
+  }
+
   function persistTradeHistory(list) {
     try {
       localStorage.setItem(
@@ -397,7 +427,7 @@
           ? next.lastResult
           : null,
       history: Array.isArray(next.history)
-        ? next.history.filter((h) => h && typeof h === "object").slice(0, HISTORY_LIMIT)
+        ? mergeTradeHistory(next.history)
         : [],
       updatedAt: Number(next.updatedAt) || Date.now(),
     };
@@ -502,8 +532,16 @@
           (localFresh && !remoteFresh) ||
           (!remoteFresh && remoteAt >= localAt) ||
           (remoteFresh && localFresh && remoteAt > localAt);
+        const mergedHistory = mergeTradeHistory(
+          remote.history,
+          demo.history,
+          loadTradeHistory()
+        );
         if (preferRemote) {
-          applyDemoState(remote, { syncServer: false });
+          applyDemoState(
+            { ...remote, history: mergedHistory },
+            { syncServer: mergedHistory.length > (remote.history || []).length }
+          );
           setStatus(
             "ok",
             `Account restored · ${money(demo.balance)}${
@@ -513,6 +551,13 @@
             }`
           );
           return;
+        }
+        // Prefer local balances/position, but never discard remote trade rows.
+        if (mergedHistory.length > (demo.history || []).length) {
+          demo.history = mergedHistory;
+          persistTradeHistory(demo.history);
+          saveDemoState();
+          renderTradeHistory();
         }
       }
       // Seed server from this browser if it has anything useful.
@@ -539,13 +584,10 @@
       const raw = localStorage.getItem(DEMO_KEY);
       if (!raw) return fallback;
       const parsed = JSON.parse(raw);
-      let history = Array.isArray(parsed.history)
-        ? parsed.history.filter((h) => h && typeof h === "object")
-        : [];
-      const external = loadTradeHistory();
-      if (external.length && (!history.length || external.length >= history.length)) {
-        history = external;
-      }
+      let history = mergeTradeHistory(
+        Array.isArray(parsed.history) ? parsed.history : [],
+        loadTradeHistory()
+      );
       // Seed one row from lastResult if history is still empty (pre-history sessions).
       if (
         !history.length &&
@@ -572,7 +614,7 @@
           },
         ];
       }
-      history = history.slice(0, HISTORY_LIMIT);
+      history = mergeTradeHistory(history);
       persistTradeHistory(history);
       return {
         on: !!parsed.on,
@@ -3071,7 +3113,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.4", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.5", { scope: "/" });
       await navigator.serviceWorker.ready;
       return reg;
     } catch (err) {
@@ -3172,6 +3214,21 @@
         closeEt: closeTimeIso,
         force: true,
       });
+      // Also exercise the real background path (server → Web Push → SW).
+      try {
+        await subscribePush();
+        await fetch("/api/push/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            beat: lastFifteenTarget,
+            close_et: closeTimeIso,
+          }),
+          cache: "no-store",
+        });
+      } catch {
+        // local SW test above still ran
+      }
     }
     setStatus("ok", "Test alert — you should hear a chime and/or see a notification");
   }
@@ -3240,8 +3297,10 @@
         // ignore
       }
       let sub = await reg.pushManager.getSubscription();
-      // Render restarts regenerate VAPID keys — old subs go dead (subscribers: 0).
-      if (sub && cachedKey && cachedKey !== publicKey) {
+      // Render restarts regenerate VAPID keys — old subs go dead. Also force a
+      // fresh subscribe when we have no cached key (stale browser subscription).
+      const keyMismatch = !cachedKey || cachedKey !== publicKey;
+      if (sub && keyMismatch) {
         try {
           await fetch("/api/push/unsubscribe", {
             method: "POST",
@@ -5572,6 +5631,14 @@
           lastClearEdgeAlertAt = Date.now();
           persistEdgeAlertKey(lastClearEdgeAlertKey);
           edgeAlertsArmed = true;
+        }
+        // Re-upsert push in case Render rotated VAPID while we were away.
+        if (
+          chimeOn &&
+          "Notification" in window &&
+          Notification.permission === "granted"
+        ) {
+          subscribePush().catch(() => {});
         }
         refreshTarget({ forceCandles: true });
       } else {

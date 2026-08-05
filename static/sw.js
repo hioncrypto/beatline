@@ -1,12 +1,14 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.4-edge-always";
+const SW_VERSION = "3.5-bg-push";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
+const HEALTH_URL = "/api/health";
 const STATE_KEY = "kalshiFifteenState";
 const STABLE_APP_URL = "https://beatline-1.onrender.com";
 const RENDER_DEPLOY_URL =
   "https://render.com/deploy?repo=https://github.com/hioncrypto/beatline";
 const EDGE_NOTIFY_COOLDOWN_MS = 120_000;
+const KEEP_ALIVE_MS = 4 * 60 * 1000;
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -261,6 +263,18 @@ async function checkClearEdge(forceNotify) {
 }
 
 let pollTimer = null;
+let keepAliveTimer = null;
+
+async function keepServerAwake() {
+  // Best-effort: free Render sleeps after idle; a ping from the SW (when the
+  // browser lets it run) keeps the push watcher alive longer.
+  try {
+    await fetch(`${HEALTH_URL}?_=${Date.now()}`, { cache: "no-store" });
+  } catch {
+    // ignore
+  }
+}
+
 function startPollLoop() {
   if (pollTimer) return;
   // Keep checking even if the page is backgrounded (while SW is allowed to run).
@@ -268,8 +282,12 @@ function startPollLoop() {
     checkTarget(false);
     checkClearEdge(false);
   }, 12_000);
+  if (!keepAliveTimer) {
+    keepAliveTimer = setInterval(keepServerAwake, KEEP_ALIVE_MS);
+  }
   checkTarget(false);
   checkClearEdge(false);
+  keepServerAwake();
 }
 
 self.addEventListener("message", (event) => {
@@ -369,24 +387,51 @@ self.addEventListener("push", (event) => {
   if (kind === "clear_edge") {
     event.waitUntil(
       (async () => {
-        await showEdgeNotification({
-          side: payload.side,
-          askCents: payload.ask_cents ?? payload.askCents,
-          pWin: payload.p_win ?? payload.pWin,
-          suggest_stake: payload.suggest_stake ?? payload.suggestStake,
-          beat: payload.beat ?? payload.price_to_beat ?? payload.target,
-          ticker: payload.ticker,
-        });
+        const state = await readState();
+        const ask = Math.round(
+          Number(payload.ask_cents ?? payload.askCents) || 0
+        );
+        const side = payload.side || "above";
+        const key = `${side}:${ask}`;
+        const now = Date.now();
+        const lastAt = Number(state.edgeAt) || 0;
+        // Already delivered / armed this edge recently (foreground or prior push).
+        if (state.edgeKey === key && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) {
+          return;
+        }
+        state.edgeKey = key;
+        state.edgeAt = now;
+        await writeState(state);
+        const visible = await hasVisibleClient();
+        // Web Push must surface when the app is backgrounded. Skip duplicate
+        // system tone only when a visible tab is already handling it.
+        if (visible) return;
+        await showEdgeNotification(
+          {
+            side,
+            askCents: ask,
+            pWin: payload.p_win ?? payload.pWin,
+            suggest_stake: payload.suggest_stake ?? payload.suggestStake,
+            beat: payload.beat ?? payload.price_to_beat ?? payload.target,
+            ticker: payload.ticker,
+          },
+          { force: true }
+        );
       })()
     );
     return;
   }
   event.waitUntil(
-    showTargetNotification({
-      beat: payload.beat ?? payload.price_to_beat ?? payload.target,
-      ticker: payload.ticker,
-      closeEt: payload.close_et || payload.closeEt,
-    })
+    (async () => {
+      await showTargetNotification(
+        {
+          beat: payload.beat ?? payload.price_to_beat ?? payload.target,
+          ticker: payload.ticker,
+          closeEt: payload.close_et || payload.closeEt,
+        },
+        { force: !(await hasVisibleClient()) }
+      );
+    })()
   );
 });
 

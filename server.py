@@ -32,7 +32,7 @@ DEMO_ACCOUNT_FILE = DATA_DIR / "demo_account.json"
 VAPID_PRIVATE = DATA_DIR / "vapid_private.pem"
 VAPID_PUBLIC_RAW = DATA_DIR / "vapid_public_raw.txt"
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:kalshi-btc-target@localhost")
-DEMO_HISTORY_LIMIT = 80
+DEMO_HISTORY_LIMIT = 2000
 _demo_lock = threading.Lock()
 
 
@@ -1480,7 +1480,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.1.0",
+                    "version": "2.1.1",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file(),

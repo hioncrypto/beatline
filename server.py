@@ -32,7 +32,7 @@ DEMO_ACCOUNT_FILE = DATA_DIR / "demo_account.json"
 VAPID_PRIVATE = DATA_DIR / "vapid_private.pem"
 VAPID_PUBLIC_RAW = DATA_DIR / "vapid_public_raw.txt"
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:kalshi-btc-target@localhost")
-DEMO_HISTORY_LIMIT = 2000
+DEMO_HISTORY_LIMIT = 50000
 _demo_lock = threading.Lock()
 
 
@@ -1019,13 +1019,15 @@ def save_demo_account(raw: dict) -> dict | None:
             try:
                 prev = json.loads(DEMO_ACCOUNT_FILE.read_text())
                 if isinstance(prev, dict) and isinstance(prev.get("history"), list):
-                    prev_hist = prev["history"]
+                    prev_hist = [h for h in prev["history"] if isinstance(h, dict)]
             except Exception:
                 prev_hist = []
-        # Never drop older days when a client posts a shorter/today-only list.
-        normalized["history"] = merge_trade_histories(
-            normalized.get("history") or [], prev_hist
-        )
+        incoming = normalized.get("history") or []
+        # Append-only: empty/short client payloads must never wipe the ledger.
+        if not incoming and prev_hist:
+            normalized["history"] = prev_hist[:DEMO_HISTORY_LIMIT]
+        else:
+            normalized["history"] = merge_trade_histories(incoming, prev_hist)
         tmp = DEMO_ACCOUNT_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(normalized, indent=2))
         tmp.replace(DEMO_ACCOUNT_FILE)
@@ -1525,7 +1527,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.1.2",
+                    "version": "2.1.3",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file(),

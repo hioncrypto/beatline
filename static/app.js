@@ -10,9 +10,9 @@
   const BG_ARMED_KEY = "kalshiBgAlertsArmed";
   const DEMO_KEY = "kalshiDemoState";
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
-  const HISTORY_LIMIT = 2000;
+  const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.32";
+  const APP_VERSION = "9.33";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -385,13 +385,26 @@
   }
 
   function persistTradeHistory(list) {
+    // Append-only ledger: never write a shorter/empty list over a longer one.
+    const existing = (() => {
+      try {
+        const raw = localStorage.getItem(TRADE_HISTORY_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    })();
+    const merged = mergeTradeHistory(list, existing);
+    if (!merged.length && existing.length) return;
     try {
       localStorage.setItem(
         TRADE_HISTORY_KEY,
-        JSON.stringify((list || []).slice(0, HISTORY_LIMIT))
+        JSON.stringify(merged.slice(0, HISTORY_LIMIT))
       );
     } catch {
-      // ignore quota
+      // quota — keep what we can in memory
     }
   }
 
@@ -410,8 +423,14 @@
     );
   }
 
-  function applyDemoState(next, { syncServer } = {}) {
+  function applyDemoState(next, { syncServer, replaceHistory } = {}) {
     if (!next || typeof next !== "object") return;
+    // Permanent trade ledger: always union with what we already have unless
+    // an explicit backup replace is requested (still merges backup + ledger).
+    const incoming = Array.isArray(next.history) ? next.history : [];
+    const history = replaceHistory
+      ? mergeTradeHistory(incoming, loadTradeHistory())
+      : mergeTradeHistory(incoming, demo.history, loadTradeHistory());
     demo = {
       on: !!next.on,
       start:
@@ -426,9 +445,7 @@
         next.lastResult && typeof next.lastResult === "object"
           ? next.lastResult
           : null,
-      history: Array.isArray(next.history)
-        ? mergeTradeHistory(next.history)
-        : [],
+      history,
       updatedAt: Number(next.updatedAt) || Date.now(),
     };
     persistTradeHistory(demo.history);
@@ -519,6 +536,10 @@
 
   async function hydrateDemoFromServer() {
     try {
+      // Re-attach any ledger rows that lived only in the dedicated key.
+      demo.history = mergeTradeHistory(demo.history, loadTradeHistory());
+      persistTradeHistory(demo.history);
+
       const res = await fetch("/api/demo-account", { cache: "no-store" });
       const data = await res.json();
       const remote = data && data.state;
@@ -527,45 +548,43 @@
         const localFresh = demoLooksFresh(demo);
         const remoteAt = Number(remote.updatedAt) || 0;
         const localAt = Number(demo.updatedAt) || 0;
-        // Empty local always loses to a server account with real history/P/L.
+        const remoteHist = Array.isArray(remote.history) ? remote.history : [];
+        const localHist = mergeTradeHistory(demo.history, loadTradeHistory());
+        // Empty / wiped server (Render restart) must NEVER beat a local ledger.
         const preferRemote =
-          (localFresh && !remoteFresh) ||
-          (!remoteFresh && remoteAt >= localAt) ||
-          (remoteFresh && localFresh && remoteAt > localAt);
-        const mergedHistory = mergeTradeHistory(
-          remote.history,
-          demo.history,
-          loadTradeHistory()
-        );
+          !remoteFresh &&
+          ((localFresh && remoteHist.length > 0) ||
+            (!localFresh && remoteAt >= localAt && remoteHist.length > 0));
+        const mergedHistory = mergeTradeHistory(remoteHist, localHist);
         if (preferRemote) {
           applyDemoState(
             { ...remote, history: mergedHistory },
-            { syncServer: mergedHistory.length > (remote.history || []).length }
+            { syncServer: mergedHistory.length > remoteHist.length }
           );
           setStatus(
             "ok",
             `Account restored · ${money(demo.balance)}${
               demo.history && demo.history.length
-                ? ` · ${demo.history.length} trades`
+                ? ` · ${demo.history.length} trades kept`
                 : ""
             }`
           );
-          return;
-        }
-        // Prefer local balances/position, but never discard remote trade rows.
-        if (mergedHistory.length > (demo.history || []).length) {
-          demo.history = mergedHistory;
-          persistTradeHistory(demo.history);
-          saveDemoState();
-          renderTradeHistory();
+        } else {
+          // Keep local balances; always absorb any remote trade rows.
+          if (mergedHistory.length !== (demo.history || []).length) {
+            demo.history = mergedHistory;
+            persistTradeHistory(demo.history);
+            saveDemoState();
+            renderTradeHistory();
+          }
         }
       }
-      // Seed server from this browser if it has anything useful.
-      if (!demoLooksFresh(demo) || !remote) {
+      // Always re-upload the ledger so a wiped Render disk is healed.
+      if ((demo.history && demo.history.length) || !demoLooksFresh(demo) || !remote) {
         await pushDemoStateToServer();
       }
     } catch {
-      // offline / tunnel blip — keep localStorage
+      // offline / tunnel blip — keep localStorage ledger
     }
   }
 
@@ -652,14 +671,13 @@
   function pushTradeHistory(entry) {
     if (!entry || typeof entry !== "object") return;
     if (!Array.isArray(demo.history)) demo.history = [];
-    demo.history.unshift({
+    const row = {
       id: entry.id || `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       at: entry.at || Date.now(),
       ...entry,
-    });
-    if (demo.history.length > HISTORY_LIMIT) {
-      demo.history = demo.history.slice(0, HISTORY_LIMIT);
-    }
+    };
+    // Append-only: never drop older rows when adding a new fill/close.
+    demo.history = mergeTradeHistory([row], demo.history, loadTradeHistory());
     persistTradeHistory(demo.history);
   }
 
@@ -708,7 +726,7 @@
         }
         if (
           !window.confirm(
-            "Replace current demo account, open trade, and history with this backup?"
+            "Restore this backup’s balance and open trade? Trade history will be MERGED (nothing deleted)."
           )
         ) {
           return;
@@ -724,7 +742,7 @@
             history: state.history,
             updatedAt: Date.now(),
           },
-          { syncServer: true }
+          { syncServer: true, replaceHistory: false }
         );
         setStatus(
           "ok",
@@ -2376,12 +2394,19 @@
     demo.realizedPl = 0;
     demo.position = null;
     demo.lastResult = null;
-    // Keep trade history across bankroll resets (export/import backup to move it).
+    // NEVER clear trade history — bankroll reset keeps the all-time ledger.
+    demo.history = mergeTradeHistory(demo.history, loadTradeHistory());
+    persistTradeHistory(demo.history);
     saveDayEquity(etDateKey(), start);
     saveDemoState();
     renderDemoUi();
+    renderTradeHistory();
+    renderPlChart();
     renderStrategyReport();
-    setStatus("ok", `Demo reset · ${money(start)}`);
+    setStatus(
+      "ok",
+      `Demo reset · ${money(start)} · ${(demo.history || []).length} trades kept`
+    );
   }
 
   const BUY_AMOUNT_MIN = 1;

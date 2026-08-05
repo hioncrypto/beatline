@@ -4452,17 +4452,6 @@
           : "Until this 15m window ends";
     }
     if (totalSec <= 25) startRolloverBurst();
-    // Clock at 0:00 with an open trade — force a settle attempt even if the
-    // next Kalshi ticker hasn't appeared yet.
-    if (totalSec <= 0 && demo.position) {
-      const side = lastSettlementSide;
-      const avg = lastSettlementAvg;
-      settleDemoPosition(demo.position.ticker, {
-        force: true,
-        settleSide: side,
-        settleAvg: avg,
-      });
-    }
     refreshBestSide();
     if (demo.position) renderDemoUi();
   }

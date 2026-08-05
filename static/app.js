@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.2";
+  const APP_VERSION = "9.3";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const SUMMARY_COLLAPSE_KEY = "beatlineSummaryCollapsed";
@@ -1010,7 +1010,7 @@
     if (el.menuBtn) el.menuBtn.setAttribute("aria-expanded", "true");
     renderDemoUi();
     renderTradeHistory();
-    // Keep history in view near the top of the ⋮ sheet.
+    // Demo account sits at the top of the ⋮ sheet.
     if (el.optionsSheet) el.optionsSheet.scrollTop = 0;
     requestAnimationFrame(() => {
       applyPlUi();

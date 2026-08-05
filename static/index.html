@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=9.14" />
+    <link rel="stylesheet" href="/styles.css?v=9.15" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=9.14" defer></script>
+    <script src="/app.js?v=9.15" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -360,6 +360,15 @@
         </span>
         <input id="demo-toggle" type="checkbox" />
       </label>
+
+      <div class="options-alerts-row">
+        <div class="options-alerts-text">
+          <strong>Alerts</strong>
+          <em id="alerts-status-line">Checking…</em>
+        </div>
+        <button type="button" id="alerts-test" class="demo-btn ghost">Test</button>
+        <button type="button" id="alerts-enable" class="demo-btn primary">Enable</button>
+      </div>
 
       <div id="demo-account" class="demo-account" hidden>
         <div class="demo-balance-block">

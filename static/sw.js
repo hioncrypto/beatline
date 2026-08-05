@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.2-edge-quiet";
+const SW_VERSION = "3.3-edge-fallback";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const STATE_KEY = "kalshiFifteenState";
@@ -85,9 +85,9 @@ async function hasVisibleClient() {
   return false;
 }
 
-async function showTargetNotification(payload) {
+async function showTargetNotification(payload, { force = false } = {}) {
   // Foreground tab already chimed for new targets — skip duplicate system tone.
-  if (await hasVisibleClient()) return;
+  if (!force && (await hasVisibleClient())) return;
   const title = "BeatLine · new 15m target";
   const body =
     payload && payload.beat != null
@@ -306,27 +306,32 @@ self.addEventListener("message", (event) => {
   }
   if (msg.type === "test-notify") {
     event.waitUntil(
-      showTargetNotification({
-        beat: msg.beat,
-        ticker: msg.ticker || "TEST",
-        closeEt: msg.closeEt,
-      })
+      showTargetNotification(
+        {
+          beat: msg.beat,
+          ticker: msg.ticker || "TEST",
+          closeEt: msg.closeEt,
+        },
+        { force: !!msg.force }
+      )
     );
   }
   if (msg.type === "edge-notify") {
     event.waitUntil(
       (async () => {
         const state = await readState();
-        if (!state.chimeOn) return;
+        if (!state.chimeOn && !msg.force) return;
         const key = `${msg.side}:${Math.round(Number(msg.askCents) || 0)}`;
         const now = Date.now();
         const lastAt = Number(state.edgeAt) || 0;
-        if (state.edgeKey === key && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) return;
-        if (now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && state.edgeKey) return;
+        if (!msg.force) {
+          if (state.edgeKey === key && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) return;
+          if (now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && state.edgeKey) return;
+        }
         state.edgeKey = key;
         state.edgeAt = now;
         await writeState(state);
-        await showEdgeNotification(msg);
+        await showEdgeNotification(msg, { force: !!msg.force });
       })()
     );
   }

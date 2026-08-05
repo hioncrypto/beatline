@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.14";
+  const APP_VERSION = "9.15";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -122,6 +122,9 @@
     clock: document.getElementById("clock"),
     bgStatus: document.getElementById("bg-status"),
     pushBadge: document.getElementById("push-badge"),
+    alertsStatusLine: document.getElementById("alerts-status-line"),
+    alertsTest: document.getElementById("alerts-test"),
+    alertsEnable: document.getElementById("alerts-enable"),
     rotateGate: document.getElementById("rotate-gate"),
     oddsRow: document.getElementById("odds-row"),
     yesPct: document.getElementById("yes-pct"),
@@ -1107,6 +1110,7 @@
     renderTradeHistory();
     renderStrategyReport();
     applyTradeHistoryUi();
+    syncAlertsUi();
     // Demo account sits at the top of the ⋮ sheet.
     if (el.optionsSheet) el.optionsSheet.scrollTop = 0;
     requestAnimationFrame(() => {
@@ -2757,6 +2761,28 @@
     return audioCtx;
   }
 
+  async function ensureAudioReady() {
+    const ctx = ensureAudio();
+    if (!ctx) return null;
+    if (ctx.state === "suspended") {
+      try {
+        await ctx.resume();
+      } catch {
+        // ignore
+      }
+    }
+    return ctx.state === "running" ? ctx : null;
+  }
+
+  function vibrateEdge() {
+    if (!navigator.vibrate) return;
+    try {
+      navigator.vibrate([30, 40, 30, 40, 90]);
+    } catch {
+      // ignore
+    }
+  }
+
   function loadStoredEdgeAlertKey() {
     try {
       const raw = sessionStorage.getItem(EDGE_ALERT_STORE_KEY);
@@ -2821,8 +2847,9 @@
   function playEdgeChime(force) {
     if (!chimeOn && !force) return;
     if (document.visibilityState !== "visible") return;
-    // Always debounce — stacked SW/page messages must not blast together.
-    if (!canPlayTone()) return;
+    // Always debounce unless forced (audio-fallback / test paths).
+    if (!force && !canPlayTone()) return;
+    if (force) lastChimeAt = Date.now();
     const ctx = ensureAudio();
     if (!ctx) return;
     const now = ctx.currentTime;
@@ -2865,7 +2892,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.2", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.3", { scope: "/" });
       await navigator.serviceWorker.ready;
       return reg;
     } catch (err) {
@@ -2921,21 +2948,54 @@
   }
 
   function syncAlertsUi() {
-    setPushBadge(alertsAreOn());
+    const on = alertsAreOn();
+    setPushBadge(on);
+    if (el.alertsStatusLine) {
+      if (on) {
+        el.alertsStatusLine.textContent =
+          "On — chime + notification for Best Side & new 15m targets";
+      } else if (chimeOn && "Notification" in window && Notification.permission === "denied") {
+        el.alertsStatusLine.textContent =
+          "Blocked — Chrome site settings → Notifications → Allow, then tap Enable";
+      } else if (chimeOn && "Notification" in window && Notification.permission !== "granted") {
+        el.alertsStatusLine.textContent =
+          "Off — tap Enable (or the bell) and Allow Notifications";
+      } else {
+        el.alertsStatusLine.textContent =
+          "Off — tap Enable for Best Side / new-window alerts";
+      }
+    }
+    if (el.alertsEnable) {
+      el.alertsEnable.textContent = on ? "Disable" : "Enable";
+      el.alertsEnable.classList.toggle("primary", !on);
+      el.alertsEnable.classList.toggle("ghost", on);
+    }
+    // Persistent main-screen hint when alerts are not fully armed.
+    if (!on) {
+      if ("Notification" in window && Notification.permission === "denied") {
+        setBgStatus(false, "Alerts blocked — allow Notifications in site settings, then tap 🔔");
+      } else {
+        setBgStatus(false, "Alerts off — tap 🔔 then Allow, or Options → Enable");
+      }
+    } else {
+      setBgStatus(null, "");
+    }
   }
 
   async function runChimeTest() {
-    ensureAudio();
+    await ensureAudioReady();
     playChime(true);
+    vibrateEdge();
     if ("Notification" in window && Notification.permission === "granted") {
       postToSW({
         type: "test-notify",
         beat: lastFifteenTarget,
         ticker: lastFifteenTicker || "TEST",
         closeEt: closeTimeIso,
+        force: true,
       });
     }
-    setStatus("ok", "Test chime");
+    setStatus("ok", "Test alert — you should hear a chime and/or see a notification");
   }
 
   async function ensureNotificationPermission() {
@@ -2947,28 +3007,26 @@
   }
 
   async function turnAlertsOn() {
-    ensureAudio();
+    await ensureAudioReady();
     chimeOn = true;
     localStorage.setItem(CHIME_KEY, "1");
     postToSW({ type: "set-chime", enabled: true });
     const allowed = await ensureNotificationPermission();
     if (!allowed) {
-      setPushBadge(false);
+      syncAlertsUi();
       setStatus("warn", "Allow Notifications to enable alerts");
-      setBgStatus(false, "Notifications blocked in Chrome site settings.");
       return false;
     }
     const ok = await subscribePush();
     if (!ok) {
-      setPushBadge(false);
-      setStatus("warn", "Could not enable push alerts");
+      syncAlertsUi();
+      setStatus("warn", "Could not enable push alerts — try Update now, then Enable again");
       return false;
     }
     localStorage.setItem(BG_ARMED_KEY, "1");
-    setPushBadge(true);
-    setBgStatus(null, "");
+    syncAlertsUi();
     await runChimeTest();
-    setStatus("ok", "Alerts on — Best-buy tone works in background");
+    setStatus("ok", "Alerts on — Best Side + new 15m windows");
     return true;
   }
 
@@ -2978,8 +3036,7 @@
     localStorage.setItem(BG_ARMED_KEY, "0");
     postToSW({ type: "set-chime", enabled: false });
     await unsubscribePush();
-    setPushBadge(false);
-    setBgStatus(null, "");
+    syncAlertsUi();
     setStatus("ok", "Alerts off");
   }
 
@@ -3086,11 +3143,7 @@
     lastClearEdgeAlertAt = now;
     lastClearEdgeGoneAt = 0;
     persistEdgeAlertKey(alertKey);
-    ensureAudio();
-    // Only Web-Audio chime while visible. Background relies on SW/system push.
-    if (document.visibilityState === "visible" && !document.hidden) {
-      playEdgeChime();
-    }
+
     const sideLabel = side === "above" ? "Above" : "Below";
     const sug =
       lastBestPick && lastBestPick.side === side && lastBestPick.suggestedStake
@@ -3102,24 +3155,40 @@
         ? `Clear edge · Buy ${sideLabel} · suggest $${sug}${ask ? ` @ ${ask}¢` : ""}`
         : `Clear edge · Buy ${sideLabel}${ask ? ` @ ${ask}¢` : ""}`
     );
-    postToSW({
-      type: "edge-armed",
+
+    const visible =
+      document.visibilityState === "visible" && !document.hidden;
+    const notifyPayload = {
+      type: "edge-notify",
       side,
       askCents: ask || null,
-      chimeOn,
+      pWin: best.pWin,
+      suggestStake: sug,
+      ticker: lastTicker || lastFifteenTicker,
+      beat: lastTarget,
+    };
+
+    // Resume audio, then chime. If audio can't run while the app is open,
+    // force a system notification — otherwise edge-armed would silence SW too.
+    ensureAudioReady().then((ctx) => {
+      const audioOk = !!ctx;
+      if (visible) {
+        if (audioOk) playEdgeChime(true);
+        vibrateEdge();
+        if (!audioOk && "Notification" in window && Notification.permission === "granted") {
+          postToSW({ ...notifyPayload, force: true });
+        } else {
+          postToSW({
+            type: "edge-armed",
+            side,
+            askCents: ask || null,
+            chimeOn,
+          });
+        }
+      } else {
+        postToSW(notifyPayload);
+      }
     });
-    // Background / locked phone: one system notification (no postMessage chime).
-    if (document.visibilityState !== "visible" || document.hidden) {
-      postToSW({
-        type: "edge-notify",
-        side,
-        askCents: ask || null,
-        pWin: best.pWin,
-        suggestStake: sug,
-        ticker: lastTicker || lastFifteenTicker,
-        beat: lastTarget,
-      });
-    }
   }
 
   function maybeChimeNewFifteenTarget(beat, ticker, source, closeEt) {
@@ -4972,6 +5041,18 @@
       el.pushBadge.addEventListener("click", () => {
         ensurePortraitLock(true);
         toggleAlerts();
+      });
+    }
+    if (el.alertsEnable) {
+      el.alertsEnable.addEventListener("click", () => {
+        ensureAudio();
+        toggleAlerts();
+      });
+    }
+    if (el.alertsTest) {
+      el.alertsTest.addEventListener("click", () => {
+        ensureAudio();
+        runChimeTest();
       });
     }
     if (el.rotateGate) {

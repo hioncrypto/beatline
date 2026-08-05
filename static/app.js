@@ -1814,8 +1814,10 @@
     );
   }
 
-  function setOpenPlCollapsed(collapsed) {
-    openPlCollapsed = !!collapsed;
+  function setOpenPlCollapsed(collapsed, opts = {}) {
+    const next = !!collapsed;
+    const changed = next !== openPlCollapsed;
+    openPlCollapsed = next;
     try {
       localStorage.setItem(OPEN_PL_COLLAPSE_KEY, openPlCollapsed ? "1" : "0");
     } catch {
@@ -1829,7 +1831,15 @@
         ? "Show trade metrics"
         : "Slide trade metrics away";
     }
-    setTimeout(resizeChart, 60);
+    // Only resize on a real collapse toggle — re-applying on every P/L tick
+    // was reflowing the trade strip and making Best Side blink away.
+    if ((changed || opts.forceResize) && !opts.skipResize) {
+      setTimeout(resizeChart, 60);
+      // Keep Best Side in view after the open-P/L strip changes height.
+      setTimeout(() => {
+        if (el.tradePanel) el.tradePanel.scrollTop = 0;
+      }, 80);
+    }
   }
 
   /** Approximate inverse error function for model break-even spot. */
@@ -1872,7 +1882,8 @@
     }
     el.openPlBar.hidden = false;
     document.body.classList.add("has-open-pl");
-    setOpenPlCollapsed(openPlCollapsed);
+    // Sync collapse chrome without a layout resize on every mark tick.
+    setOpenPlCollapsed(openPlCollapsed, { skipResize: true });
     const side = pos.side === "above" ? "Above" : "Below";
     const accounted = pos.accounted !== false && demo.on;
     const sess = sessionPlBreakdown(mark);
@@ -3911,6 +3922,9 @@
       secs == null ||
       (aboveAsk == null && belowAsk == null)
     ) {
+      // Keep the last Best Side paint during brief data gaps (open-P/L
+      // reflows / spot hiccups) so the card doesn't blink out.
+      if (lastBestPick && lastBestPick.side) return;
       el.bestSide.hidden = true;
       renderBestSideSuggest(null, null);
       setRoiCardBest(null);
@@ -3928,6 +3942,7 @@
     if (a) scored.push(a);
     if (b) scored.push(b);
     if (!scored.length) {
+      if (lastBestPick && lastBestPick.side) return;
       el.bestSide.hidden = true;
       renderBestSideSuggest(null, null);
       setRoiCardBest(null);

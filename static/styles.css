@@ -521,13 +521,6 @@ h1 {
   color: var(--down);
 }
 
-.trade-history-clear {
-  flex-shrink: 0;
-  min-height: 32px;
-  padding: 4px 10px;
-  font-size: 0.75rem;
-}
-
 .trade-history-backup {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2406,6 +2399,11 @@ body.has-open-pl .summary-panel {
    so you can still size adds from the live asks. Trade panel scrolls. */
 body.has-open-pl .trade-panel {
   max-height: min(36dvh, 300px);
+}
+
+body.has-open-pl .app-shell > .chart-wrap {
+  flex: 1 1 auto !important;
+  min-height: 38dvh !important;
 }
 
 body.has-open-pl .best-side {

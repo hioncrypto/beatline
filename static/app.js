@@ -155,7 +155,6 @@
     demoLast: document.getElementById("demo-last"),
     tradeHistoryList: document.getElementById("trade-history-list"),
     tradeHistorySummary: document.getElementById("trade-history-summary"),
-    tradeHistoryClear: document.getElementById("trade-history-clear"),
     plChart: document.getElementById("pl-chart"),
     plChartEmpty: document.getElementById("pl-chart-empty"),
     plChartCaption: document.getElementById("pl-chart-caption"),
@@ -559,14 +558,6 @@
       demo.history = demo.history.slice(0, HISTORY_LIMIT);
     }
     persistTradeHistory(demo.history);
-  }
-
-  function clearTradeHistory() {
-    demo.history = [];
-    persistTradeHistory([]);
-    saveDemoState();
-    renderTradeHistory();
-    setStatus("ok", "Trade history cleared");
   }
 
   function exportAccountBackup() {
@@ -4251,9 +4242,6 @@
       el.demoReset.addEventListener("click", () => {
         resetDemoAccount();
       });
-    }
-    if (el.tradeHistoryClear) {
-      el.tradeHistoryClear.addEventListener("click", () => clearTradeHistory());
     }
     if (el.plChartToggle) {
       el.plChartToggle.addEventListener("click", () => {

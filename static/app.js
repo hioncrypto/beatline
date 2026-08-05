@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "8.1";
+  const APP_VERSION = "8.2";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
@@ -1564,14 +1564,18 @@
     buySheetSide = side;
     buySheetOpen = true;
     const adding = !!(demo.position && demo.position.side === side);
+    // Always size from the live suggestion after a buy too (adds / re-entry).
+    const wantSuggest = opts.useSuggest !== false;
     const sideSuggest = suggestForSide(side);
-    const suggested = !opts.useSuggest
+    const suggested = !wantSuggest
       ? null
       : lastBestPick &&
           lastBestPick.side === side &&
           lastBestPick.suggestedStake >= BUY_AMOUNT_MIN
         ? lastBestPick.suggestedStake
-        : sideSuggest && sideSuggest.stake >= BUY_AMOUNT_MIN
+        : sideSuggest &&
+            !sideSuggest.lowProb &&
+            sideSuggest.stake >= BUY_AMOUNT_MIN
           ? sideSuggest.stake
           : null;
     // Prefer Best Side suggestion when buying the suggested side.
@@ -2623,10 +2627,21 @@
       return;
     }
     const waiting = !!opts.waiting || !!s.lowProb;
+    const adding = !!opts.adding;
     el.bestSideSuggest.hidden = false;
     el.bestSideSuggest.classList.toggle("is-waiting", waiting);
     el.bestSideSuggest.classList.toggle("is-below", !waiting && side === "below");
     const conf = s.pWin != null ? Math.round(s.pWin * 100) : null;
+    const kicker = el.bestSideSuggest.querySelector(".best-side-suggest-kicker");
+    if (kicker) {
+      kicker.textContent = s.lowProb
+        ? "Suggested buy"
+        : adding
+          ? "Suggested add"
+          : waiting
+            ? "Suggested entry"
+            : "Suggested buy";
+    }
     if (el.bestSideSuggestAmount) {
       el.bestSideSuggestAmount.textContent = s.lowProb
         ? "Sit out"
@@ -2644,9 +2659,11 @@
             : "";
         const bankTxt = bankPctText(s.bankPct);
         const bank = bankTxt ? `risks ${bankTxt} of balance` : "";
-        const lead = opts.waiting
-          ? `${side === "above" ? "Above" : "Below"} if you enter`
-          : `${side === "above" ? "Above" : "Below"}`;
+        const lead = adding
+          ? `${side === "above" ? "Above" : "Below"} add size`
+          : waiting
+            ? `${side === "above" ? "Above" : "Below"} if you enter`
+            : `${side === "above" ? "Above" : "Below"}`;
         el.bestSideSuggestMeta.textContent = [lead, roi, bank]
           .filter(Boolean)
           .join(" · ");
@@ -2804,11 +2821,16 @@
     if (el.bestSideLabel) el.bestSideLabel.textContent = label;
     if (el.bestSideAmount) {
       if (oppositeOpen) {
-        el.bestSideAmount.textContent = `Edge vs your ${
-          openPos.side === "above" ? "Above" : "Below"
-        } · close to flip`;
+        el.bestSideAmount.textContent =
+          suggestStake != null
+            ? `Best entry $${suggestStake} · close to flip`
+            : `Edge vs your ${
+                openPos.side === "above" ? "Above" : "Below"
+              } · close to flip`;
       } else if (suggestStake != null) {
-        el.bestSideAmount.textContent = `Tap to buy $${suggestStake}`;
+        el.bestSideAmount.textContent = sameAsOpen
+          ? `Tap to add $${suggestStake}`
+          : `Tap to buy $${suggestStake}`;
       } else if (tradeStake <= 0) {
         el.bestSideAmount.textContent = "Set a trade size";
       } else {
@@ -2834,7 +2856,7 @@
           ? ` · opposite your open ${openPos.side === "above" ? "Above" : "Below"}`
           : "";
       const sizeNote =
-        suggestion && suggestStake != null && !oppositeOpen
+        suggestion && suggestStake != null
           ? ` · ~${suggestion.bankPct.toFixed(0)}% bal`
           : "";
       el.bestSideMeta.textContent =
@@ -2842,8 +2864,11 @@
           lead >= 0 ? "+" : ""
         }$${lead.toFixed(0)} · ${m}:${String(s).padStart(2, "0")} left${openNote}`;
     }
+    // Keep suggesting entry side + $ size after a fill (adds / next entry),
+    // same as before the buy — don't blank the suggestion once you're in.
     renderBestSideSuggest(best.side, suggestion, {
-      waiting: oppositeOpen,
+      waiting: false,
+      adding: sameAsOpen,
     });
     setRoiCardBest(best.side);
     setDockBestDetail(

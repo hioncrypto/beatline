@@ -3506,6 +3506,7 @@
         el.spotDelta.className = "spot-delta";
       }
       updateEdgeLine(null);
+      updateSummaryPeek();
       return;
     }
     el.spotValue.textContent = money(lastClose);
@@ -3541,12 +3542,14 @@
       el.countdown.classList.remove("urgent");
       if (el.countdownMeta) el.countdownMeta.textContent = "Until this 15m window ends";
       refreshBestSide();
+      updateSummaryPeek();
       return;
     }
     const end = Date.parse(closeTimeIso);
     if (!Number.isFinite(end)) {
       el.countdown.textContent = "—:—";
       refreshBestSide();
+      updateSummaryPeek();
       return;
     }
     let ms = end - Date.now();
@@ -3558,6 +3561,7 @@
       }
       startRolloverBurst();
       refreshBestSide();
+      updateSummaryPeek();
       return;
     }
     const totalSec = Math.floor(ms / 1000);

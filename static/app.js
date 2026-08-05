@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "8.4";
+  const APP_VERSION = "8.5";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
@@ -133,6 +133,9 @@
     tradeHistoryList: document.getElementById("trade-history-list"),
     tradeHistorySummary: document.getElementById("trade-history-summary"),
     tradeHistoryClear: document.getElementById("trade-history-clear"),
+    plChart: document.getElementById("pl-chart"),
+    plChartEmpty: document.getElementById("pl-chart-empty"),
+    plChartCaption: document.getElementById("pl-chart-caption"),
     accountExport: document.getElementById("account-export"),
     accountImport: document.getElementById("account-import"),
     accountImportFile: document.getElementById("account-import-file"),
@@ -183,6 +186,9 @@
 
   let chart = null;
   let series = null;
+  let plChart = null;
+  let plSeries = null;
+  let plChartFitted = false;
   let targetSeries = null;
   let targetLine = null;
   let settleLine = null;
@@ -621,6 +627,175 @@
     }
   }
 
+  /** Closed settle/close rows with a real P/L, oldest → newest. */
+  function closedPlTrades() {
+    const list = Array.isArray(demo.history) ? demo.history : [];
+    return list
+      .filter((t) => {
+        if (!t || typeof t !== "object") return false;
+        if (t.kind !== "settle" && t.kind !== "close") return false;
+        return Number.isFinite(Number(t.pl));
+      })
+      .slice()
+      .sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0));
+  }
+
+  /**
+   * Build equity candlesticks from the trade log:
+   * each closed trade is one candle (open=equity before, close=equity after).
+   * Green = win / equity up; red = loss / equity down.
+   */
+  function buildPlCandles() {
+    const closed = closedPlTrades();
+    const start =
+      Number.isFinite(Number(demo.start)) && Number(demo.start) > 0
+        ? Number(demo.start)
+        : DEMO_DEFAULT_START;
+    let equity = start;
+    let lastTime = 0;
+    const candles = [];
+    for (const t of closed) {
+      const pl = Number(t.pl);
+      const open = Math.round(equity * 100) / 100;
+      equity = Math.round((equity + pl) * 100) / 100;
+      const close = equity;
+      let time = Math.floor((Number(t.at) || Date.now()) / 1000);
+      if (time <= lastTime) time = lastTime + 1;
+      lastTime = time;
+      candles.push({
+        time,
+        open,
+        high: Math.max(open, close),
+        low: Math.min(open, close),
+        close,
+        pl,
+        won: t.won === true || pl >= 0,
+        side: t.side,
+        kind: t.kind,
+      });
+    }
+    // Optional live candle for open mark P/L.
+    if (demo.position) {
+      const mark = markOpenPosition(demo.position);
+      if (mark && Number.isFinite(mark.unrealized)) {
+        const open = Math.round(equity * 100) / 100;
+        const close = Math.round((equity + mark.unrealized) * 100) / 100;
+        let time = Math.floor(Date.now() / 1000);
+        if (time <= lastTime) time = lastTime + 1;
+        candles.push({
+          time,
+          open,
+          high: Math.max(open, close),
+          low: Math.min(open, close),
+          close,
+          pl: mark.unrealized,
+          won: mark.unrealized >= 0,
+          side: demo.position.side,
+          kind: "open",
+        });
+      }
+    }
+    return { candles, start, equity, closedCount: closed.length };
+  }
+
+  function ensurePlChart() {
+    if (plChart || !el.plChart || !window.LightweightCharts) return;
+    const { createChart } = window.LightweightCharts;
+    plChart = createChart(el.plChart, {
+      layout: {
+        background: { color: "#0d1612" },
+        textColor: "#8fa399",
+        fontFamily: "IBM Plex Sans, Segoe UI, sans-serif",
+        attributionLogo: false,
+      },
+      grid: {
+        vertLines: { color: "rgba(255,255,255,0.04)" },
+        horzLines: { color: "rgba(255,255,255,0.05)" },
+      },
+      rightPriceScale: {
+        borderColor: "rgba(255,255,255,0.08)",
+        scaleMargins: { top: 0.12, bottom: 0.12 },
+      },
+      timeScale: {
+        borderColor: "rgba(255,255,255,0.08)",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 2,
+      },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
+      handleScale: { mouseWheel: true, pinch: true },
+      width: el.plChart.clientWidth || 300,
+      height: el.plChart.clientHeight || 160,
+    });
+    plSeries = plChart.addCandlestickSeries({
+      upColor: "#1ac96b",
+      downColor: "#d45454",
+      borderVisible: false,
+      wickUpColor: "#1ac96b",
+      wickDownColor: "#d45454",
+      priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+    });
+  }
+
+  function resizePlChart() {
+    if (!plChart || !el.plChart) return;
+    const w = el.plChart.clientWidth;
+    const h = el.plChart.clientHeight || 160;
+    if (w > 0) plChart.applyOptions({ width: w, height: h });
+  }
+
+  function renderPlChart() {
+    if (!el.plChart) return;
+    const { candles, start, closedCount } = buildPlCandles();
+    const hasBars = candles.length > 0;
+
+    if (el.plChartEmpty) el.plChartEmpty.hidden = hasBars;
+    el.plChart.hidden = !hasBars;
+    if (el.plChartCaption) {
+      if (!hasBars) {
+        el.plChartCaption.textContent = "Closed trades as equity candles";
+      } else {
+        const wins = candles.filter((c) => c.kind !== "open" && c.won).length;
+        const losses = Math.max(0, closedCount - wins);
+        const last = candles[candles.length - 1];
+        const net = Math.round((last.close - start) * 100) / 100;
+        el.plChartCaption.textContent = `${closedCount} closed · ${wins}W-${losses}L · equity ${money(
+          last.close
+        )} (${formatPl(net)})`;
+      }
+    }
+
+    if (!hasBars) {
+      if (plSeries) {
+        try {
+          plSeries.setData([]);
+        } catch {
+          // ignore
+        }
+      }
+      return;
+    }
+
+    ensurePlChart();
+    if (!plSeries) return;
+    resizePlChart();
+    plSeries.setData(
+      candles.map((c) => ({
+        time: c.time,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+      }))
+    );
+    try {
+      plChart.timeScale().fitContent();
+      plChartFitted = true;
+    } catch {
+      // ignore
+    }
+  }
+
   function renderTradeHistory() {
     if (!Array.isArray(demo.history)) demo.history = loadTradeHistory();
     const list = demo.history;
@@ -713,9 +888,11 @@
     if (!rows.length) {
       el.tradeHistoryList.innerHTML =
         '<div class="trade-history-empty">Buy, add, close, or settle — trades will list here.</div>';
+      renderPlChart();
       return;
     }
     el.tradeHistoryList.innerHTML = rows.join("");
+    renderPlChart();
   }
 
   function openOptions() {
@@ -727,6 +904,11 @@
     renderTradeHistory();
     // Keep history in view near the top of the ⋮ sheet.
     if (el.optionsSheet) el.optionsSheet.scrollTop = 0;
+    // Chart needs a layout pass after the sheet becomes visible.
+    requestAnimationFrame(() => {
+      resizePlChart();
+      renderPlChart();
+    });
   }
 
   function closeOptions() {

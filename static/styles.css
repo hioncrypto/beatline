@@ -532,6 +532,51 @@ h1 {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
+  margin-bottom: 10px;
+}
+
+.pl-chart-block {
+  margin: 0 0 10px;
+}
+
+.pl-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.pl-chart-caption {
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-align: right;
+}
+
+.pl-chart {
+  height: 160px;
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(8, 14, 11, 0.55);
+  overflow: hidden;
+}
+
+.pl-chart[hidden],
+.pl-chart-empty[hidden] {
+  display: none !important;
+}
+
+.pl-chart-empty {
+  margin: 0;
+  padding: 18px 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  text-align: center;
+}
   margin: 0 0 10px;
 }
 
@@ -1316,12 +1361,12 @@ h1 {
 .trade-panel {
   display: block;
   margin: 2px 8px 0;
-  padding: 8px 10px 6px;
+  padding: 8px 10px 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(22, 53, 40, 0.5), rgba(12, 20, 16, 0.72));
   overflow: auto;
-  max-height: 32dvh;
+  max-height: min(40dvh, 340px);
 }
 
 .buy-dock {

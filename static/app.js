@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "8.0";
+  const APP_VERSION = "8.1";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
@@ -363,7 +363,10 @@
   }
 
   function setupEphemeralBanner() {
-    if (!el.ephemeralBanner || !isEphemeralHost()) return;
+    if (!el.ephemeralBanner) return;
+    // Always start hidden; only temp tunnels may show it.
+    el.ephemeralBanner.hidden = true;
+    if (!isEphemeralHost()) return;
     try {
       const dismissedAt = Number(localStorage.getItem(EPHEMERAL_DISMISS_KEY) || 0);
       // Re-show every 6h so the permanent-host reminder stays visible.

@@ -634,6 +634,11 @@ h1 {
   z-index: 40;
 }
 
+/* Author `display:flex` overrides UA [hidden]; keep dismiss/host gating working. */
+.ephemeral-banner[hidden] {
+  display: none !important;
+}
+
 .ephemeral-banner-text {
   flex: 1;
   min-width: 0;

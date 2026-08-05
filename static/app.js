@@ -12,9 +12,10 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 2000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.28";
+  const APP_VERSION = "9.29";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
+  const TRADE_DETAILS_COLLAPSE_KEY = "beatlineTradeDetailsCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
   const EDGE_ALERT_STORE_KEY = "beatlineEdgeAlertKey";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
@@ -110,6 +111,10 @@
     chartResizeBottom: document.getElementById("chart-resize-bottom"),
     tradePanel: document.querySelector(".trade-panel"),
     tradeStack: document.querySelector(".trade-stack"),
+    tradeDetails: document.getElementById("trade-details"),
+    tradeDetailsToggle: document.getElementById("trade-details-toggle"),
+    tradeDetailsPeek: document.getElementById("trade-details-peek"),
+    tradeDetailsBody: document.getElementById("trade-details-body"),
     timeframe: document.getElementById("timeframe"),
     chartTfLabel: document.getElementById("chart-tf-label"),
     summaryPanel: document.getElementById("summary-panel"),
@@ -305,6 +310,8 @@
   let edgeAlertsArmed = false;
   let lastChimeAt = 0;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
+  let tradeDetailsCollapsed =
+    localStorage.getItem(TRADE_DETAILS_COLLAPSE_KEY) === "1";
   let chartHeightPx = loadChartHeightPx();
   let lastBreakevenPrice = null;
   let settleHintByTicker = {};
@@ -1749,9 +1756,8 @@
     const botGrip = el.chartResizeBottom
       ? el.chartResizeBottom.getBoundingClientRect().height
       : 34;
-    // Reserve room for Best Side + trade-size + Market Chance odds + ROI cards.
-    // 110px was too small — Best Side alone ate it and crushed odds/ROI to ~0.
-    const minTrade = 340;
+    // Reserve room for Best Side; Trade size + Market Chance can collapse.
+    const minTrade = tradeDetailsCollapsed ? 160 : 280;
     const minChart = 96;
     const maxChart = Math.max(
       minChart,
@@ -1804,18 +1810,20 @@
     el.chartWrap.style.setProperty("height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("min-height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("max-height", `${chartHeightPx}px`, "important");
-    // Leftover band must fit Best Side + stake + Market Chance + ROI.
+    // Leftover band must fit Best Side (+ trade details when expanded).
     const leftover = Math.max(
       minTrade,
       shellH - topH - summaryH - chartHeightPx - dockH - openPlH - topGrip - botGrip - 4
     );
     if (el.tradeStack) {
       el.tradeStack.style.maxHeight = `${Math.round(leftover)}px`;
-      if (el.tradePanel) el.tradePanel.style.maxHeight = "";
-      if (el.tradePanel) el.tradePanel.style.minHeight = "168px";
+      if (el.tradePanel) {
+        el.tradePanel.style.maxHeight = "";
+        el.tradePanel.style.minHeight = tradeDetailsCollapsed ? "" : "120px";
+      }
     } else if (el.tradePanel) {
       el.tradePanel.style.maxHeight = `${Math.round(leftover)}px`;
-      el.tradePanel.style.minHeight = "168px";
+      el.tradePanel.style.minHeight = tradeDetailsCollapsed ? "" : "120px";
     }
     document.body.classList.add("chart-height-locked");
     if (persist) saveChartHeightPx(chartHeightPx);
@@ -1948,6 +1956,63 @@
       reflowAfterOpenPlChange();
       // Match open-pl CSS transition so leftover height uses final drawer size.
       setTimeout(reflowAfterOpenPlChange, 220);
+    }
+  }
+
+  function syncTradeDetailsPeek() {
+    if (!el.tradeDetailsPeek) return;
+    const stake =
+      el.stakeValue && el.stakeValue.textContent
+        ? el.stakeValue.textContent.trim()
+        : "";
+    const above =
+      el.yesPct && el.yesPct.textContent && el.yesPct.textContent !== "—"
+        ? el.yesPct.textContent.trim()
+        : "";
+    const below =
+      el.noPct && el.noPct.textContent && el.noPct.textContent !== "—"
+        ? el.noPct.textContent.trim()
+        : "";
+    const bits = [];
+    if (stake) bits.push(`Size ${stake}`);
+    if (above || below) {
+      bits.push(
+        above && below ? `Above ${above} · Below ${below}` : above || below
+      );
+    }
+    el.tradeDetailsPeek.textContent = bits.length
+      ? `${bits.join(" · ")} · tap to expand`
+      : "Trade size · Market chance · tap to expand";
+  }
+
+  function setTradeDetailsCollapsed(collapsed, opts = {}) {
+    const next = !!collapsed;
+    const changed = next !== tradeDetailsCollapsed;
+    tradeDetailsCollapsed = next;
+    try {
+      localStorage.setItem(
+        TRADE_DETAILS_COLLAPSE_KEY,
+        tradeDetailsCollapsed ? "1" : "0"
+      );
+    } catch {
+      // ignore
+    }
+    if (el.tradeDetails) {
+      el.tradeDetails.classList.toggle("is-collapsed", tradeDetailsCollapsed);
+    }
+    if (el.tradeDetailsToggle) {
+      el.tradeDetailsToggle.setAttribute(
+        "aria-expanded",
+        tradeDetailsCollapsed ? "false" : "true"
+      );
+      el.tradeDetailsToggle.title = tradeDetailsCollapsed
+        ? "Show trade size & market chance"
+        : "Hide trade size & market chance";
+    }
+    syncTradeDetailsPeek();
+    if ((changed || opts.forceResize) && !opts.skipResize) {
+      reflowAfterOpenPlChange();
+      setTimeout(reflowAfterOpenPlChange, 180);
     }
   }
 
@@ -4335,6 +4400,7 @@
       el.stakeSlider.setAttribute("aria-valuenow", String(tradeStake));
     }
     if (el.stakeValue) el.stakeValue.textContent = `$${tradeStake}`;
+    syncTradeDetailsPeek();
   }
 
   function renderRoi() {
@@ -4497,6 +4563,7 @@
     }
     lastThinBook = !!(data && data.thin_book);
     updateRoi(data);
+    syncTradeDetailsPeek();
   }
 
   function updateEdgeLine(spot) {
@@ -5486,6 +5553,39 @@
         setOpenPlCollapsed(!openPlCollapsed);
       });
     }
+    if (el.tradeDetailsToggle) {
+      el.tradeDetailsToggle.addEventListener("click", () => {
+        setTradeDetailsCollapsed(!tradeDetailsCollapsed);
+      });
+    }
+    if (el.tradeDetails) {
+      let detailsDragY = null;
+      el.tradeDetails.addEventListener(
+        "touchstart",
+        (ev) => {
+          if (ev.touches && ev.touches[0]) detailsDragY = ev.touches[0].clientY;
+        },
+        { passive: true }
+      );
+      el.tradeDetails.addEventListener(
+        "touchend",
+        (ev) => {
+          if (detailsDragY == null) return;
+          const y =
+            ev.changedTouches && ev.changedTouches[0]
+              ? ev.changedTouches[0].clientY
+              : detailsDragY;
+          const dy = y - detailsDragY;
+          detailsDragY = null;
+          // Swipe down on the handle area → hide slider + Market Chance.
+          if (dy > 28) setTradeDetailsCollapsed(true);
+          else if (dy < -28) setTradeDetailsCollapsed(false);
+        },
+        { passive: true }
+      );
+    }
+    // Restore prior collapsed state without fighting first paint.
+    setTradeDetailsCollapsed(tradeDetailsCollapsed, { skipResize: true });
     if (el.openPlBar) {
       let dragY = null;
       const onStart = (y) => {

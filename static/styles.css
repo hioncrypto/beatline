@@ -1727,7 +1727,7 @@ h1 {
   background: linear-gradient(180deg, rgba(22, 53, 40, 0.5), rgba(12, 20, 16, 0.72));
   overflow: auto;
   max-height: min(42dvh, 320px);
-  min-height: 168px;
+  min-height: 120px;
 }
 
 .buy-dock {
@@ -2752,18 +2752,95 @@ body.has-open-pl.open-pl-collapsed .app-shell > .trade-stack {
 }
 
 .app-shell > .trade-stack > .best-side {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   margin: 0;
   /* Fully opaque — never see trade/ROI text bleeding through. */
   background: #101a15;
   position: relative;
-  z-index: 1;
-  max-height: 42%;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  z-index: 2;
+  max-height: none;
+  overflow: visible;
 }
 
-.app-shell > .trade-stack > .stake-strip {
+.app-shell > .trade-stack > .trade-details {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+  z-index: 1;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #0d1511;
+  overflow: hidden;
+}
+
+.app-shell > .trade-stack > .trade-details.is-collapsed {
+  flex: 0 0 auto;
+}
+
+.trade-details-handle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  margin: 0;
+  padding: 6px 10px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: pan-y;
+}
+
+.trade-details-handle-bar {
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.trade-details-peek {
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trade-details:not(.is-collapsed) .trade-details-peek {
+  display: none;
+}
+
+.trade-details.is-collapsed .trade-details-peek {
+  display: block;
+  color: var(--accent);
+}
+
+.trade-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding: 0 6px 6px;
+}
+
+.trade-details.is-collapsed .trade-details-body {
+  display: none !important;
+}
+
+.app-shell > .trade-stack .stake-strip {
   flex: 0 0 auto;
   margin: 0;
   padding: 6px 8px 4px;
@@ -2794,12 +2871,14 @@ body.has-open-pl .app-shell > .trade-stack > .best-side {
   padding: 8px 10px;
 }
 
-.app-shell > .trade-stack > .trade-panel {
+.app-shell > .trade-stack .trade-panel {
   flex: 1 1 auto;
-  /* Always leave room for Market Chance odds + Buy Above/Below ROI cards. */
-  min-height: 168px;
+  min-height: 120px;
   max-height: none;
   margin: 0;
+  border: 0;
+  background: transparent;
+  padding: 2px 2px 6px;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -3002,12 +3081,12 @@ body.portrait-app #chart {
 .trade-panel {
   max-height: none;
   margin: 0;
-  padding: 4px 8px 14px;
+  padding: 4px 8px 10px;
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   flex: 1 1 auto;
-  min-height: 168px;
+  min-height: 120px;
   overscroll-behavior: contain;
 }
 

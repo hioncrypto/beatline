@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=9.28" />
+    <link rel="stylesheet" href="/styles.css?v=9.29" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=9.28" defer></script>
+    <script src="/app.js?v=9.29" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -211,7 +211,7 @@
       <span class="chart-resize-label">Chart size</span>
     </div>
 
-    <!-- Best Side pinned above the scrollable odds/ROI strip (no overlay ghosting). -->
+    <!-- Best Side pinned; Trade size + Market Chance push down / collapse. -->
     <section class="trade-stack">
     <div id="best-side" class="best-side" hidden aria-live="polite">
       <div class="best-side-kicker">Best side</div>
@@ -227,71 +227,89 @@
       <div id="best-side-meta" class="best-side-meta">—</div>
     </div>
 
-    <div id="stake-strip" class="stake-strip" hidden>
-      <div class="roi-heading">
-        <span>Trade size</span>
-        <span id="stake-value" class="stake-value">$50</span>
-      </div>
-      <label class="stake-slider-wrap" for="stake-slider">
-        <input
-          id="stake-slider"
-          class="stake-slider"
-          type="range"
-          min="1"
-          max="100"
-          step="1"
-          value="1"
-          aria-valuemin="1"
-          aria-valuemax="100"
-          aria-valuenow="1"
-          aria-label="Trade size in dollars"
-        />
-        <div class="stake-ends">
-          <span>$1</span>
-          <span>$100</span>
+    <div id="trade-details" class="trade-details">
+      <button
+        type="button"
+        id="trade-details-toggle"
+        class="trade-details-handle"
+        aria-expanded="true"
+        aria-controls="trade-details-body"
+        title="Hide trade size &amp; market chance"
+      >
+        <span class="trade-details-handle-bar" aria-hidden="true"></span>
+        <span id="trade-details-peek" class="trade-details-peek"
+          >Trade size · Market chance</span
+        >
+      </button>
+      <div id="trade-details-body" class="trade-details-body">
+        <div id="stake-strip" class="stake-strip" hidden>
+          <div class="roi-heading">
+            <span>Trade size</span>
+            <span id="stake-value" class="stake-value">$50</span>
+          </div>
+          <label class="stake-slider-wrap" for="stake-slider">
+            <input
+              id="stake-slider"
+              class="stake-slider"
+              type="range"
+              min="1"
+              max="100"
+              step="1"
+              value="1"
+              aria-valuemin="1"
+              aria-valuemax="100"
+              aria-valuenow="1"
+              aria-label="Trade size in dollars"
+            />
+            <div class="stake-ends">
+              <span>$1</span>
+              <span>$100</span>
+            </div>
+          </label>
         </div>
-      </label>
-    </div>
 
-      <section class="trade-panel">
-      <div class="odds-block">
-        <div class="odds-heading">
-          <span>Market chance</span>
-          <span id="odds-hint" class="odds-hint">What traders are pricing</span>
-        </div>
-        <div class="odds-row" id="odds-row" hidden>
-          <div class="odd yes">
-            <span class="odd-label">Above</span>
-            <span id="yes-pct" class="odd-pct">—</span>
-            <span id="yes-book" class="odd-book">—</span>
-          </div>
-          <div class="odd no">
-            <span class="odd-label">Below</span>
-            <span id="no-pct" class="odd-pct">—</span>
-            <span id="no-book" class="odd-book">—</span>
-          </div>
-        </div>
-        <div id="roi-panel" class="roi-panel" hidden>
-          <div class="roi-grid">
-            <div class="roi-card above">
-              <div class="roi-side">Buy Above</div>
-              <div id="roi-above-price" class="roi-price">—</div>
-              <div id="roi-above-summary" class="roi-summary">—</div>
-              <div id="roi-above-detail" class="roi-detail">—</div>
+        <section class="trade-panel">
+          <div class="odds-block">
+            <div class="odds-heading">
+              <span>Market chance</span>
+              <span id="odds-hint" class="odds-hint">What traders are pricing</span>
             </div>
-            <div class="roi-card below">
-              <div class="roi-side">Buy Below</div>
-              <div id="roi-below-price" class="roi-price">—</div>
-              <div id="roi-below-summary" class="roi-summary">—</div>
-              <div id="roi-below-detail" class="roi-detail">—</div>
+            <div class="odds-row" id="odds-row" hidden>
+              <div class="odd yes">
+                <span class="odd-label">Above</span>
+                <span id="yes-pct" class="odd-pct">—</span>
+                <span id="yes-book" class="odd-book">—</span>
+              </div>
+              <div class="odd no">
+                <span class="odd-label">Below</span>
+                <span id="no-pct" class="odd-pct">—</span>
+                <span id="no-book" class="odd-book">—</span>
+              </div>
+            </div>
+            <div id="roi-panel" class="roi-panel" hidden>
+              <div class="roi-grid">
+                <div class="roi-card above">
+                  <div class="roi-side">Buy Above</div>
+                  <div id="roi-above-price" class="roi-price">—</div>
+                  <div id="roi-above-summary" class="roi-summary">—</div>
+                  <div id="roi-above-detail" class="roi-detail">—</div>
+                </div>
+                <div class="roi-card below">
+                  <div class="roi-side">Buy Below</div>
+                  <div id="roi-below-price" class="roi-price">—</div>
+                  <div id="roi-below-summary" class="roi-summary">—</div>
+                  <div id="roi-below-detail" class="roi-detail">—</div>
+                </div>
+              </div>
+              <p class="roi-note">
+                Drag trade size to compare win / cost / ROI. Est. Kalshi taker fee
+                included. Win pays $1/contract · lose = $0.
+              </p>
             </div>
           </div>
-          <p class="roi-note">
-            Drag trade size to compare win / cost / ROI. Est. Kalshi taker fee included. Win pays $1/contract · lose = $0.
-          </p>
-        </div>
+        </section>
       </div>
-    </section>
+    </div>
     </section>
 
       <div id="open-pl-bar" class="open-pl-bar" hidden aria-live="polite">

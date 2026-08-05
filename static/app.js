@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.19";
+  const APP_VERSION = "9.20";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -109,6 +109,7 @@
     chartResizeTop: document.getElementById("chart-resize-top"),
     chartResizeBottom: document.getElementById("chart-resize-bottom"),
     tradePanel: document.querySelector(".trade-panel"),
+    tradeStack: document.querySelector(".trade-stack"),
     timeframe: document.getElementById("timeframe"),
     chartTfLabel: document.getElementById("chart-tf-label"),
     summaryPanel: document.getElementById("summary-panel"),
@@ -1676,24 +1677,18 @@
     const summaryH = el.summaryPanel
       ? el.summaryPanel.getBoundingClientRect().height
       : 0;
-    const bestH =
-      el.bestSide && !el.bestSide.hidden
-        ? el.bestSide.getBoundingClientRect().height
-        : 0;
     const dock = document.querySelector(".buy-dock");
     const dockH = dock ? dock.getBoundingClientRect().height : 78;
     const openPlH =
       el.openPlBar && !el.openPlBar.hidden
         ? el.openPlBar.getBoundingClientRect().height
         : 0;
-    const handleBudget = 32;
-    // Leave only a thin trade strip so the chart can grow nearly full-height.
-    // Best Side lives outside the trade strip now, so minTrade can stay small.
-    const minTrade = 52;
-    const minChart = 120;
+    // Trade stack (Best Side + odds/ROI) must keep a usable band.
+    const minTrade = 130;
+    const minChart = 160;
     const maxChart = Math.max(
       minChart,
-      shellH - topH - summaryH - bestH - dockH - openPlH - handleBudget - minTrade
+      shellH - topH - summaryH - dockH - openPlH - minTrade - 8
     );
     return {
       minChart,
@@ -1702,7 +1697,6 @@
       shellH,
       topH,
       summaryH,
-      bestH,
       dockH,
       openPlH,
     };
@@ -1717,24 +1711,28 @@
       el.chartWrap.style.minHeight = "";
       el.chartWrap.style.maxHeight = "";
       if (el.tradePanel) el.tradePanel.style.maxHeight = "";
+      if (el.tradeStack) el.tradeStack.style.maxHeight = "";
       document.body.classList.remove("chart-height-locked");
       if (persist) saveChartHeightPx(null);
       setTimeout(resizeChart, 40);
       return;
     }
-    const { minChart, maxChart, minTrade, shellH, topH, summaryH, bestH, dockH, openPlH } =
+    const { minChart, maxChart, minTrade, shellH, topH, summaryH, dockH, openPlH } =
       chartHeightLimits();
     chartHeightPx = Math.round(Math.min(maxChart, Math.max(minChart, px)));
     el.chartWrap.style.setProperty("flex", `0 0 ${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("min-height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("max-height", `${chartHeightPx}px`, "important");
-    // Give leftover vertical space to the trade strip (scrolls as needed).
-    if (el.tradePanel) {
-      const leftover = Math.max(
-        minTrade,
-        shellH - topH - summaryH - bestH - chartHeightPx - dockH - openPlH - 32
-      );
+    // One leftover band for Best Side + scrollable odds/ROI (no sibling overlap).
+    const leftover = Math.max(
+      minTrade,
+      shellH - topH - summaryH - chartHeightPx - dockH - openPlH - 8
+    );
+    if (el.tradeStack) {
+      el.tradeStack.style.maxHeight = `${Math.round(leftover)}px`;
+      if (el.tradePanel) el.tradePanel.style.maxHeight = "";
+    } else if (el.tradePanel) {
       el.tradePanel.style.maxHeight = `${Math.round(leftover)}px`;
     }
     document.body.classList.add("chart-height-locked");
@@ -1761,7 +1759,6 @@
       if (startY == null || startH == null) return;
       const dy = clientY - startY;
       // Top: drag up grows chart. Bottom: drag down grows chart.
-      // 1.35× amplifies the gesture so small drags actually move the window.
       const next = mode === "top" ? startH - dy * 1.35 : startH + dy * 1.35;
       applyChartHeight(next, { persist: false });
     };
@@ -1777,12 +1774,9 @@
       setTimeout(resizeChart, 40);
     };
 
-    handle.addEventListener("pointerdown", (ev) => {
-      if (ev.button != null && ev.button !== 0) return;
-      ev.preventDefault();
-      handle.setPointerCapture?.(ev.pointerId);
-      pointerId = ev.pointerId;
-      startY = ev.clientY;
+    const begin = (clientY, pid) => {
+      pointerId = pid == null ? -1 : pid;
+      startY = clientY;
       startH =
         chartHeightPx != null
           ? chartHeightPx
@@ -1791,47 +1785,56 @@
             : 240;
       handle.classList.add("is-dragging");
       document.body.classList.add("is-resizing-chart");
+    };
+
+    handle.addEventListener("pointerdown", (ev) => {
+      if (ev.button != null && ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      try {
+        handle.setPointerCapture(ev.pointerId);
+      } catch {
+        // ignore
+      }
+      begin(ev.clientY, ev.pointerId);
     });
     handle.addEventListener("pointermove", (ev) => {
-      if (pointerId != null && ev.pointerId !== pointerId) return;
+      if (pointerId == null || (pointerId >= 0 && ev.pointerId !== pointerId)) return;
       if (startY == null) return;
+      ev.preventDefault();
       onMove(ev.clientY);
     });
     handle.addEventListener("pointerup", onEnd);
     handle.addEventListener("pointercancel", onEnd);
+    handle.addEventListener("lostpointercapture", onEnd);
 
     handle.addEventListener(
       "touchstart",
       (ev) => {
-        if (pointerId != null) return;
+        if (pointerId != null && pointerId >= 0) return;
         const t = ev.touches && ev.touches[0];
         if (!t) return;
-        startY = t.clientY;
-        startH =
-          chartHeightPx != null
-            ? chartHeightPx
-            : el.chartWrap
-              ? el.chartWrap.getBoundingClientRect().height
-              : 240;
-        handle.classList.add("is-dragging");
-        document.body.classList.add("is-resizing-chart");
+        ev.preventDefault();
+        begin(t.clientY, -1);
       },
-      { passive: true }
+      { passive: false }
     );
     handle.addEventListener(
       "touchmove",
       (ev) => {
-        if (startY == null || pointerId != null) return;
+        if (startY == null) return;
+        if (pointerId != null && pointerId >= 0) return;
         const t = ev.touches && ev.touches[0];
         if (!t) return;
+        ev.preventDefault();
         onMove(t.clientY);
       },
-      { passive: true }
+      { passive: false }
     );
     handle.addEventListener(
       "touchend",
       () => {
-        if (pointerId != null) return;
+        if (pointerId != null && pointerId >= 0) return;
         onEnd();
       },
       { passive: true }
@@ -3870,46 +3873,37 @@
     }
     const waiting = !!opts.waiting || !!s.lowProb;
     const adding = !!opts.adding;
+    // Waiting / sit-out copy used to inflate Best Side over the ROI cards.
+    // Keep that state compact — label + amount + short meta are enough.
+    if (waiting && !adding) {
+      el.bestSideSuggest.hidden = true;
+      return;
+    }
     el.bestSideSuggest.hidden = false;
     el.bestSideSuggest.classList.toggle("is-waiting", waiting);
     el.bestSideSuggest.classList.toggle("is-below", !waiting && side === "below");
-    const conf = s.pWin != null ? Math.round(s.pWin * 100) : null;
     const kicker = el.bestSideSuggest.querySelector(".best-side-suggest-kicker");
     if (kicker) {
-      kicker.textContent = s.lowProb
-        ? "Suggested buy"
-        : adding
-          ? "Suggested add"
-          : waiting
-            ? "Suggested entry"
-            : "Suggested buy";
+      kicker.textContent = adding ? "Suggested add" : "Suggested buy";
     }
     if (el.bestSideSuggestAmount) {
-      el.bestSideSuggestAmount.textContent = s.lowProb
-        ? "Sit out"
-        : `$${s.stake}${s.contracts ? ` · ${s.contracts} cts` : ""}`;
+      el.bestSideSuggestAmount.textContent = `$${s.stake}${
+        s.contracts ? ` · ${s.contracts} cts` : ""
+      }`;
     }
     if (el.bestSideSuggestMeta) {
-      if (s.lowProb) {
-        el.bestSideSuggestMeta.textContent = `${
-          side === "above" ? "Above" : "Below"
-        } is the underdog${conf != null ? ` at ${conf}%` : ""} — no size worth risking`;
-      } else {
-        const roi =
-          s.roiIfWin != null
-            ? `${s.roiIfWin >= 0 ? "+" : ""}${s.roiIfWin.toFixed(0)}% if win`
-            : "";
-        const bankTxt = bankPctText(s.bankPct);
-        const bank = bankTxt ? `risks ${bankTxt} of balance` : "";
-        const lead = adding
-          ? `${side === "above" ? "Above" : "Below"} add size`
-          : waiting
-            ? `${side === "above" ? "Above" : "Below"} if you enter`
-            : `${side === "above" ? "Above" : "Below"}`;
-        el.bestSideSuggestMeta.textContent = [lead, roi, bank]
-          .filter(Boolean)
-          .join(" · ");
-      }
+      const roi =
+        s.roiIfWin != null
+          ? `${s.roiIfWin >= 0 ? "+" : ""}${s.roiIfWin.toFixed(0)}% if win`
+          : "";
+      const bankTxt = bankPctText(s.bankPct);
+      const bank = bankTxt ? `risks ${bankTxt} of balance` : "";
+      const lead = adding
+        ? `${side === "above" ? "Above" : "Below"} add size`
+        : `${side === "above" ? "Above" : "Below"}`;
+      el.bestSideSuggestMeta.textContent = [lead, roi, bank]
+        .filter(Boolean)
+        .join(" · ");
     }
   }
 
@@ -4017,17 +4011,15 @@
         el.bestSideAmount.textContent =
           tradeStake > 0 ? `Holding $${tradeStake}` : "Set a trade size";
       }
-      // Still show what we'd risk on the better-priced side, marked as a wait.
+      // Compact wait state — avoid a tall Suggested Buy card stacking over ROI.
       renderBestSideSuggest(best.side, suggestStakeForEdge(best), {
         waiting: true,
       });
       if (el.bestSideMeta) {
         const lead = spot - beat;
-        const mAbove = modelP != null ? Math.round(modelP * 100) : null;
-        el.bestSideMeta.textContent =
-          `Live ${lead >= 0 ? "+" : ""}$${lead.toFixed(0)} · model Above ${
-            mAbove != null ? mAbove + "%" : "—"
-          } · ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")} left · wait for better ask`;
+        el.bestSideMeta.textContent = `Live ${
+          lead >= 0 ? "+" : ""
+        }$${lead.toFixed(0)} · wait for better ask`;
       }
       setRoiCardBest(null);
       setDockBestDetail("Wait", null);

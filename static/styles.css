@@ -2177,23 +2177,19 @@ h1 {
   padding: 12px 14px 11px;
   border-radius: 12px;
   border: 1px solid rgba(26, 201, 107, 0.35);
-  background:
-    linear-gradient(135deg, rgba(26, 201, 107, 0.14), rgba(8, 14, 11, 0.35)),
-    rgba(8, 14, 11, 0.72);
+  background: #101a15;
   text-align: center;
   transition: border-color 0.2s ease, background 0.2s ease;
 }
 
 .best-side.is-below {
   border-color: rgba(212, 84, 84, 0.4);
-  background:
-    linear-gradient(135deg, rgba(212, 84, 84, 0.14), rgba(8, 14, 11, 0.35)),
-    rgba(8, 14, 11, 0.72);
+  background: #1a1212;
 }
 
 .best-side.is-none {
   border-color: rgba(255, 255, 255, 0.1);
-  background: rgba(8, 14, 11, 0.45);
+  background: #121816;
 }
 
 .best-side-kicker {
@@ -2688,11 +2684,11 @@ body.has-open-pl .summary-panel:not(.is-collapsed) {
 }
 
 body.has-open-pl .trade-panel {
-  max-height: min(22dvh, 190px);
+  max-height: none;
 }
 
 body.has-open-pl.open-pl-collapsed .trade-panel {
-  max-height: min(28dvh, 230px);
+  max-height: none;
 }
 
 body.has-open-pl .app-shell > .chart-wrap {
@@ -2700,16 +2696,45 @@ body.has-open-pl .app-shell > .chart-wrap {
   min-height: clamp(160px, 36dvh, 300px) !important;
 }
 
-.app-shell > .best-side {
-  flex: 0 0 auto;
-  margin: 2px 8px 4px;
-  padding: 10px 12px 9px;
-  z-index: 4;
+.app-shell > .trade-stack {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 8px 0;
+  max-height: min(40dvh, 340px);
+  overflow: hidden;
 }
 
-body.has-open-pl .app-shell > .best-side {
-  margin-top: 2px;
+body.has-open-pl .app-shell > .trade-stack {
+  max-height: min(34dvh, 300px);
+}
+
+body.has-open-pl.open-pl-collapsed .app-shell > .trade-stack {
+  max-height: min(38dvh, 320px);
+}
+
+.app-shell > .trade-stack > .best-side {
+  flex: 0 0 auto;
+  margin: 0;
+  /* Fully opaque — never see trade/ROI text bleeding through. */
+  background: #101a15;
+  position: relative;
+  z-index: 1;
+}
+
+body.has-open-pl .app-shell > .trade-stack > .best-side {
   padding: 8px 10px;
+}
+
+.app-shell > .trade-stack > .trade-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .app-shell > .top {
@@ -2721,11 +2746,7 @@ body.has-open-pl .app-shell > .best-side {
   min-height: auto;
 }
 
-.app-shell > .chart-resize {
-  flex: 0 0 auto;
-}
-
-.app-shell > .trade-panel {
+.app-shell > .trade-stack {
   flex: 0 1 auto;
   min-height: 0;
 }
@@ -2763,25 +2784,40 @@ body.chart-height-locked .app-shell > .chart-wrap {
   min-height: 0 !important;
 }
 
-.chart-resize {
+/* Resize grips live inside the chart wrap so they can't float over Best Side. */
+.chart-wrap > .chart-resize {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 18px;
-  margin: 0 8px;
+  height: 22px;
+  margin: 0;
+  padding: 0;
   touch-action: none;
   cursor: row-resize;
   -webkit-user-select: none;
   user-select: none;
-  z-index: 3;
+  position: relative;
+  z-index: 5;
+  background: #0b1210;
+  pointer-events: auto;
+}
+
+.chart-wrap > .chart-resize-top {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.chart-wrap > .chart-resize-bottom {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .chart-resize-bar {
   width: 48px;
   height: 5px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.34);
   transition: background 0.12s ease, width 0.12s ease;
+  pointer-events: none;
 }
 
 .chart-resize.is-dragging .chart-resize-bar,
@@ -2796,7 +2832,8 @@ body.is-resizing-chart {
   user-select: none;
 }
 
-body.is-resizing-chart #chart {
+body.is-resizing-chart #chart,
+body.is-resizing-chart .tf-btns {
   pointer-events: none;
 }
 
@@ -2857,17 +2894,28 @@ body.portrait-app #chart {
 }
 
 /*
-  Trade strip: odds + stake + ROI (Best Side sits above, outside this scroll).
-  Caps height so the BTC chart stays usable; scroll for full ROI cards.
+  Trade strip: Best Side pinned above; odds + stake + ROI scroll underneath.
+  One stack so the two never paint on top of each other.
 */
-.trade-panel {
-  max-height: min(28dvh, 240px);
+.trade-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin: 2px 8px 0;
+  max-height: min(40dvh, 340px);
+  overflow: hidden;
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.trade-panel {
+  max-height: none;
+  margin: 0;
   padding: 4px 8px 14px;
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-height: 0;
   overscroll-behavior: contain;
 }
@@ -2910,28 +2958,26 @@ body.portrait-app #chart {
 
 .best-side {
   display: block;
-  margin: 2px 8px 4px;
+  margin: 0;
   padding: 10px 12px 9px;
   border-radius: 12px;
   border: 1px solid rgba(26, 201, 107, 0.35);
-  background:
-    linear-gradient(135deg, rgba(26, 201, 107, 0.14), rgba(8, 14, 11, 0.35)),
-    rgba(8, 14, 11, 0.72);
+  background: #101a15;
   text-align: center;
   flex: 0 0 auto;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .best-side.is-below {
   border-color: rgba(212, 84, 84, 0.4);
-  background:
-    linear-gradient(135deg, rgba(212, 84, 84, 0.14), rgba(8, 14, 11, 0.35)),
-    rgba(8, 14, 11, 0.72);
+  background: #1a1212;
 }
 
 .best-side.is-none {
   border-color: rgba(255, 255, 255, 0.1);
-  background: rgba(8, 14, 11, 0.45);
+  background: #121816;
 }
 
 .best-side-kicker {

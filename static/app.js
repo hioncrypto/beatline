@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.6";
+  const APP_VERSION = "9.7";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -55,7 +55,7 @@
     },
     {
       title: "Set size, then buy",
-      body: "Use the Trade size slider ($0–$100). Then tap Buy Above, Best, or Buy Below at the bottom. Enter dollars if needed and slide to confirm — release early to cancel. After a fill, tap the same side again to add size (averages into the open position).",
+      body: "Tap Buy Above, Best, or Buy Below. Best Side suggests an advantageous dollar size when the edge is clear — confirm or edit it in the buy sheet, then slide to fill. Same-side taps add to the open position (avg entry).",
     },
     {
       title: "Rolling P/L",
@@ -105,7 +105,6 @@
     oddsHint: document.getElementById("odds-hint"),
     edgeLine: document.getElementById("edge-line"),
     roiPanel: document.getElementById("roi-panel"),
-    stakeSlider: document.getElementById("stake-slider"),
     stakeValue: document.getElementById("stake-value"),
     bestSide: document.getElementById("best-side"),
     bestSideLabel: document.getElementById("best-side-label"),
@@ -3449,8 +3448,8 @@
       return false;
     }
     if (r.empty) {
-      if (summaryEl) summaryEl.textContent = "Slide to size a trade";
-      if (detailEl) detailEl.textContent = "Set a dollar amount above";
+      if (summaryEl) summaryEl.textContent = "Open Buy to set dollars";
+      if (detailEl) detailEl.textContent = "Best Side sizes the advantageous entry";
       return true;
     }
     const roiTxt =
@@ -3462,37 +3461,52 @@
     }
     if (detailEl) {
       detailEl.innerHTML =
-        `${r.contracts} contracts<br>` +
+        `${r.contracts} contracts · $${Math.round(stakeUsd)} preview<br>` +
         `Cost ${dollars(r.cost)} + fee ${dollars(r.fee)}<br>` +
         `Total ${dollars(r.total)} · lose = ${dollars(r.total)}`;
     }
     return true;
   }
 
-  function syncStakeUi() {
-    if (el.stakeSlider) {
-      el.stakeSlider.value = String(tradeStake);
-      el.stakeSlider.setAttribute("aria-valuenow", String(tradeStake));
+  function previewStakeForSide(side) {
+    if (
+      lastBestPick &&
+      lastBestPick.side === side &&
+      lastBestPick.suggestedStake != null &&
+      Number.isFinite(Number(lastBestPick.suggestedStake))
+    ) {
+      return Math.max(1, Math.round(Number(lastBestPick.suggestedStake)));
     }
-    if (el.stakeValue) el.stakeValue.textContent = `$${tradeStake}`;
+    return Math.max(1, Math.round(tradeStake) || 10);
+  }
+
+  function syncStakeUi() {
+    if (!el.stakeValue) return;
+    if (lastBestPick && lastBestPick.suggestedStake != null) {
+      el.stakeValue.textContent = `Best $${Math.round(lastBestPick.suggestedStake)}`;
+    } else {
+      el.stakeValue.textContent = `Preview $${Math.max(1, Math.round(tradeStake) || 10)}`;
+    }
   }
 
   function renderRoi() {
     if (!el.roiPanel) return;
     syncStakeUi();
+    const stakeAbove = previewStakeForSide("above");
+    const stakeBelow = previewStakeForSide("below");
     const okA = fillRoiCard(
       el.roiAbovePrice,
       el.roiAboveSummary,
       el.roiAboveDetail,
       lastRoiAsks.above,
-      tradeStake
+      stakeAbove
     );
     const okB = fillRoiCard(
       el.roiBelowPrice,
       el.roiBelowSummary,
       el.roiBelowDetail,
       lastRoiAsks.below,
-      tradeStake
+      stakeBelow
     );
     el.roiPanel.hidden = !(okA || okB);
     refreshBestSide();

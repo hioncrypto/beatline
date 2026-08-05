@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.23";
+  const APP_VERSION = "9.24";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -1670,7 +1670,7 @@
   function loadChartHeightPx() {
     try {
       const n = Number(localStorage.getItem(CHART_HEIGHT_KEY));
-      if (Number.isFinite(n) && n >= 120 && n <= 900) return Math.round(n);
+      if (Number.isFinite(n) && n >= 90 && n <= 1200) return Math.round(n);
     } catch {
       // ignore
     }
@@ -1706,12 +1706,12 @@
     const botGrip = el.chartResizeBottom
       ? el.chartResizeBottom.getBoundingClientRect().height
       : 34;
-    // Trade stack (Best Side + odds/ROI) must keep a usable band.
-    const minTrade = 130;
-    const minChart = 140;
+    // Keep only a thin Best Side / odds band so the chart can grow nearly full-height.
+    const minTrade = 56;
+    const minChart = 96;
     const maxChart = Math.max(
       minChart,
-      shellH - topH - summaryH - dockH - openPlH - topGrip - botGrip - minTrade - 8
+      shellH - topH - summaryH - dockH - openPlH - topGrip - botGrip - minTrade - 4
     );
     return {
       minChart,
@@ -1759,10 +1759,10 @@
     el.chartWrap.style.setProperty("height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("min-height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("max-height", `${chartHeightPx}px`, "important");
-    // One leftover band for Best Side + scrollable odds/ROI (no sibling overlap).
+    // Leftover band for Best Side + odds/ROI — can shrink small when chart is tall.
     const leftover = Math.max(
       minTrade,
-      shellH - topH - summaryH - chartHeightPx - dockH - openPlH - topGrip - botGrip - 8
+      shellH - topH - summaryH - chartHeightPx - dockH - openPlH - topGrip - botGrip - 4
     );
     if (el.tradeStack) {
       el.tradeStack.style.maxHeight = `${Math.round(leftover)}px`;
@@ -1794,7 +1794,8 @@
       if (startY == null || startH == null) return;
       const dy = clientY - startY;
       // Top: drag up grows chart. Bottom: drag down grows chart.
-      const next = mode === "top" ? startH - dy * 1.35 : startH + dy * 1.35;
+      // Stronger gain so small finger moves cover the full range.
+      const next = mode === "top" ? startH - dy * 2.1 : startH + dy * 2.1;
       applyChartHeight(next, { persist: false });
     };
 

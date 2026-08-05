@@ -2722,7 +2722,7 @@ body.has-open-pl.open-pl-collapsed .trade-panel {
 
 body.has-open-pl .app-shell > .chart-wrap {
   flex: 1 1 auto !important;
-  min-height: clamp(160px, 36dvh, 300px) !important;
+  min-height: clamp(96px, 30dvh, 340px) !important;
 }
 
 .app-shell > .trade-stack {
@@ -2732,16 +2732,16 @@ body.has-open-pl .app-shell > .chart-wrap {
   flex-direction: column;
   gap: 6px;
   margin: 2px 8px 0;
-  max-height: min(40dvh, 340px);
+  max-height: min(48dvh, 420px);
   overflow: hidden;
 }
 
 body.has-open-pl .app-shell > .trade-stack {
-  max-height: min(34dvh, 300px);
+  max-height: min(42dvh, 380px);
 }
 
 body.has-open-pl.open-pl-collapsed .app-shell > .trade-stack {
-  max-height: min(38dvh, 320px);
+  max-height: min(46dvh, 400px);
 }
 
 .app-shell > .trade-stack > .best-side {
@@ -2804,7 +2804,7 @@ body.has-open-pl .app-shell > .trade-stack > .best-side {
 
 .app-shell > .chart-wrap {
   flex: 1 1 auto !important;
-  min-height: clamp(140px, 32dvh, 280px) !important;
+  min-height: clamp(96px, 28dvh, 320px) !important;
   display: flex !important;
   flex-direction: column;
   overflow: hidden;

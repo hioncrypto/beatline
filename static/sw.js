@@ -1,11 +1,12 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.1-edge-tone";
+const SW_VERSION = "3.2-edge-quiet";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const STATE_KEY = "kalshiFifteenState";
 const STABLE_APP_URL = "https://beatline-1.onrender.com";
 const RENDER_DEPLOY_URL =
   "https://render.com/deploy?repo=https://github.com/hioncrypto/beatline";
+const EDGE_NOTIFY_COOLDOWN_MS = 120_000;
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -69,18 +70,24 @@ async function writeState(state) {
   );
 }
 
-async function pingClientsPlayEdge() {
-  const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+async function hasVisibleClient() {
+  const all = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  });
   for (const client of all) {
     try {
-      client.postMessage({ type: "play-edge-chime" });
+      if (client.visibilityState === "visible") return true;
     } catch {
       // ignore
     }
   }
+  return false;
 }
 
 async function showTargetNotification(payload) {
+  // Foreground tab already chimed for new targets — skip duplicate system tone.
+  if (await hasVisibleClient()) return;
   const title = "BeatLine · new 15m target";
   const body =
     payload && payload.beat != null
@@ -102,7 +109,11 @@ async function showTargetNotification(payload) {
   });
 }
 
-async function showEdgeNotification(payload) {
+async function showEdgeNotification(payload, { force = false } = {}) {
+  // When BeatLine is open, the page plays its own edge chime — don't also
+  // fire a system notification (and never postMessage-chime into the page;
+  // those messages queue up and stack when you return).
+  if (!force && (await hasVisibleClient())) return;
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const ask =
     payload && payload.askCents != null
@@ -147,7 +158,6 @@ async function showEdgeNotification(payload) {
     badge: "/icons/icon-192.png?v=2.6",
     vibrate: [80, 40, 80, 40, 80, 40, 160],
     tag: "kalshi-clear-edge",
-    // renotify + silent:false → Android plays the notification tone again
     renotify: true,
     requireInteraction: true,
     silent: false,
@@ -158,7 +168,6 @@ async function showEdgeNotification(payload) {
       side: payload && payload.side,
     },
   });
-  await pingClientsPlayEdge();
 }
 
 async function showLinkNotification(payload) {
@@ -236,7 +245,7 @@ async function checkClearEdge(forceNotify) {
   const lastAt = Number(state.edgeAt) || 0;
   if (!forceNotify) {
     if (state.edgeKey === key) return;
-    if (now - lastAt < 90000) return;
+    if (now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) return;
   }
   state.edgeKey = key;
   state.edgeAt = now;
@@ -312,11 +321,29 @@ self.addEventListener("message", (event) => {
         const key = `${msg.side}:${Math.round(Number(msg.askCents) || 0)}`;
         const now = Date.now();
         const lastAt = Number(state.edgeAt) || 0;
-        if (state.edgeKey === key && now - lastAt < 90000) return;
+        if (state.edgeKey === key && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) return;
+        if (now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && state.edgeKey) return;
         state.edgeKey = key;
         state.edgeAt = now;
         await writeState(state);
         await showEdgeNotification(msg);
+      })()
+    );
+  }
+  if (msg.type === "edge-armed") {
+    // Page already handled this edge in-app — remember it so SW/push don't
+    // re-fire the same Best Side when the tab backgrounds.
+    event.waitUntil(
+      (async () => {
+        const state = await readState();
+        if (msg.side) {
+          state.edgeKey = `${msg.side}:${Math.round(Number(msg.askCents) || 0)}`;
+          state.edgeAt = Date.now();
+        } else if (msg.clear === false) {
+          // keep edgeKey until cooldown; just touch timestamp
+        }
+        if (typeof msg.chimeOn === "boolean") state.chimeOn = msg.chimeOn;
+        await writeState(state);
       })()
     );
   }

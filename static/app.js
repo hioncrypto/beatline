@@ -12,13 +12,15 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.3";
+  const APP_VERSION = "9.4";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const SUMMARY_COLLAPSE_KEY = "beatlineSummaryCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
+  const EDGE_ALERT_STORE_KEY = "beatlineEdgeAlertKey";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
   const PL_UI_KEY = "beatlinePlChartUi";
+  const CHIME_GAP_MS = 4_500;
 
   function loadPlUi() {
     try {
@@ -242,11 +244,13 @@
   let lastBestSideKey = null;
   let bestSideFlashTimer = null;
   let lastBestPick = null; // { side } | null when clear edge
-  let lastClearEdgeAlertKey = null;
+  let lastClearEdgeAlertKey = loadStoredEdgeAlertKey();
   let lastClearEdgeAlertAt = 0;
   let lastClearEdgeGoneAt = 0;
   const EDGE_ALERT_COOLDOWN_MS = 120_000;
   const EDGE_GONE_RESET_MS = 60_000;
+  let edgeAlertsArmed = false;
+  let lastChimeAt = 0;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
   let summaryCollapsed = localStorage.getItem(SUMMARY_COLLAPSE_KEY) === "1";
   let chartHeightPx = loadChartHeightPx();
@@ -2291,8 +2295,37 @@
     return audioCtx;
   }
 
+  function loadStoredEdgeAlertKey() {
+    try {
+      const raw = sessionStorage.getItem(EDGE_ALERT_STORE_KEY);
+      if (raw == null || raw === "") return null;
+      return raw;
+    } catch {
+      return null;
+    }
+  }
+
+  function persistEdgeAlertKey(key) {
+    try {
+      if (key == null) sessionStorage.removeItem(EDGE_ALERT_STORE_KEY);
+      else sessionStorage.setItem(EDGE_ALERT_STORE_KEY, String(key));
+    } catch {
+      // ignore
+    }
+  }
+
+  function canPlayTone() {
+    const now = Date.now();
+    if (now - lastChimeAt < CHIME_GAP_MS) return false;
+    lastChimeAt = now;
+    return true;
+  }
+
   function playChime(force) {
     if (!chimeOn && !force) return;
+    if (document.visibilityState !== "visible") return;
+    if (!force && !canPlayTone()) return;
+    if (force) lastChimeAt = Date.now();
     const ctx = ensureAudio();
     if (!ctx) return;
     const now = ctx.currentTime;
@@ -2325,6 +2358,9 @@
   /** Distinct ascending chime for clear-edge Best Side. */
   function playEdgeChime(force) {
     if (!chimeOn && !force) return;
+    if (document.visibilityState !== "visible") return;
+    // Always debounce — stacked SW/page messages must not blast together.
+    if (!canPlayTone()) return;
     const ctx = ensureAudio();
     if (!ctx) return;
     const now = ctx.currentTime;
@@ -2367,7 +2403,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.1", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.2", { scope: "/" });
       await navigator.serviceWorker.ready;
       return reg;
     } catch (err) {
@@ -2569,6 +2605,7 @@
     const ask = Math.round(Number(best.askCents) || 0);
     const alertKey = `${side}:${ask}`;
     const now = Date.now();
+
     // Hard cooldown stops alert loops when Best Side flickers around the threshold.
     if (now - lastClearEdgeAlertAt < EDGE_ALERT_COOLDOWN_MS) return;
 
@@ -2586,8 +2623,12 @@
     lastClearEdgeAlertKey = alertKey;
     lastClearEdgeAlertAt = now;
     lastClearEdgeGoneAt = 0;
+    persistEdgeAlertKey(alertKey);
     ensureAudio();
-    playEdgeChime();
+    // Only Web-Audio chime while visible. Background relies on SW/system push.
+    if (document.visibilityState === "visible" && !document.hidden) {
+      playEdgeChime();
+    }
     const sideLabel = side === "above" ? "Above" : "Below";
     const sug =
       lastBestPick && lastBestPick.side === side && lastBestPick.suggestedStake
@@ -2599,8 +2640,13 @@
         ? `Clear edge · Buy ${sideLabel} · suggest $${sug}${ask ? ` @ ${ask}¢` : ""}`
         : `Clear edge · Buy ${sideLabel}${ask ? ` @ ${ask}¢` : ""}`
     );
-    // Background / locked phone: system notification carries the audible tone
-    // (Web Audio is usually muted when the tab is hidden).
+    postToSW({
+      type: "edge-armed",
+      side,
+      askCents: ask || null,
+      chimeOn,
+    });
+    // Background / locked phone: one system notification (no postMessage chime).
     if (document.visibilityState !== "visible" || document.hidden) {
       postToSW({
         type: "edge-notify",
@@ -3187,6 +3233,7 @@
     if (!lastClearEdgeGoneAt) lastClearEdgeGoneAt = now;
     if (now - lastClearEdgeGoneAt >= EDGE_GONE_RESET_MS) {
       lastClearEdgeAlertKey = "none";
+      persistEdgeAlertKey("none");
     }
   }
 
@@ -3274,7 +3321,15 @@
         lastBestSideKey = noneKey;
         flashBestSide();
       }
-      markClearEdgeGone();
+      if (!edgeAlertsArmed) {
+        edgeAlertsArmed = true;
+        if (!lastClearEdgeAlertKey) {
+          lastClearEdgeAlertKey = "none";
+          persistEdgeAlertKey("none");
+        }
+      } else {
+        markClearEdgeGone();
+      }
       return;
     }
 
@@ -3381,6 +3436,23 @@
     if (key !== lastBestSideKey) {
       lastBestSideKey = key;
       flashBestSide();
+    }
+    if (!edgeAlertsArmed) {
+      // Quietly adopt whatever edge is already clear so opening the app
+      // doesn't dump a pile of tones for a market that was already edged.
+      edgeAlertsArmed = true;
+      const ask = Math.round(Number(best.askCents) || 0);
+      lastClearEdgeAlertKey = `${best.side}:${ask}`;
+      lastClearEdgeAlertAt = Date.now();
+      lastClearEdgeGoneAt = 0;
+      persistEdgeAlertKey(lastClearEdgeAlertKey);
+      postToSW({
+        type: "edge-armed",
+        side: best.side,
+        askCents: ask || null,
+        chimeOn,
+      });
+      return;
     }
     alertClearEdge(best);
   }
@@ -4705,27 +4777,34 @@
         ensureAudio();
         ensurePortraitLock(true);
         startRolloverBurst();
+        // Re-enter quietly: keep the current edge armed so refresh doesn't
+        // replay every Best Side tone that stacked while we were away.
+        if (lastBestPick && lastBestPick.side) {
+          const ask = Math.round(Number(lastBestPick.askCents) || 0);
+          lastClearEdgeAlertKey = `${lastBestPick.side}:${ask}`;
+          lastClearEdgeAlertAt = Date.now();
+          persistEdgeAlertKey(lastClearEdgeAlertKey);
+          edgeAlertsArmed = true;
+        }
         refreshTarget({ forceCandles: true });
       } else {
-        // Page hidden — rely on SW poll + server Web Push (audible notification).
-        postToSW({ type: "check-now" });
+        // Page hidden — SW poll + server Web Push carry audible alerts.
+        // Do NOT edge-notify on every hide (that renotify-spammed on return).
         postToSW({
           type: "arm-state",
           ticker: lastFifteenTicker,
           target: lastFifteenTarget,
           chimeOn,
         });
-        if (chimeOn && lastBestPick && lastBestPick.side) {
+        if (lastBestPick && lastBestPick.side) {
           postToSW({
-            type: "edge-notify",
+            type: "edge-armed",
             side: lastBestPick.side,
             askCents: lastBestPick.askCents || null,
-            pWin: lastBestPick.pWin,
-            suggestStake: lastBestPick.suggestedStake,
-            ticker: lastTicker || lastFifteenTicker,
-            beat: lastTarget,
+            chimeOn,
           });
         }
+        postToSW({ type: "check-now" });
       }
     });
 
@@ -4752,7 +4831,9 @@
       navigator.serviceWorker.addEventListener("message", (event) => {
         const msg = event.data || {};
         if (msg.type === "play-edge-chime") {
+          // Legacy SW messages — ignore when hidden and always debounce.
           if (!chimeOn) return;
+          if (document.visibilityState !== "visible") return;
           ensureAudio();
           playEdgeChime(true);
         }

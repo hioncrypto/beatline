@@ -4673,8 +4673,13 @@
     let height = el.chart.clientHeight || 0;
     if ((height < 120 || width < 40) && wrap) {
       const tf = wrap.querySelector(".tf-btns");
-      const tfH = tf ? tf.offsetHeight : 0;
-      height = Math.max(height, wrap.clientHeight - tfH - 2);
+      const topGrip = wrap.querySelector(".chart-resize-top");
+      const botGrip = wrap.querySelector(".chart-resize-bottom");
+      const chrome =
+        (tf ? tf.offsetHeight : 0) +
+        (topGrip ? topGrip.offsetHeight : 0) +
+        (botGrip ? botGrip.offsetHeight : 0);
+      height = Math.max(height, wrap.clientHeight - chrome - 2);
     }
     const w = Math.max(1, Math.floor(width || 1));
     const h = Math.max(1, Math.floor(height || 1));

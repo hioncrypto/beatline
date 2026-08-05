@@ -12,29 +12,27 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "8.9";
+  const APP_VERSION = "9.0";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
+  const SUMMARY_COLLAPSE_KEY = "beatlineSummaryCollapsed";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
   const PL_UI_KEY = "beatlinePlChartUi";
 
   function loadPlUi() {
     try {
       const raw = localStorage.getItem(PL_UI_KEY);
-      if (!raw) return { optionsOpen: false, showOnScreen: false };
+      if (!raw) return { optionsOpen: false };
       const parsed = JSON.parse(raw);
-      return {
-        optionsOpen: !!parsed.optionsOpen,
-        showOnScreen: !!parsed.showOnScreen,
-      };
+      return { optionsOpen: !!parsed.optionsOpen };
     } catch {
-      return { optionsOpen: false, showOnScreen: false };
+      return { optionsOpen: false };
     }
   }
 
   function savePlUi() {
     try {
-      localStorage.setItem(PL_UI_KEY, JSON.stringify(plUi));
+      localStorage.setItem(PL_UI_KEY, JSON.stringify({ optionsOpen: !!plUi.optionsOpen }));
     } catch {
       // ignore quota
     }
@@ -80,6 +78,10 @@
     chart: document.getElementById("chart"),
     timeframe: document.getElementById("timeframe"),
     chartTfLabel: document.getElementById("chart-tf-label"),
+    summaryPanel: document.getElementById("summary-panel"),
+    summaryToggle: document.getElementById("summary-toggle"),
+    summaryBody: document.getElementById("summary-body"),
+    summaryPeek: document.getElementById("summary-peek"),
     targetLabel: document.getElementById("target-label"),
     targetValue: document.getElementById("target-value"),
     targetMeta: document.getElementById("target-meta"),
@@ -158,13 +160,10 @@
     plChart: document.getElementById("pl-chart"),
     plChartEmpty: document.getElementById("pl-chart-empty"),
     plChartCaption: document.getElementById("pl-chart-caption"),
-    screenPlPanel: document.getElementById("screen-pl-panel"),
-    screenPlHide: document.getElementById("screen-pl-hide"),
     plChartSection: document.querySelector(".pl-chart-section"),
     plChartToggle: document.getElementById("pl-chart-toggle"),
-    plChartControls: document.getElementById("pl-chart-controls"),
+    plChartBody: document.getElementById("pl-chart-body"),
     plChartToggleMeta: document.getElementById("pl-chart-toggle-meta"),
-    plShowScreen: document.getElementById("pl-show-screen"),
     accountExport: document.getElementById("account-export"),
     accountImport: document.getElementById("account-import"),
     accountImportFile: document.getElementById("account-import-file"),
@@ -245,6 +244,7 @@
   const EDGE_ALERT_COOLDOWN_MS = 120_000;
   const EDGE_GONE_RESET_MS = 60_000;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
+  let summaryCollapsed = localStorage.getItem(SUMMARY_COLLAPSE_KEY) === "1";
   let lastBreakevenPrice = null;
   let settleHintByTicker = {};
   let optionsOpen = false;
@@ -749,8 +749,8 @@
     return formatPlTickMark(time, 3);
   }
 
-  function isPlScreenVisible() {
-    return !!(plUi && plUi.showOnScreen);
+  function isPlChartVisible() {
+    return !!(optionsOpen && plUi && plUi.optionsOpen);
   }
 
   function applyPlUi() {
@@ -763,17 +763,11 @@
         plUi.optionsOpen ? "true" : "false"
       );
     }
-    if (el.plChartControls) {
-      el.plChartControls.hidden = !plUi.optionsOpen;
-    }
-    if (el.plShowScreen) {
-      el.plShowScreen.checked = !!plUi.showOnScreen;
-    }
-    if (el.screenPlPanel) {
-      el.screenPlPanel.hidden = !plUi.showOnScreen;
+    if (el.plChartBody) {
+      el.plChartBody.hidden = !plUi.optionsOpen;
     }
     updatePlToggleMeta();
-    if (plUi.showOnScreen) {
+    if (isPlChartVisible()) {
       requestAnimationFrame(() => {
         resizePlChart();
         renderPlChart();
@@ -787,24 +781,17 @@
     applyPlUi();
   }
 
-  function setPlShowOnScreen(show) {
-    plUi.showOnScreen = !!show;
-    savePlUi();
-    applyPlUi();
-  }
-
   function updatePlToggleMeta() {
     if (!el.plChartToggleMeta) return;
     const closed = closedPlTrades();
     const wins = closed.filter((t) => t.won === true || Number(t.pl) >= 0).length;
     const losses = Math.max(0, closed.length - wins);
-    const screenBit = plUi.showOnScreen ? "On screen" : "Hidden";
     const openBit = plUi.optionsOpen ? "Expanded" : "Collapsed";
     if (!closed.length) {
-      el.plChartToggleMeta.textContent = `${openBit} · ${screenBit} · from your trade log`;
+      el.plChartToggleMeta.textContent = `${openBit} · from your trade log`;
       return;
     }
-    el.plChartToggleMeta.textContent = `${openBit} · ${screenBit} · ${closed.length} closed · ${wins}W-${losses}L`;
+    el.plChartToggleMeta.textContent = `${openBit} · ${closed.length} closed · ${wins}W-${losses}L`;
   }
 
   function ensurePlChart() {
@@ -851,7 +838,7 @@
   }
 
   function resizePlChart() {
-    if (!plChart || !el.plChart || !isPlScreenVisible()) return;
+    if (!plChart || !el.plChart || !isPlChartVisible()) return;
     const w = el.plChart.clientWidth;
     const h = el.plChart.clientHeight || 160;
     if (w > 0) plChart.applyOptions({ width: w, height: h });
@@ -860,7 +847,7 @@
   function renderPlChart() {
     if (!el.plChart) return;
     updatePlToggleMeta();
-    if (!isPlScreenVisible()) return;
+    if (!isPlChartVisible()) return;
 
     const { candles, start, closedCount } = buildPlCandles();
     const hasBars = candles.length > 0;
@@ -1020,6 +1007,9 @@
     renderTradeHistory();
     // Keep history in view near the top of the ⋮ sheet.
     if (el.optionsSheet) el.optionsSheet.scrollTop = 0;
+    requestAnimationFrame(() => {
+      applyPlUi();
+    });
   }
 
   function closeOptions() {
@@ -1221,6 +1211,52 @@
         : "Slide trade metrics away";
     }
     setTimeout(resizeChart, 60);
+  }
+
+  function setSummaryCollapsed(collapsed) {
+    summaryCollapsed = !!collapsed;
+    try {
+      localStorage.setItem(SUMMARY_COLLAPSE_KEY, summaryCollapsed ? "1" : "0");
+    } catch {
+      // ignore
+    }
+    document.body.classList.toggle("summary-collapsed", summaryCollapsed);
+    if (el.summaryPanel) {
+      el.summaryPanel.classList.toggle("is-collapsed", summaryCollapsed);
+    }
+    if (el.summaryToggle) {
+      el.summaryToggle.setAttribute(
+        "aria-expanded",
+        summaryCollapsed ? "false" : "true"
+      );
+      el.summaryToggle.title = summaryCollapsed
+        ? "Show price / time numbers"
+        : "Slide numbers away for a bigger chart";
+    }
+    updateSummaryPeek();
+    setTimeout(resizeChart, 60);
+  }
+
+  function updateSummaryPeek() {
+    if (!el.summaryPeek) return;
+    const beat =
+      el.targetValue && el.targetValue.textContent
+        ? el.targetValue.textContent.trim()
+        : "—";
+    const spot =
+      el.spotValue && el.spotValue.textContent
+        ? el.spotValue.textContent.trim()
+        : "—";
+    const delta =
+      el.spotDelta && el.spotDelta.textContent
+        ? el.spotDelta.textContent.trim()
+        : "";
+    const time =
+      el.countdown && el.countdown.textContent
+        ? el.countdown.textContent.trim()
+        : "—";
+    const deltaBit = delta && delta !== "—" ? ` · ${delta}` : "";
+    el.summaryPeek.textContent = `${beat} · ${spot}${deltaBit} · ${time}`;
   }
 
   /** Approximate inverse error function for model break-even spot. */
@@ -3495,6 +3531,7 @@
     updateEdgeLine(lastClose);
     refreshBestSide();
     if (demo.position) renderDemoUi();
+    updateSummaryPeek();
   }
 
   function updateCountdown() {
@@ -3537,6 +3574,7 @@
     if (totalSec <= 25) startRolloverBurst();
     refreshBestSide();
     if (demo.position) renderDemoUi();
+    updateSummaryPeek();
   }
 
   function clearRolloverBurst() {
@@ -4248,16 +4286,6 @@
         setPlOptionsOpen(!plUi.optionsOpen);
       });
     }
-    if (el.plShowScreen) {
-      el.plShowScreen.addEventListener("change", () => {
-        setPlShowOnScreen(!!el.plShowScreen.checked);
-      });
-    }
-    if (el.screenPlHide) {
-      el.screenPlHide.addEventListener("click", () => {
-        setPlShowOnScreen(false);
-      });
-    }
     if (el.buySuggestUse) {
       el.buySuggestUse.addEventListener("click", () => {
         if (buySuggestStake != null) setBuyAmountUi(buySuggestStake, true);
@@ -4325,6 +4353,40 @@
       el.openPlToggle.addEventListener("click", () => {
         setOpenPlCollapsed(!openPlCollapsed);
       });
+    }
+    if (el.summaryToggle) {
+      el.summaryToggle.addEventListener("click", () => {
+        setSummaryCollapsed(!summaryCollapsed);
+      });
+    }
+    if (el.summaryPanel) {
+      let dragY = null;
+      const onStart = (y) => {
+        dragY = y;
+      };
+      const onEnd = (y) => {
+        if (dragY == null) return;
+        const dy = y - dragY;
+        dragY = null;
+        // Swipe up collapses numbers; swipe down expands.
+        if (dy < -28) setSummaryCollapsed(true);
+        else if (dy > 28) setSummaryCollapsed(false);
+      };
+      el.summaryPanel.addEventListener(
+        "touchstart",
+        (ev) => {
+          if (ev.touches && ev.touches[0]) onStart(ev.touches[0].clientY);
+        },
+        { passive: true }
+      );
+      el.summaryPanel.addEventListener(
+        "touchend",
+        (ev) => {
+          const t = ev.changedTouches && ev.changedTouches[0];
+          if (t) onEnd(t.clientY);
+        },
+        { passive: true }
+      );
     }
     if (el.openPlBar) {
       let dragY = null;
@@ -4451,6 +4513,7 @@
     }
     renderDemoUi();
     applyPlUi();
+    setSummaryCollapsed(summaryCollapsed);
     syncAlertsUi();
     try {
       if (localStorage.getItem(TUTORIAL_KEY) !== "1") {
@@ -4545,7 +4608,7 @@
       syncRotateGate();
       tryLockPortrait();
       resizeChart();
-      if (isPlScreenVisible()) resizePlChart();
+      if (isPlChartVisible()) resizePlChart();
     });
     if (typeof ResizeObserver === "function" && el.chart) {
       const ro = new ResizeObserver(() => resizeChart());
@@ -4554,7 +4617,7 @@
     }
     if (typeof ResizeObserver === "function" && el.plChart) {
       const plRo = new ResizeObserver(() => {
-        if (isPlScreenVisible()) resizePlChart();
+        if (isPlChartVisible()) resizePlChart();
       });
       plRo.observe(el.plChart);
     }

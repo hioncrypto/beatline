@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=8.9" />
+    <link rel="stylesheet" href="/styles.css?v=9.0" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=8.9" defer></script>
+    <script src="/app.js?v=9.0" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -126,7 +126,19 @@
       </div>
       <div id="status" class="status" data-state="loading">Connecting…</div>
     </header>
-      <section class="summary-panel" aria-live="polite">
+      <section id="summary-panel" class="summary-panel" aria-live="polite">
+      <button
+        type="button"
+        id="summary-toggle"
+        class="summary-handle"
+        aria-expanded="true"
+        aria-controls="summary-body"
+        title="Slide numbers away for a bigger chart"
+      >
+        <span class="summary-handle-bar" aria-hidden="true"></span>
+        <span id="summary-peek" class="summary-peek">Beat · Live · Time</span>
+      </button>
+      <div id="summary-body" class="summary-body">
       <div class="hero-beat">
         <div class="label" id="target-label">Price to beat</div>
         <div id="target-value" class="value beat">—</div>
@@ -175,6 +187,7 @@
         <div id="demo-live-factors" class="demo-live-factors"></div>
         <div id="demo-live-meta" class="demo-live-meta" hidden>—</div>
       </div>
+      </div>
     </section>
       <section class="chart-wrap">
       <div
@@ -188,29 +201,6 @@
         <button type="button" class="tf-btn" data-tf="1m" aria-pressed="false">1m</button>
       </div>
       <main id="chart" role="img" aria-label="Bitcoin chart with Price to beat line"></main>
-    </section>
-
-    <section
-      id="screen-pl-panel"
-      class="screen-pl-panel"
-      hidden
-      aria-label="Wins and P/L chart"
-    >
-      <div class="screen-pl-head">
-        <div>
-          <div class="demo-label">Wins &amp; P/L</div>
-          <div id="pl-chart-caption" class="pl-chart-caption">
-            From your trade log · green win · red loss
-          </div>
-        </div>
-        <button type="button" id="screen-pl-hide" class="demo-btn ghost screen-pl-hide">
-          Hide
-        </button>
-      </div>
-      <div id="pl-chart" class="pl-chart" aria-label="Trade history profit and loss chart"></div>
-      <div id="pl-chart-empty" class="pl-chart-empty">
-        Wins/losses will candle here after you close or settle trades.
-      </div>
     </section>
 
       <section class="trade-panel">
@@ -366,12 +356,13 @@
         </button>
       </div>
 
-      <section class="pl-chart-section" aria-label="Wins and P/L chart controls">
+      <section class="pl-chart-section" aria-label="Wins and P/L chart">
         <button
           type="button"
           id="pl-chart-toggle"
           class="pl-chart-toggle"
           aria-expanded="false"
+          aria-controls="pl-chart-body"
         >
           <span>
             <strong>Wins &amp; P/L chart</strong>
@@ -379,14 +370,14 @@
           </span>
           <span id="pl-chart-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
         </button>
-        <div id="pl-chart-controls" class="pl-chart-controls" hidden>
-          <label class="options-row toggle-row" for="pl-show-screen">
-            <span>
-              <strong>Show on main screen</strong>
-              <em>Pin the P/L candlestick chart under the BTC chart</em>
-            </span>
-            <input id="pl-show-screen" type="checkbox" />
-          </label>
+        <div id="pl-chart-body" class="pl-chart-body" hidden>
+          <div id="pl-chart-caption" class="pl-chart-caption">
+            From your trade log · green win · red loss · dates on bottom
+          </div>
+          <div id="pl-chart" class="pl-chart" aria-label="Trade history profit and loss chart"></div>
+          <div id="pl-chart-empty" class="pl-chart-empty">
+            Wins/losses will candle here after you close or settle trades.
+          </div>
           <p class="pl-chart-hint">
             Green candles = wins / equity up · Red = losses. Bottom axis shows trade dates.
           </p>

@@ -2491,7 +2491,10 @@ body.portrait-app .live-time {
 }
 
 .countdown {
-  font-size: 1.1rem;
+  font-size: 1.85rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
 }
 
 .countdown-meta,

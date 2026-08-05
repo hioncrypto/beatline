@@ -4480,12 +4480,6 @@
         ensurePortraitLock(true);
       });
     }
-    if (el.stakeSlider) {
-      syncStakeUi();
-      const onStake = () => setTradeStake(el.stakeSlider.value);
-      el.stakeSlider.addEventListener("input", onStake);
-      el.stakeSlider.addEventListener("change", onStake);
-    }
     if (el.menuBtn) {
       el.menuBtn.addEventListener("click", () => {
         ensurePortraitLock(true);

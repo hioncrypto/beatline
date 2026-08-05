@@ -2733,28 +2733,30 @@ body.has-open-pl .app-shell > .chart-wrap {
 }
 
 .app-shell > .trade-stack {
-  flex: 0 1 auto;
-  min-height: 220px;
+  /* Never crush trade features — chart loses height first. */
+  flex: 0 0 auto;
+  min-height: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin: 2px 8px 0;
-  max-height: min(58dvh, 520px);
-  overflow: hidden;
+  max-height: min(62dvh, 560px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 body.has-open-pl .app-shell > .trade-stack {
-  max-height: min(52dvh, 480px);
+  max-height: min(56dvh, 520px);
 }
 
 body.has-open-pl.open-pl-collapsed .app-shell > .trade-stack {
-  max-height: min(55dvh, 500px);
+  max-height: min(60dvh, 540px);
 }
 
 .app-shell > .trade-stack > .best-side {
   flex: 0 0 auto;
   margin: 0;
-  /* Fully opaque — never see trade/ROI text bleeding through. */
   background: #101a15;
   position: relative;
   z-index: 2;
@@ -2762,85 +2764,7 @@ body.has-open-pl.open-pl-collapsed .app-shell > .trade-stack {
   overflow: visible;
 }
 
-.app-shell > .trade-stack > .trade-details {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  position: relative;
-  z-index: 1;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: #0d1511;
-  overflow: hidden;
-}
-
-.app-shell > .trade-stack > .trade-details.is-collapsed {
-  flex: 0 0 auto;
-}
-
-.trade-details-handle {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  width: 100%;
-  margin: 0;
-  padding: 6px 10px 4px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  cursor: pointer;
-  flex: 0 0 auto;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: pan-y;
-}
-
-.trade-details-handle-bar {
-  width: 40px;
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.28);
-}
-
-.trade-details-peek {
-  font-size: 0.7rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  color: var(--muted);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.trade-details:not(.is-collapsed) .trade-details-peek {
-  display: none;
-}
-
-.trade-details.is-collapsed .trade-details-peek {
-  display: block;
-  color: var(--accent);
-}
-
-.trade-details-body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  padding: 0 6px 6px;
-}
-
-.trade-details.is-collapsed .trade-details-body {
-  display: none !important;
-}
-
-.app-shell > .trade-stack .stake-strip {
+.app-shell > .trade-stack > .stake-strip {
   flex: 0 0 auto;
   margin: 0;
   padding: 6px 8px 4px;
@@ -2871,16 +2795,12 @@ body.has-open-pl .app-shell > .trade-stack > .best-side {
   padding: 8px 10px;
 }
 
-.app-shell > .trade-stack .trade-panel {
-  flex: 1 1 auto;
-  min-height: 120px;
+.app-shell > .trade-stack > .trade-panel {
+  flex: 0 0 auto;
+  min-height: auto;
   max-height: none;
   margin: 0;
-  border: 0;
-  background: transparent;
-  padding: 2px 2px 6px;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: visible;
 }
 
 .app-shell > .top {
@@ -2897,8 +2817,8 @@ body.has-open-pl .app-shell > .trade-stack > .best-side {
 }
 
 .app-shell > .trade-stack {
-  flex: 0 1 auto;
-  min-height: 220px;
+  flex: 0 0 auto;
+  min-height: auto;
 }
 
 .top {
@@ -2921,7 +2841,7 @@ body.has-open-pl .app-shell > .trade-stack > .best-side {
 
 .app-shell > .chart-wrap {
   flex: 1 1 auto !important;
-  min-height: clamp(96px, 28dvh, 320px) !important;
+  min-height: clamp(80px, 18dvh, 280px) !important;
   display: flex !important;
   flex-direction: column;
   overflow: hidden;
@@ -3064,30 +2984,28 @@ body.portrait-app #chart {
 }
 
 /*
-  Trade strip: Best Side pinned above; odds + stake + ROI scroll underneath.
-  One stack so the two never paint on top of each other.
+  Trade strip: Best Side + Trade size + Market Chance always visible.
+  Chart shrinks first; this stack only scrolls if the phone is tiny.
 */
 .trade-stack {
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin: 2px 8px 0;
-  max-height: min(58dvh, 520px);
-  overflow: hidden;
-  flex: 0 1 auto;
-  min-height: 220px;
+  max-height: min(62dvh, 560px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  flex: 0 0 auto;
+  min-height: auto;
 }
 
 .trade-panel {
   max-height: none;
   margin: 0;
-  padding: 4px 8px 10px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  flex: 1 1 auto;
-  min-height: 120px;
-  overscroll-behavior: contain;
+  padding: 6px 8px 10px;
+  overflow: visible;
+  flex: 0 0 auto;
+  min-height: auto;
 }
 
 .odds-heading {
@@ -3130,7 +3048,7 @@ body.portrait-app #chart {
 .best-side {
   display: block;
   margin: 0;
-  padding: 10px 12px 9px;
+  padding: 8px 10px 7px;
   border-radius: 12px;
   border: 1px solid rgba(26, 201, 107, 0.35);
   background: #101a15;

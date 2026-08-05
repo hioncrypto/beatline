@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.38";
+  const APP_VERSION = "9.37";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -328,8 +328,6 @@
   let fittedOnce = false;
   let lastCandleCount = 0;
   let prevSpot = null;
-  let spotTrail = []; // recent live ticks for short-term trend ({ t, px })
-  const SPOT_TRAIL_MS = 12 * 60 * 1000;
   let audioCtx = null;
   // Chart candle size only — Price to beat is always Kalshi 15m.
   let currentTf = localStorage.getItem(TF_KEY) || "15m";
@@ -3774,85 +3772,6 @@
     };
   }
 
-  function noteSpotTrail(px) {
-    if (px == null || !Number.isFinite(px)) return;
-    const t = Date.now();
-    spotTrail.push({ t, px });
-    const cutoff = t - SPOT_TRAIL_MS;
-    while (spotTrail.length && spotTrail[0].t < cutoff) spotTrail.shift();
-    if (spotTrail.length > 180) spotTrail = spotTrail.slice(-180);
-  }
-
-  /**
-   * Short-term BTC tape: up / down / flat over ~5–10 minutes.
-   * Used so Best Side doesn't keep clear-edging Against a strong move
-   * (e.g. buying Above into a cascading downtrend).
-   */
-  function shortTermTrend() {
-    const now = Date.now();
-    let move5 = null;
-    let move10 = null;
-    if (spotTrail.length >= 4) {
-      const last = spotTrail[spotTrail.length - 1].px;
-      const in5 = spotTrail.filter((p) => p.t >= now - 5 * 60 * 1000);
-      const in10 = spotTrail.filter((p) => p.t >= now - 10 * 60 * 1000);
-      if (in5.length >= 2) move5 = last - in5[0].px;
-      if (in10.length >= 2) move10 = last - in10[0].px;
-    }
-    if (
-      (move5 == null || move10 == null) &&
-      Array.isArray(lastCandleData) &&
-      lastCandleData.length >= 4
-    ) {
-      const bars = lastCandleData;
-      const last = Number(bars[bars.length - 1].close);
-      let step = 60;
-      const dt =
-        Number(bars[bars.length - 1].time) - Number(bars[bars.length - 2].time);
-      if (Number.isFinite(dt) && dt > 0) step = dt;
-      const n5 = Math.max(1, Math.round(300 / step));
-      const n10 = Math.max(1, Math.round(600 / step));
-      if (move5 == null && bars.length > n5) {
-        move5 = last - Number(bars[bars.length - 1 - n5].close);
-      }
-      if (move10 == null && bars.length > n10) {
-        move10 = last - Number(bars[bars.length - 1 - n10].close);
-      }
-    }
-    const m5 = move5 == null ? 0 : move5;
-    const m10 = move10 == null ? 0 : move10;
-    if (move5 == null && move10 == null) {
-      return { bias: "flat", strength: 0, move5: 0, move10: 0 };
-    }
-    // ~$80 / 5m or ~$140 / 10m ≈ strong tape on BTC.
-    const down = Math.max(-m5 / 80, -m10 / 140, 0);
-    const up = Math.max(m5 / 80, m10 / 140, 0);
-    let strength = 0;
-    if (down > up && down >= 0.35) strength = -Math.min(1, down);
-    else if (up > down && up >= 0.35) strength = Math.min(1, up);
-    const bias =
-      strength <= -0.35 ? "down" : strength >= 0.35 ? "up" : "flat";
-    return { bias, strength, move5: m5, move10: m10 };
-  }
-
-  function applyTrendToScores(scored, trend) {
-    if (!trend || trend.bias === "flat" || !scored.length) return scored;
-    const mag = Math.abs(trend.strength);
-    return scored.map((s) => {
-      let score = s.score;
-      if (trend.bias === "down" && s.side === "above") {
-        score -= 0.1 + 0.18 * mag;
-      } else if (trend.bias === "up" && s.side === "below") {
-        score -= 0.1 + 0.18 * mag;
-      } else if (trend.bias === "down" && s.side === "below") {
-        score += 0.05 * mag;
-      } else if (trend.bias === "up" && s.side === "above") {
-        score += 0.05 * mag;
-      }
-      return { ...s, score, trendBias: trend.bias };
-    });
-  }
-
   /** Standard normal CDF (Abramowitz & Stegun 26.2.17). */
   function normalCdf(x) {
     if (!Number.isFinite(x)) return 0.5;
@@ -4439,7 +4358,7 @@
     }
 
     const modelP = modelProbAbove(spot, beat, secs);
-    let scored = [];
+    const scored = [];
     const a = scoreSide("above", aboveAsk, modelP, tradeStake);
     const b = scoreSide("below", belowAsk, modelP, tradeStake);
     if (a) scored.push(a);
@@ -4457,9 +4376,6 @@
       return;
     }
 
-    scored.sort((x, y) => y.score - x.score);
-    const trend = shortTermTrend();
-    scored = applyTrendToScores(scored, trend);
     scored.sort((x, y) => y.score - x.score);
     let best = scored[0];
     // Haircut noisy/thin books and early-window coin flips with tiny edge.
@@ -4482,7 +4398,7 @@
       (askC > 15
         ? best.pWin >= 0.38 && best.ev >= 0.03
         : best.pWin >= 0.45 && best.ev >= 0.05);
-    let enterClear =
+    const enterClear =
       best.ev >= 0.03 &&
       best.score > 0.05 &&
       best.pWin >= 0.3 &&
@@ -4494,18 +4410,7 @@
       best.pWin >= 0.28 &&
       cheapStay &&
       !(secs > 12 * 60 && best.ev < 0.025);
-    // Don't clear-edge against a strong short-term BTC tape (the afternoon
-    // dump pattern: Above suggestions while price was cascading down).
-    const fightingTape =
-      (trend.bias === "down" && best.side === "above") ||
-      (trend.bias === "up" && best.side === "below");
-    if (fightingTape && Math.abs(trend.strength) >= 0.7) {
-      enterClear = false;
-    } else if (fightingTape && Math.abs(trend.strength) >= 0.45) {
-      enterClear =
-        enterClear && best.ev >= 0.1 && best.pWin >= 0.62 && best.score > 0.12;
-    }
-    const clear = clearEdgeLatched ? stayClear && (!fightingTape || Math.abs(trend.strength) < 0.7) : enterClear;
+    const clear = clearEdgeLatched ? stayClear : enterClear;
     clearEdgeLatched = !!clear;
 
     el.bestSide.hidden = false;
@@ -4658,14 +4563,8 @@
           : "";
       const coolNote =
         suggestion && suggestion.streak >= 2 ? " · cooled" : "";
-      const tapeNote =
-        trend.bias === "down"
-          ? " · tape ↓"
-          : trend.bias === "up"
-            ? " · tape ↑"
-            : "";
       el.bestSideMeta.textContent =
-        `${conf}% model · ask ${best.askCents}¢ · ${roiTxt}${sizeNote}${coolNote}${tapeNote} · live ${
+        `${conf}% model · ask ${best.askCents}¢ · ${roiTxt}${sizeNote}${coolNote} · live ${
           lead >= 0 ? "+" : ""
         }$${lead.toFixed(0)} · ${m}:${String(s).padStart(2, "0")} left${openNote}`;
     }
@@ -5019,7 +4918,6 @@
     }
     el.spotValue.textContent = money(lastClose);
     el.spotValue.dataset.last = String(lastClose);
-    noteSpotTrail(lastClose);
 
     if (prevSpot != null && Number.isFinite(prevSpot)) {
       if (lastClose > prevSpot) el.spotValue.style.color = "#1ac96b";

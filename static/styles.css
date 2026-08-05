@@ -766,9 +766,35 @@ h1 {
 
 .trade-history {
   margin: 12px 0 4px;
-  padding: 12px 0;
+  padding: 4px 0 12px;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
+}
+
+.trade-history.is-open .pl-chart-chevron {
+  transform: rotate(180deg);
+}
+
+.trade-history-body {
+  margin-top: 8px;
+}
+
+.trade-history .trade-history-summary {
+  margin-top: 2px;
+  display: block;
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.trade-history .trade-history-summary.is-up {
+  color: var(--accent);
+}
+
+.trade-history .trade-history-summary.is-down {
+  color: var(--down);
 }
 
 .trade-history-head {
@@ -783,22 +809,6 @@ h1 {
   font-size: 0.78rem;
   letter-spacing: 0.1em;
   color: #d7ffe8;
-}
-
-.trade-history-summary {
-  margin-top: 4px;
-  font-size: 0.82rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-
-.trade-history-summary.is-up {
-  color: var(--accent);
-}
-
-.trade-history-summary.is-down {
-  color: var(--down);
 }
 
 .trade-history-backup {

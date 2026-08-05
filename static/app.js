@@ -12,13 +12,14 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.13";
+  const APP_VERSION = "9.14";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
   const EDGE_ALERT_STORE_KEY = "beatlineEdgeAlertKey";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
   const PL_UI_KEY = "beatlinePlChartUi";
+  const TRADE_HISTORY_UI_KEY = "beatlineTradeHistoryUi";
   const DAY_EQUITY_KEY = "beatlineDayEquity";
   const SUGGEST_LOG_KEY = "beatlineSuggestLog";
   const SUGGEST_LOG_LIMIT = 80;
@@ -38,6 +39,28 @@
   function savePlUi() {
     try {
       localStorage.setItem(PL_UI_KEY, JSON.stringify({ optionsOpen: !!plUi.optionsOpen }));
+    } catch {
+      // ignore quota
+    }
+  }
+
+  function loadTradeHistoryUi() {
+    try {
+      const raw = localStorage.getItem(TRADE_HISTORY_UI_KEY);
+      if (!raw) return { open: false };
+      const parsed = JSON.parse(raw);
+      return { open: !!parsed.open };
+    } catch {
+      return { open: false };
+    }
+  }
+
+  function saveTradeHistoryUi() {
+    try {
+      localStorage.setItem(
+        TRADE_HISTORY_UI_KEY,
+        JSON.stringify({ open: !!tradeHistoryUi.open })
+      );
     } catch {
       // ignore quota
     }
@@ -163,6 +186,10 @@
     demoLast: document.getElementById("demo-last"),
     tradeHistoryList: document.getElementById("trade-history-list"),
     tradeHistorySummary: document.getElementById("trade-history-summary"),
+    tradeHistorySection: document.getElementById("trade-history-section"),
+    tradeHistoryToggle: document.getElementById("trade-history-toggle"),
+    tradeHistoryBody: document.getElementById("trade-history-body"),
+    tradeHistoryChevron: document.getElementById("trade-history-chevron"),
     plChart: document.getElementById("pl-chart"),
     plChartEmpty: document.getElementById("pl-chart-empty"),
     plChartCaption: document.getElementById("pl-chart-caption"),
@@ -240,6 +267,7 @@
   let plSeries = null;
   let plChartFitted = false;
   let plUi = loadPlUi();
+  let tradeHistoryUi = loadTradeHistoryUi();
   let targetSeries = null;
   let targetLine = null;
   let settleLine = null;
@@ -807,6 +835,26 @@
     try { localStorage.removeItem("beatlineSummaryCollapsed"); } catch {}
   }
 
+  function applyTradeHistoryUi() {
+    const open = !!tradeHistoryUi.open;
+    if (el.tradeHistorySection) {
+      el.tradeHistorySection.classList.toggle("is-open", open);
+    }
+    if (el.tradeHistoryToggle) {
+      el.tradeHistoryToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    if (el.tradeHistoryBody) {
+      el.tradeHistoryBody.hidden = !open;
+    }
+  }
+
+  function setTradeHistoryOpen(open) {
+    tradeHistoryUi.open = !!open;
+    saveTradeHistoryUi();
+    applyTradeHistoryUi();
+    if (tradeHistoryUi.open) renderTradeHistory();
+  }
+
   function formatWinLossRatio(wins, losses) {
     const w = Math.max(0, Math.floor(Number(wins) || 0));
     const l = Math.max(0, Math.floor(Number(losses) || 0));
@@ -1058,6 +1106,7 @@
     renderDemoUi();
     renderTradeHistory();
     renderStrategyReport();
+    applyTradeHistoryUi();
     // Demo account sits at the top of the ⋮ sheet.
     if (el.optionsSheet) el.optionsSheet.scrollTop = 0;
     requestAnimationFrame(() => {
@@ -4962,6 +5011,12 @@
       el.plChartToggle.addEventListener("click", () => {
         setPlOptionsOpen(!plUi.optionsOpen);
       });
+    }
+    if (el.tradeHistoryToggle) {
+      el.tradeHistoryToggle.addEventListener("click", () => {
+        setTradeHistoryOpen(!tradeHistoryUi.open);
+      });
+      applyTradeHistoryUi();
     }
     if (el.strategyToggle && el.strategyBody) {
       el.strategyToggle.addEventListener("click", () => {

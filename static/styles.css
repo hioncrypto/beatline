@@ -2448,78 +2448,64 @@ body.is-resizing-chart #chart {
   min-width: 5.2rem;
 }
 
-/* Summary: full numbers when open; peek strip when collapsed. */
+/* Summary stays fixed (not collapsible). Chart uses the resize bars. */
 .summary-panel {
   max-height: none;
   margin: 0 8px 2px;
-  padding: 4px 8px 6px;
+  padding: 8px 10px 6px;
   overflow: visible;
-  display: flex;
-  flex-direction: column;
 }
 
-.summary-handle {
-  flex: 0 0 auto;
-  width: 100%;
-  display: flex;
+.app-shell > .chart-wrap {
+  flex: 1 1 auto !important;
+  min-height: clamp(140px, 32dvh, 280px) !important;
+  display: flex !important;
   flex-direction: column;
+  overflow: hidden;
+  margin: 0 8px;
+}
+
+body.chart-height-locked .app-shell > .chart-wrap {
+  /* Inline height is applied with !important from JS — don't fight it. */
+  flex: 0 0 auto !important;
+  min-height: 0 !important;
+}
+
+.chart-resize {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  margin: 0;
-  padding: 4px 4px 2px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
+  justify-content: center;
+  height: 18px;
+  margin: 0 8px;
+  touch-action: none;
+  cursor: row-resize;
+  -webkit-user-select: none;
+  user-select: none;
+  z-index: 3;
 }
 
-.summary-handle-bar {
-  width: 36px;
-  height: 4px;
+.chart-resize-bar {
+  width: 48px;
+  height: 5px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.28);
+  transition: background 0.12s ease, width 0.12s ease;
 }
 
-.summary-peek {
-  display: none;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.72rem;
-  font-weight: 650;
-  color: #cfe6d9;
-  font-variant-numeric: tabular-nums;
+.chart-resize.is-dragging .chart-resize-bar,
+.chart-resize:active .chart-resize-bar {
+  width: 64px;
+  background: rgba(26, 201, 107, 0.85);
 }
 
-.summary-body {
-  flex: 0 0 auto;
-  overflow: visible;
+body.is-resizing-chart {
+  cursor: row-resize;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
-.summary-panel.is-collapsed {
-  max-height: none;
-  padding-bottom: 2px;
-  overflow: hidden;
-}
-
-.summary-panel.is-collapsed .summary-body {
-  display: none;
-}
-
-.summary-panel.is-collapsed .summary-peek {
-  display: block;
-  padding-bottom: 4px;
-}
-
-body.summary-collapsed .app-shell > .chart-wrap {
-  min-height: clamp(260px, 56dvh, 480px) !important;
-}
-
-body.summary-collapsed .app-shell > .trade-panel {
-  max-height: min(22dvh, 190px);
+body.is-resizing-chart #chart {
+  pointer-events: none;
 }
 
 .hero-beat {

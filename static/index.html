@@ -127,18 +127,6 @@
       <div id="status" class="status" data-state="loading">Connecting…</div>
     </header>
       <section id="summary-panel" class="summary-panel" aria-live="polite">
-      <button
-        type="button"
-        id="summary-toggle"
-        class="summary-handle"
-        aria-expanded="true"
-        aria-controls="summary-body"
-        title="Slide numbers away for a bigger chart"
-      >
-        <span class="summary-handle-bar" aria-hidden="true"></span>
-        <span id="summary-peek" class="summary-peek">Beat · Live · Time</span>
-      </button>
-      <div id="summary-body" class="summary-body">
       <div class="hero-beat">
         <div class="label" id="target-label">Price to beat</div>
         <div id="target-value" class="value beat">—</div>
@@ -162,8 +150,8 @@
 
       <div id="settle-banner" class="settle-banner" hidden>
         <div class="settle-title" id="settle-title">Last minute · settling</div>
-        <div class="settle-avg" id="settle-avg">—</div>
-        <div class="settle-meta" id="settle-meta">
+        <div id="settle-avg" class="settle-avg">—</div>
+        <div id="settle-meta" class="settle-meta">
           Kalshi averages the last 60 seconds — not just the final tick.
         </div>
       </div>
@@ -186,7 +174,6 @@
         </button>
         <div id="demo-live-factors" class="demo-live-factors"></div>
         <div id="demo-live-meta" class="demo-live-meta" hidden>—</div>
-      </div>
       </div>
     </section>
     <div

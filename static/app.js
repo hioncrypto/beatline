@@ -12,10 +12,9 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.4";
+  const APP_VERSION = "9.5";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
-  const SUMMARY_COLLAPSE_KEY = "beatlineSummaryCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
   const EDGE_ALERT_STORE_KEY = "beatlineEdgeAlertKey";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
@@ -82,12 +81,10 @@
     chartWrap: document.getElementById("chart-wrap"),
     chartResizeTop: document.getElementById("chart-resize-top"),
     chartResizeBottom: document.getElementById("chart-resize-bottom"),
+    tradePanel: document.querySelector(".trade-panel"),
     timeframe: document.getElementById("timeframe"),
     chartTfLabel: document.getElementById("chart-tf-label"),
     summaryPanel: document.getElementById("summary-panel"),
-    summaryToggle: document.getElementById("summary-toggle"),
-    summaryBody: document.getElementById("summary-body"),
-    summaryPeek: document.getElementById("summary-peek"),
     targetLabel: document.getElementById("target-label"),
     targetValue: document.getElementById("target-value"),
     targetMeta: document.getElementById("target-meta"),
@@ -252,7 +249,6 @@
   let edgeAlertsArmed = false;
   let lastChimeAt = 0;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
-  let summaryCollapsed = localStorage.getItem(SUMMARY_COLLAPSE_KEY) === "1";
   let chartHeightPx = loadChartHeightPx();
   let lastBreakevenPrice = null;
   let settleHintByTicker = {};
@@ -788,6 +784,8 @@
     plUi.optionsOpen = !!open;
     savePlUi();
     applyPlUi();
+    document.body.classList.remove("summary-collapsed");
+    try { localStorage.removeItem("beatlineSummaryCollapsed"); } catch {}
   }
 
   function updatePlToggleMeta() {
@@ -1237,14 +1235,15 @@
       el.openPlBar && !el.openPlBar.hidden
         ? el.openPlBar.getBoundingClientRect().height
         : 0;
-    const handleBudget = 28;
-    const minTrade = 88;
-    const minChart = 140;
+    const handleBudget = 32;
+    // Leave only a thin trade strip so the chart can grow nearly full-height.
+    const minTrade = 52;
+    const minChart = 120;
     const maxChart = Math.max(
       minChart,
       shellH - topH - summaryH - dockH - openPlH - handleBudget - minTrade
     );
-    return { minChart, maxChart };
+    return { minChart, maxChart, minTrade, shellH, topH, summaryH, dockH, openPlH };
   }
 
   function applyChartHeight(px, { persist = true } = {}) {
@@ -1255,17 +1254,27 @@
       el.chartWrap.style.height = "";
       el.chartWrap.style.minHeight = "";
       el.chartWrap.style.maxHeight = "";
+      if (el.tradePanel) el.tradePanel.style.maxHeight = "";
       document.body.classList.remove("chart-height-locked");
       if (persist) saveChartHeightPx(null);
       setTimeout(resizeChart, 40);
       return;
     }
-    const { minChart, maxChart } = chartHeightLimits();
+    const { minChart, maxChart, minTrade, shellH, topH, summaryH, dockH, openPlH } =
+      chartHeightLimits();
     chartHeightPx = Math.round(Math.min(maxChart, Math.max(minChart, px)));
-    el.chartWrap.style.flex = `0 0 ${chartHeightPx}px`;
-    el.chartWrap.style.height = `${chartHeightPx}px`;
-    el.chartWrap.style.minHeight = `${chartHeightPx}px`;
-    el.chartWrap.style.maxHeight = `${chartHeightPx}px`;
+    el.chartWrap.style.setProperty("flex", `0 0 ${chartHeightPx}px`, "important");
+    el.chartWrap.style.setProperty("height", `${chartHeightPx}px`, "important");
+    el.chartWrap.style.setProperty("min-height", `${chartHeightPx}px`, "important");
+    el.chartWrap.style.setProperty("max-height", `${chartHeightPx}px`, "important");
+    // Give leftover vertical space to the trade strip (scrolls as needed).
+    if (el.tradePanel) {
+      const leftover = Math.max(
+        minTrade,
+        shellH - topH - summaryH - chartHeightPx - dockH - openPlH - 32
+      );
+      el.tradePanel.style.maxHeight = `${Math.round(leftover)}px`;
+    }
     document.body.classList.add("chart-height-locked");
     if (persist) saveChartHeightPx(chartHeightPx);
     setTimeout(resizeChart, 40);
@@ -1281,11 +1290,8 @@
       if (startY == null || startH == null) return;
       const dy = clientY - startY;
       // Top: drag up grows chart. Bottom: drag down grows chart.
-      const next = mode === "top" ? startH - dy : startH + dy;
-      // If growing from the top and summary is in the way, collapse it.
-      if (mode === "top" && next > startH + 24 && !summaryCollapsed) {
-        setSummaryCollapsed(true);
-      }
+      // 1.35× amplifies the gesture so small drags actually move the window.
+      const next = mode === "top" ? startH - dy * 1.35 : startH + dy * 1.35;
       applyChartHeight(next, { persist: false });
     };
 
@@ -1323,7 +1329,6 @@
     handle.addEventListener("pointerup", onEnd);
     handle.addEventListener("pointercancel", onEnd);
 
-    // Touch fallback for browsers without pointer events on the handle path.
     handle.addEventListener(
       "touchstart",
       (ev) => {
@@ -1378,53 +1383,6 @@
         : "Slide trade metrics away";
     }
     setTimeout(resizeChart, 60);
-  }
-
-  function setSummaryCollapsed(collapsed) {
-    summaryCollapsed = !!collapsed;
-    try {
-      localStorage.setItem(SUMMARY_COLLAPSE_KEY, summaryCollapsed ? "1" : "0");
-    } catch {
-      // ignore
-    }
-    document.body.classList.toggle("summary-collapsed", summaryCollapsed);
-    if (el.summaryPanel) {
-      el.summaryPanel.classList.toggle("is-collapsed", summaryCollapsed);
-    }
-    if (el.summaryToggle) {
-      el.summaryToggle.setAttribute(
-        "aria-expanded",
-        summaryCollapsed ? "false" : "true"
-      );
-      el.summaryToggle.title = summaryCollapsed
-        ? "Show price / time numbers"
-        : "Slide numbers away for a bigger chart";
-    }
-    updateSummaryPeek();
-    if (chartHeightPx != null) applyChartHeight(chartHeightPx, { persist: false });
-    setTimeout(resizeChart, 60);
-  }
-
-  function updateSummaryPeek() {
-    if (!el.summaryPeek) return;
-    const beat =
-      el.targetValue && el.targetValue.textContent
-        ? el.targetValue.textContent.trim()
-        : "—";
-    const spot =
-      el.spotValue && el.spotValue.textContent
-        ? el.spotValue.textContent.trim()
-        : "—";
-    const delta =
-      el.spotDelta && el.spotDelta.textContent
-        ? el.spotDelta.textContent.trim()
-        : "";
-    const time =
-      el.countdown && el.countdown.textContent
-        ? el.countdown.textContent.trim()
-        : "—";
-    const deltaBit = delta && delta !== "—" ? ` · ${delta}` : "";
-    el.summaryPeek.textContent = `${beat} · ${spot}${deltaBit} · ${time}`;
   }
 
   /** Approximate inverse error function for model break-even spot. */
@@ -3742,7 +3700,6 @@
         el.spotDelta.className = "spot-delta";
       }
       updateEdgeLine(null);
-      updateSummaryPeek();
       return;
     }
     el.spotValue.textContent = money(lastClose);
@@ -3768,7 +3725,6 @@
     updateEdgeLine(lastClose);
     refreshBestSide();
     if (demo.position) renderDemoUi();
-    updateSummaryPeek();
   }
 
   function updateCountdown() {
@@ -3778,14 +3734,12 @@
       el.countdown.classList.remove("urgent");
       if (el.countdownMeta) el.countdownMeta.textContent = "Until this 15m window ends";
       refreshBestSide();
-      updateSummaryPeek();
       return;
     }
     const end = Date.parse(closeTimeIso);
     if (!Number.isFinite(end)) {
       el.countdown.textContent = "—:—";
       refreshBestSide();
-      updateSummaryPeek();
       return;
     }
     let ms = end - Date.now();
@@ -3797,7 +3751,6 @@
       }
       startRolloverBurst();
       refreshBestSide();
-      updateSummaryPeek();
       return;
     }
     const totalSec = Math.floor(ms / 1000);
@@ -3814,7 +3767,6 @@
     if (totalSec <= 25) startRolloverBurst();
     refreshBestSide();
     if (demo.position) renderDemoUi();
-    updateSummaryPeek();
   }
 
   function clearRolloverBurst() {
@@ -4594,40 +4546,6 @@
         setOpenPlCollapsed(!openPlCollapsed);
       });
     }
-    if (el.summaryToggle) {
-      el.summaryToggle.addEventListener("click", () => {
-        setSummaryCollapsed(!summaryCollapsed);
-      });
-    }
-    if (el.summaryPanel) {
-      let dragY = null;
-      const onStart = (y) => {
-        dragY = y;
-      };
-      const onEnd = (y) => {
-        if (dragY == null) return;
-        const dy = y - dragY;
-        dragY = null;
-        // Swipe up collapses numbers; swipe down expands.
-        if (dy < -28) setSummaryCollapsed(true);
-        else if (dy > 28) setSummaryCollapsed(false);
-      };
-      el.summaryPanel.addEventListener(
-        "touchstart",
-        (ev) => {
-          if (ev.touches && ev.touches[0]) onStart(ev.touches[0].clientY);
-        },
-        { passive: true }
-      );
-      el.summaryPanel.addEventListener(
-        "touchend",
-        (ev) => {
-          const t = ev.changedTouches && ev.changedTouches[0];
-          if (t) onEnd(t.clientY);
-        },
-        { passive: true }
-      );
-    }
     if (el.openPlBar) {
       let dragY = null;
       const onStart = (y) => {
@@ -4753,7 +4671,6 @@
     }
     renderDemoUi();
     applyPlUi();
-    setSummaryCollapsed(summaryCollapsed);
     if (chartHeightPx != null) applyChartHeight(chartHeightPx, { persist: false });
     wireChartResizeHandle(el.chartResizeTop, "top");
     wireChartResizeHandle(el.chartResizeBottom, "bottom");

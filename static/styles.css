@@ -537,9 +537,90 @@ h1 {
 
 .pl-chart-section {
   margin: 12px 0 4px;
-  padding: 12px 0;
+  padding: 4px 0 8px;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
+}
+
+.pl-chart-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pl-chart-toggle strong {
+  display: block;
+  font-size: 0.92rem;
+  color: #d7ffe8;
+}
+
+.pl-chart-toggle em {
+  display: block;
+  margin-top: 3px;
+  font-style: normal;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.pl-chart-chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  transition: transform 0.15s ease;
+}
+
+.pl-chart-section.is-open .pl-chart-chevron {
+  transform: rotate(180deg);
+}
+
+.pl-chart-controls {
+  padding: 0 2px 6px;
+}
+
+.pl-chart-hint {
+  margin: 4px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.screen-pl-panel {
+  margin: 2px 8px 0;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(22, 53, 40, 0.5), rgba(12, 20, 16, 0.72));
+  flex: 0 0 auto;
+}
+
+.screen-pl-panel[hidden] {
+  display: none !important;
+}
+
+.screen-pl-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.screen-pl-hide {
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
 }
 
 .pl-chart-block {

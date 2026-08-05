@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=8.6" />
+    <link rel="stylesheet" href="/styles.css?v=8.7" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=8.6" defer></script>
+    <script src="/app.js?v=8.7" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -189,6 +189,30 @@
       </div>
       <main id="chart" role="img" aria-label="Bitcoin chart with Price to beat line"></main>
     </section>
+
+    <section
+      id="screen-pl-panel"
+      class="screen-pl-panel"
+      hidden
+      aria-label="Wins and P/L chart"
+    >
+      <div class="screen-pl-head">
+        <div>
+          <div class="demo-label">Wins &amp; P/L</div>
+          <div id="pl-chart-caption" class="pl-chart-caption">
+            From your trade log · green win · red loss
+          </div>
+        </div>
+        <button type="button" id="screen-pl-hide" class="demo-btn ghost screen-pl-hide">
+          Hide
+        </button>
+      </div>
+      <div id="pl-chart" class="pl-chart" aria-label="Trade history profit and loss chart"></div>
+      <div id="pl-chart-empty" class="pl-chart-empty">
+        Wins/losses will candle here after you close or settle trades.
+      </div>
+    </section>
+
       <section class="trade-panel">
       <div class="odds-block">
         <div class="odds-heading">
@@ -342,20 +366,30 @@
         </button>
       </div>
 
-      <section class="pl-chart-section" aria-label="Wins and P/L chart">
-        <div class="pl-chart-block">
-          <div class="pl-chart-head">
-            <div>
-              <div class="demo-label">Wins &amp; P/L chart</div>
-              <div id="pl-chart-caption" class="pl-chart-caption">
-                From your trade log · green win · red loss
-              </div>
-            </div>
-          </div>
-          <div id="pl-chart" class="pl-chart" aria-label="Trade history profit and loss chart"></div>
-          <div id="pl-chart-empty" class="pl-chart-empty">
-            Wins/losses will candle here after you close or settle trades.
-          </div>
+      <section class="pl-chart-section" aria-label="Wins and P/L chart controls">
+        <button
+          type="button"
+          id="pl-chart-toggle"
+          class="pl-chart-toggle"
+          aria-expanded="false"
+        >
+          <span>
+            <strong>Wins &amp; P/L chart</strong>
+            <em id="pl-chart-toggle-meta">Collapsed · from your trade log</em>
+          </span>
+          <span id="pl-chart-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
+        </button>
+        <div id="pl-chart-controls" class="pl-chart-controls" hidden>
+          <label class="options-row toggle-row" for="pl-show-screen">
+            <span>
+              <strong>Show on main screen</strong>
+              <em>Pin the P/L candlestick chart under the BTC chart</em>
+            </span>
+            <input id="pl-show-screen" type="checkbox" />
+          </label>
+          <p class="pl-chart-hint">
+            Green candles = wins / equity up · Red = losses. Bottom axis shows trade dates.
+          </p>
         </div>
       </section>
 

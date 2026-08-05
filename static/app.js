@@ -12,10 +12,33 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "8.6";
+  const APP_VERSION = "8.7";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
+  const PL_UI_KEY = "beatlinePlChartUi";
+
+  function loadPlUi() {
+    try {
+      const raw = localStorage.getItem(PL_UI_KEY);
+      if (!raw) return { optionsOpen: false, showOnScreen: false };
+      const parsed = JSON.parse(raw);
+      return {
+        optionsOpen: !!parsed.optionsOpen,
+        showOnScreen: !!parsed.showOnScreen,
+      };
+    } catch {
+      return { optionsOpen: false, showOnScreen: false };
+    }
+  }
+
+  function savePlUi() {
+    try {
+      localStorage.setItem(PL_UI_KEY, JSON.stringify(plUi));
+    } catch {
+      // ignore quota
+    }
+  }
 
   const TUTORIAL_STEPS = [
     {
@@ -136,6 +159,13 @@
     plChart: document.getElementById("pl-chart"),
     plChartEmpty: document.getElementById("pl-chart-empty"),
     plChartCaption: document.getElementById("pl-chart-caption"),
+    screenPlPanel: document.getElementById("screen-pl-panel"),
+    screenPlHide: document.getElementById("screen-pl-hide"),
+    plChartSection: document.querySelector(".pl-chart-section"),
+    plChartToggle: document.getElementById("pl-chart-toggle"),
+    plChartControls: document.getElementById("pl-chart-controls"),
+    plChartToggleMeta: document.getElementById("pl-chart-toggle-meta"),
+    plShowScreen: document.getElementById("pl-show-screen"),
     accountExport: document.getElementById("account-export"),
     accountImport: document.getElementById("account-import"),
     accountImportFile: document.getElementById("account-import-file"),
@@ -189,6 +219,7 @@
   let plChart = null;
   let plSeries = null;
   let plChartFitted = false;
+  let plUi = loadPlUi();
   let targetSeries = null;
   let targetLine = null;
   let settleLine = null;
@@ -698,6 +729,93 @@
     return { candles, start, equity, closedCount: closed.length };
   }
 
+  function formatPlTickMark(time, tickMarkType) {
+    const ts =
+      typeof time === "number"
+        ? time
+        : time && typeof time === "object" && Number.isFinite(Number(time.timestamp))
+          ? Number(time.timestamp)
+          : NaN;
+    if (!Number.isFinite(ts)) return "";
+    const d = new Date(ts * 1000);
+    // TickMarkType: Year=0, Month=1, DayOfMonth=2, Time=3, TimeWithSeconds=4
+    if (tickMarkType === 0) return String(d.getFullYear());
+    if (tickMarkType === 1) {
+      return d.toLocaleString(undefined, { month: "short" });
+    }
+    if (tickMarkType <= 2) {
+      return d.toLocaleString(undefined, { month: "short", day: "numeric" });
+    }
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
+  function formatPlCrosshairTime(time) {
+    return formatPlTickMark(time, 3);
+  }
+
+  function isPlScreenVisible() {
+    return !!(plUi && plUi.showOnScreen);
+  }
+
+  function applyPlUi() {
+    if (el.plChartSection) {
+      el.plChartSection.classList.toggle("is-open", !!plUi.optionsOpen);
+    }
+    if (el.plChartToggle) {
+      el.plChartToggle.setAttribute(
+        "aria-expanded",
+        plUi.optionsOpen ? "true" : "false"
+      );
+    }
+    if (el.plChartControls) {
+      el.plChartControls.hidden = !plUi.optionsOpen;
+    }
+    if (el.plShowScreen) {
+      el.plShowScreen.checked = !!plUi.showOnScreen;
+    }
+    if (el.screenPlPanel) {
+      el.screenPlPanel.hidden = !plUi.showOnScreen;
+    }
+    updatePlToggleMeta();
+    if (plUi.showOnScreen) {
+      requestAnimationFrame(() => {
+        resizePlChart();
+        renderPlChart();
+      });
+    }
+  }
+
+  function setPlOptionsOpen(open) {
+    plUi.optionsOpen = !!open;
+    savePlUi();
+    applyPlUi();
+  }
+
+  function setPlShowOnScreen(show) {
+    plUi.showOnScreen = !!show;
+    savePlUi();
+    applyPlUi();
+  }
+
+  function updatePlToggleMeta() {
+    if (!el.plChartToggleMeta) return;
+    const closed = closedPlTrades();
+    const wins = closed.filter((t) => t.won === true || Number(t.pl) >= 0).length;
+    const losses = Math.max(0, closed.length - wins);
+    const screenBit = plUi.showOnScreen ? "On screen" : "Hidden";
+    const openBit = plUi.optionsOpen ? "Expanded" : "Collapsed";
+    if (!closed.length) {
+      el.plChartToggleMeta.textContent = `${openBit} · ${screenBit} · from your trade log`;
+      return;
+    }
+    el.plChartToggleMeta.textContent = `${openBit} · ${screenBit} · ${closed.length} closed · ${wins}W-${losses}L`;
+  }
+
   function ensurePlChart() {
     if (plChart || !el.plChart || !window.LightweightCharts) return;
     const { createChart } = window.LightweightCharts;
@@ -721,6 +839,10 @@
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 2,
+        tickMarkFormatter: formatPlTickMark,
+      },
+      localization: {
+        timeFormatter: formatPlCrosshairTime,
       },
       handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
       handleScale: { mouseWheel: true, pinch: true },
@@ -738,7 +860,7 @@
   }
 
   function resizePlChart() {
-    if (!plChart || !el.plChart) return;
+    if (!plChart || !el.plChart || !isPlScreenVisible()) return;
     const w = el.plChart.clientWidth;
     const h = el.plChart.clientHeight || 160;
     if (w > 0) plChart.applyOptions({ width: w, height: h });
@@ -746,6 +868,9 @@
 
   function renderPlChart() {
     if (!el.plChart) return;
+    updatePlToggleMeta();
+    if (!isPlScreenVisible()) return;
+
     const { candles, start, closedCount } = buildPlCandles();
     const hasBars = candles.length > 0;
 
@@ -753,7 +878,7 @@
     el.plChart.hidden = !hasBars;
     if (el.plChartCaption) {
       if (!hasBars) {
-        el.plChartCaption.textContent = "Closed trades as equity candles";
+        el.plChartCaption.textContent = "Closed trades as equity candles · dates on bottom";
       } else {
         const wins = candles.filter((c) => c.kind !== "open" && c.won).length;
         const losses = Math.max(0, closedCount - wins);
@@ -904,11 +1029,6 @@
     renderTradeHistory();
     // Keep history in view near the top of the ⋮ sheet.
     if (el.optionsSheet) el.optionsSheet.scrollTop = 0;
-    // Chart needs a layout pass after the sheet becomes visible.
-    requestAnimationFrame(() => {
-      resizePlChart();
-      renderPlChart();
-    });
   }
 
   function closeOptions() {
@@ -4135,6 +4255,21 @@
     if (el.tradeHistoryClear) {
       el.tradeHistoryClear.addEventListener("click", () => clearTradeHistory());
     }
+    if (el.plChartToggle) {
+      el.plChartToggle.addEventListener("click", () => {
+        setPlOptionsOpen(!plUi.optionsOpen);
+      });
+    }
+    if (el.plShowScreen) {
+      el.plShowScreen.addEventListener("change", () => {
+        setPlShowOnScreen(!!el.plShowScreen.checked);
+      });
+    }
+    if (el.screenPlHide) {
+      el.screenPlHide.addEventListener("click", () => {
+        setPlShowOnScreen(false);
+      });
+    }
     if (el.buySuggestUse) {
       el.buySuggestUse.addEventListener("click", () => {
         if (buySuggestStake != null) setBuyAmountUi(buySuggestStake, true);
@@ -4327,6 +4462,7 @@
       el.tutorialBackdrop.addEventListener("click", () => closeTutorial(false));
     }
     renderDemoUi();
+    applyPlUi();
     syncAlertsUi();
     try {
       if (localStorage.getItem(TUTORIAL_KEY) !== "1") {
@@ -4421,7 +4557,7 @@
       syncRotateGate();
       tryLockPortrait();
       resizeChart();
-      if (optionsOpen) resizePlChart();
+      if (isPlScreenVisible()) resizePlChart();
     });
     if (typeof ResizeObserver === "function" && el.chart) {
       const ro = new ResizeObserver(() => resizeChart());
@@ -4430,9 +4566,7 @@
     }
     if (typeof ResizeObserver === "function" && el.plChart) {
       const plRo = new ResizeObserver(() => {
-        if (optionsOpen) {
-          resizePlChart();
-        }
+        if (isPlScreenVisible()) resizePlChart();
       });
       plRo.observe(el.plChart);
     }

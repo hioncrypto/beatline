@@ -2733,25 +2733,33 @@ body.has-open-pl .app-shell > .chart-wrap {
 }
 
 .app-shell > .trade-stack {
-  /* Never crush trade features — chart loses height first. */
-  flex: 0 0 auto;
-  min-height: auto;
+  /* Default: natural height. When chart is locked tall, JS sets max-height
+     and this stack scrolls so Best Side / slider / odds stay reachable. */
+  flex: 0 1 auto;
+  min-height: 112px;
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin: 2px 8px 0;
-  max-height: min(62dvh, 560px);
+  max-height: min(58dvh, 520px);
   overflow-x: hidden;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+body.chart-height-locked .app-shell > .trade-stack {
+  /* Chart resize owns the leftover band — scroll trade content as needed. */
+  flex: 1 1 auto;
 }
 
 body.has-open-pl .app-shell > .trade-stack {
-  max-height: min(56dvh, 520px);
+  max-height: min(50dvh, 480px);
 }
 
 body.has-open-pl.open-pl-collapsed .app-shell > .trade-stack {
-  max-height: min(60dvh, 540px);
+  max-height: min(54dvh, 500px);
 }
 
 .app-shell > .trade-stack > .best-side {
@@ -2817,8 +2825,8 @@ body.has-open-pl .app-shell > .trade-stack > .best-side {
 }
 
 .app-shell > .trade-stack {
-  flex: 0 0 auto;
-  min-height: auto;
+  flex: 0 1 auto;
+  min-height: 112px;
 }
 
 .top {
@@ -2869,7 +2877,7 @@ body.chart-height-locked .app-shell > .chart-wrap {
   -webkit-user-select: none;
   user-select: none;
   position: relative;
-  z-index: 6;
+  z-index: 8;
   background: #0b1210;
   pointer-events: auto;
 }
@@ -2879,9 +2887,9 @@ body.chart-height-locked .app-shell > .chart-wrap {
 }
 
 .app-shell > .chart-resize-bottom {
-  height: 34px;
+  height: 40px;
   margin: 0 8px 2px;
-  border: 1px solid rgba(26, 201, 107, 0.28);
+  border: 1px solid rgba(26, 201, 107, 0.35);
   border-radius: 10px;
   background: #101a15;
 }
@@ -2984,19 +2992,21 @@ body.portrait-app #chart {
 }
 
 /*
-  Trade strip: Best Side + Trade size + Market Chance always visible.
-  Chart shrinks first; this stack only scrolls if the phone is tiny.
+  Trade strip: Best Side + Trade size + Market Chance.
+  Scrollable when Chart size compresses the leftover band.
 */
 .trade-stack {
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin: 2px 8px 0;
-  max-height: min(62dvh, 560px);
+  max-height: min(58dvh, 520px);
   overflow-x: hidden;
   overflow-y: auto;
-  flex: 0 0 auto;
-  min-height: auto;
+  flex: 0 1 auto;
+  min-height: 112px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .trade-panel {

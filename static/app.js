@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 2000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.30";
+  const APP_VERSION = "9.31";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -1749,10 +1749,10 @@
     const botGrip = el.chartResizeBottom
       ? el.chartResizeBottom.getBoundingClientRect().height
       : 34;
-    // Keep Best Side + Trade size + Market Chance all on screen.
-    // Chart is the thing that shrinks — never hide trade features.
-    const minTrade = 380;
-    const minChart = 80;
+    // Allow a tall chart: trade strip can compress and scroll (Best Side /
+    // slider / Market Chance stay reachable by scrolling — never deleted).
+    const minTrade = 112;
+    const minChart = 96;
     const maxChart = Math.max(
       minChart,
       shellH - topH - summaryH - dockH - openPlH - topGrip - botGrip - minTrade - 4
@@ -1783,7 +1783,11 @@
         el.tradePanel.style.maxHeight = "";
         el.tradePanel.style.minHeight = "";
       }
-      if (el.tradeStack) el.tradeStack.style.maxHeight = "";
+      if (el.tradeStack) {
+        el.tradeStack.style.flex = "";
+        el.tradeStack.style.minHeight = "";
+        el.tradeStack.style.maxHeight = "";
+      }
       document.body.classList.remove("chart-height-locked");
       if (persist) saveChartHeightPx(null);
       setTimeout(resizeChart, 40);
@@ -1806,12 +1810,14 @@
     el.chartWrap.style.setProperty("height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("min-height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("max-height", `${chartHeightPx}px`, "important");
-    // Leftover for the full trade strip (Best Side + slider + Market Chance).
+    // Leftover for trade strip. May be smaller than full content — stack scrolls.
     const leftover = Math.max(
       minTrade,
       shellH - topH - summaryH - chartHeightPx - dockH - openPlH - topGrip - botGrip - 4
     );
     if (el.tradeStack) {
+      el.tradeStack.style.flex = "1 1 auto";
+      el.tradeStack.style.minHeight = `${minTrade}px`;
       el.tradeStack.style.maxHeight = `${Math.round(leftover)}px`;
       if (el.tradePanel) {
         el.tradePanel.style.maxHeight = "";
@@ -1845,8 +1851,8 @@
       if (startY == null || startH == null) return;
       const dy = clientY - startY;
       // Top: drag up grows chart. Bottom: drag down grows chart.
-      // Stronger gain so small finger moves cover the full range.
-      const next = mode === "top" ? startH - dy * 2.1 : startH + dy * 2.1;
+      // Strong gain so Chart size tabs can push Best Side down quickly.
+      const next = mode === "top" ? startH - dy * 2.6 : startH + dy * 2.6;
       applyChartHeight(next, { persist: false });
     };
 

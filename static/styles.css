@@ -2253,7 +2253,8 @@ body.portrait-app {
   max-height: 100dvh;
   overflow: hidden;
   min-height: 0;
-  padding-bottom: calc(64px + var(--safe-bottom));
+  /* Match fixed buy-dock height so ROI cost lines aren't covered. */
+  padding-bottom: calc(78px + var(--safe-bottom));
 }
 
 body.has-open-pl .app-shell {
@@ -2377,15 +2378,18 @@ body.portrait-app #chart {
 
 /*
   Trade strip: odds + Best Side details + stake + ROI (compact, scrollable).
+  Tall enough that Buy Above/Below cost+fee lines aren't clipped by the dock.
 */
 .trade-panel {
-  max-height: min(30dvh, 260px);
+  max-height: min(40dvh, 340px);
   margin: 2px 8px 0;
-  padding: 4px 8px 6px;
-  overflow: auto;
+  padding: 4px 8px 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   flex: 0 1 auto;
   min-height: 0;
+  overscroll-behavior: contain;
 }
 
 .odds-heading {
@@ -2532,7 +2536,8 @@ body.portrait-app #chart {
 }
 
 .roi-card {
-  padding: 6px 8px;
+  padding: 8px 9px 10px;
+  overflow: visible;
 }
 
 .roi-side {
@@ -2549,7 +2554,8 @@ body.portrait-app #chart {
 
 .roi-detail {
   font-size: 0.65rem;
-  line-height: 1.25;
+  line-height: 1.35;
+  padding-bottom: 2px;
 }
 
 .roi-note {
@@ -2572,6 +2578,9 @@ body.portrait-app #chart {
   gap: 8px;
   padding: 8px 10px calc(8px + var(--safe-bottom));
   border-top: 1px solid var(--border);
+  /* Keep dock from covering trade-panel text */
+  box-shadow: 0 -8px 20px rgba(0, 0, 0, 0.35);
+}
   background: rgba(8, 14, 11, 0.97);
   backdrop-filter: blur(8px);
 }

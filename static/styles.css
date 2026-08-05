@@ -254,6 +254,13 @@ h1 {
   background: rgba(0, 0, 0, 0.55);
 }
 
+/* Author `display:flex` on .options-sheet overrides UA [hidden] — without
+   this the sheet stays on screen after ✕ / backdrop tap. */
+.options-sheet[hidden],
+.options-backdrop[hidden] {
+  display: none !important;
+}
+
 .options-sheet {
   position: fixed;
   z-index: 50;

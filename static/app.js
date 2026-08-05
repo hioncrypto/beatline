@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.22";
+  const APP_VERSION = "9.23";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -1108,8 +1108,14 @@
 
   function openOptions() {
     optionsOpen = true;
-    if (el.optionsSheet) el.optionsSheet.hidden = false;
-    if (el.optionsBackdrop) el.optionsBackdrop.hidden = false;
+    if (el.optionsSheet) {
+      el.optionsSheet.hidden = false;
+      el.optionsSheet.removeAttribute("aria-hidden");
+    }
+    if (el.optionsBackdrop) {
+      el.optionsBackdrop.hidden = false;
+      el.optionsBackdrop.removeAttribute("aria-hidden");
+    }
     if (el.menuBtn) el.menuBtn.setAttribute("aria-expanded", "true");
     renderDemoUi();
     renderTradeHistory();
@@ -1129,8 +1135,14 @@
 
   function closeOptions() {
     optionsOpen = false;
-    if (el.optionsSheet) el.optionsSheet.hidden = true;
-    if (el.optionsBackdrop) el.optionsBackdrop.hidden = true;
+    if (el.optionsSheet) {
+      el.optionsSheet.hidden = true;
+      el.optionsSheet.setAttribute("aria-hidden", "true");
+    }
+    if (el.optionsBackdrop) {
+      el.optionsBackdrop.hidden = true;
+      el.optionsBackdrop.setAttribute("aria-hidden", "true");
+    }
     if (el.menuBtn) el.menuBtn.setAttribute("aria-expanded", "false");
   }
 
@@ -5272,10 +5284,17 @@
       });
     }
     if (el.optionsClose) {
-      el.optionsClose.addEventListener("click", closeOptions);
+      el.optionsClose.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeOptions();
+      });
     }
     if (el.optionsBackdrop) {
-      el.optionsBackdrop.addEventListener("click", closeOptions);
+      el.optionsBackdrop.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        closeOptions();
+      });
     }
     if (el.demoToggle) {
       el.demoToggle.addEventListener("change", () => {

@@ -1155,7 +1155,50 @@ def score_clear_edge(data: dict, spot: float | None) -> dict | None:
     )
     if not clear:
         return None
+    # Nominal $ size for push copy (phone uses its own bankroll in-app).
+    ask = float(best["ask_cents"])
+    p_win = float(best["p_win"])
+    cost = ask / 100.0
+    edge_amt = p_win - cost
+    suggest = 10
+    if edge_amt > 0 and cost < 1:
+        kelly = edge_amt / max(0.01, 1.0 - cost)
+        suggest = int(max(5, min(40, round(100 * kelly * 0.3))))
+    best["suggest_stake"] = suggest
     return best
+
+
+def current_clear_edge() -> dict | None:
+    """Live clear-edge snapshot for SW / clients (background tone path)."""
+    try:
+        data = fetch_target_payload("15m")
+    except Exception:
+        return None
+    spot = None
+    try:
+        spot_payload = fetch_spot()
+        if spot_payload.get("ok"):
+            spot = spot_payload.get("price")
+    except Exception:
+        spot = None
+    edge = score_clear_edge(data, spot)
+    if not edge:
+        return None
+    beat = data.get("price_to_beat")
+    if beat is None:
+        beat = data.get("target")
+    return {
+        "ok": True,
+        "clear": True,
+        "side": edge["side"],
+        "ask_cents": edge["ask_cents"],
+        "p_win": edge["p_win"],
+        "suggest_stake": edge.get("suggest_stake"),
+        "ticker": data.get("ticker"),
+        "beat": beat,
+        "price_to_beat": beat,
+        "close_et": data.get("close_et"),
+    }
 
 
 def push_watcher_loop() -> None:
@@ -1215,6 +1258,7 @@ def push_watcher_loop() -> None:
                             "side": edge["side"],
                             "ask_cents": edge["ask_cents"],
                             "p_win": edge["p_win"],
+                            "suggest_stake": edge.get("suggest_stake"),
                             "ticker": ticker,
                             "beat": beat,
                             "price_to_beat": beat,
@@ -1423,6 +1467,14 @@ class Handler(BaseHTTPRequestHandler):
                     "demo_account": DEMO_ACCOUNT_FILE.is_file(),
                 },
             )
+            return
+
+        if path == "/api/clear-edge":
+            edge = current_clear_edge()
+            if not edge:
+                self._send_json(200, {"ok": True, "clear": False})
+            else:
+                self._send_json(200, edge)
             return
 
         rel = "index.html" if path in ("", "/") else path.lstrip("/")

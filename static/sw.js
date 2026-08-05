@@ -1,8 +1,9 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.0-link";
+const SW_VERSION = "3.1-edge-tone";
 const TARGET_URL = "/api/target?tf=15m";
+const EDGE_URL = "/api/clear-edge";
 const STATE_KEY = "kalshiFifteenState";
-const STABLE_APP_URL = "https://beatline15m.loca.lt";
+const STABLE_APP_URL = "https://beatline-1.onrender.com";
 const RENDER_DEPLOY_URL =
   "https://render.com/deploy?repo=https://github.com/hioncrypto/beatline";
 
@@ -26,20 +27,16 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
-  // Pass-through; do not serve a broken offline shell.
   event.respondWith(
     fetch(req).catch(() => {
       if (req.mode === "navigate") {
         return new Response(
           `<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <body style='font-family:system-ui,sans-serif;background:#0b1210;color:#e7f6ee;padding:24px;line-height:1.45'>
-<h1 style='margin:0 0 12px;font-size:1.4rem'>BeatLine link expired</h1>
-<p>This home-screen shortcut points at a dead tunnel (Cursor agent / quick tunnel went offline).</p>
-<p><strong>Same temp link (when an agent is running):</strong><br>
-<a style='color:#7dffb3' href='${STABLE_APP_URL}'>${STABLE_APP_URL}</a></p>
-<p>On open: tap Continue if loca.lt asks, then ⋮ → <strong>Import backup</strong> if balance looks wrong.</p>
-<p><strong>Permanent fix (stops this forever):</strong><br>
-<a style='color:#ffd089' href='${RENDER_DEPLOY_URL}'>Deploy free on Render</a> → Add that new URL to Home Screen.</p>
+<h1 style='margin:0 0 12px;font-size:1.4rem'>BeatLine offline</h1>
+<p>Open the live app:</p>
+<p><a style='color:#7dffb3' href='${STABLE_APP_URL}'>${STABLE_APP_URL}</a></p>
+<p>Or redeploy: <a style='color:#ffd089' href='${RENDER_DEPLOY_URL}'>Render</a></p>
 </body>`,
           { headers: { "Content-Type": "text/html; charset=utf-8" } }
         );
@@ -52,11 +49,13 @@ self.addEventListener("fetch", (event) => {
 async function readState() {
   const cache = await caches.open(SW_VERSION);
   const res = await cache.match(STATE_KEY);
-  if (!res) return { ticker: null, target: null, chimeOn: true, edgeKey: null };
+  if (!res) {
+    return { ticker: null, target: null, chimeOn: true, edgeKey: null, edgeAt: 0 };
+  }
   try {
     return await res.json();
   } catch {
-    return { ticker: null, target: null, chimeOn: true, edgeKey: null };
+    return { ticker: null, target: null, chimeOn: true, edgeKey: null, edgeAt: 0 };
   }
 }
 
@@ -70,6 +69,17 @@ async function writeState(state) {
   );
 }
 
+async function pingClientsPlayEdge() {
+  const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  for (const client of all) {
+    try {
+      client.postMessage({ type: "play-edge-chime" });
+    } catch {
+      // ignore
+    }
+  }
+}
+
 async function showTargetNotification(payload) {
   const title = "BeatLine · new 15m target";
   const body =
@@ -79,30 +89,47 @@ async function showTargetNotification(payload) {
           maximumFractionDigits: 2,
         })}${payload.closeEt ? ` · settles ${payload.closeEt}` : ""}`
       : "A new 15-minute window just opened";
-  const opts = {
+  await self.registration.showNotification(title, {
     body,
     icon: "/icons/icon-192.png?v=2.6",
     badge: "/icons/icon-192.png?v=2.6",
     vibrate: [80, 40, 80, 40, 160],
     tag: "kalshi-15m-target",
-    renotify: false,
+    renotify: true,
     requireInteraction: false,
     silent: false,
     data: { url: "/", ticker: payload && payload.ticker },
-  };
-  await self.registration.showNotification(title, opts);
+  });
 }
 
 async function showEdgeNotification(payload) {
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const ask =
-    payload && payload.askCents != null ? Math.round(Number(payload.askCents)) : null;
+    payload && payload.askCents != null
+      ? Math.round(Number(payload.askCents))
+      : payload && payload.ask_cents != null
+        ? Math.round(Number(payload.ask_cents))
+        : null;
   const conf =
-    payload && payload.pWin != null ? Math.round(Number(payload.pWin) * 100) : null;
-  const title = `BeatLine · clear edge · Buy ${side}`;
+    payload && payload.pWin != null
+      ? Math.round(Number(payload.pWin) * 100)
+      : payload && payload.p_win != null
+        ? Math.round(Number(payload.p_win) * 100)
+        : null;
+  const stake =
+    payload && payload.suggest_stake != null
+      ? Math.round(Number(payload.suggest_stake))
+      : payload && payload.suggestStake != null
+        ? Math.round(Number(payload.suggestStake))
+        : null;
+  const title =
+    stake != null
+      ? `BeatLine · Best buy ${side} · $${stake}`
+      : `BeatLine · Best buy · ${side}`;
   const bits = [];
   if (ask != null) bits.push(`ask ${ask}¢`);
   if (conf != null) bits.push(`${conf}% model`);
+  if (stake != null) bits.push(`suggest $${stake}`);
   if (payload && payload.beat != null) {
     bits.push(
       `beat $${Number(payload.beat).toLocaleString("en-US", {
@@ -113,18 +140,25 @@ async function showEdgeNotification(payload) {
   }
   const body = bits.length
     ? bits.join(" · ")
-    : "Best Side found a clear edge — open BeatLine";
+    : "Clear Best Side edge — open BeatLine";
   await self.registration.showNotification(title, {
     body,
     icon: "/icons/icon-192.png?v=2.6",
     badge: "/icons/icon-192.png?v=2.6",
-    vibrate: [60, 40, 60, 40, 120],
+    vibrate: [80, 40, 80, 40, 80, 40, 160],
     tag: "kalshi-clear-edge",
-    renotify: false,
-    requireInteraction: false,
+    // renotify + silent:false → Android plays the notification tone again
+    renotify: true,
+    requireInteraction: true,
     silent: false,
-    data: { url: "/", ticker: payload && payload.ticker, kind: "clear_edge" },
+    data: {
+      url: "/",
+      ticker: payload && payload.ticker,
+      kind: "clear_edge",
+      side: payload && payload.side,
+    },
   });
+  await pingClientsPlayEdge();
 }
 
 async function showLinkNotification(payload) {
@@ -179,14 +213,54 @@ async function checkTarget(forceNotify) {
   await writeState(state);
 }
 
+async function checkClearEdge(forceNotify) {
+  const state = await readState();
+  if (!state.chimeOn && !forceNotify) return;
+  let data;
+  try {
+    const res = await fetch(`${EDGE_URL}?_=${Date.now()}`, { cache: "no-store" });
+    data = await res.json();
+  } catch {
+    return;
+  }
+  if (!data || !data.clear || !data.side) {
+    // Edge gone — allow a later re-alert after cooldown window.
+    if (state.edgeKey && Date.now() - (Number(state.edgeAt) || 0) > 60000) {
+      // keep key until server/client cooldown; don't wipe instantly
+    }
+    return;
+  }
+  const ask = Math.round(Number(data.ask_cents) || 0);
+  const key = `${data.side}:${ask}`;
+  const now = Date.now();
+  const lastAt = Number(state.edgeAt) || 0;
+  if (!forceNotify) {
+    if (state.edgeKey === key) return;
+    if (now - lastAt < 90000) return;
+  }
+  state.edgeKey = key;
+  state.edgeAt = now;
+  await writeState(state);
+  await showEdgeNotification({
+    side: data.side,
+    askCents: ask,
+    pWin: data.p_win,
+    suggest_stake: data.suggest_stake,
+    beat: data.beat ?? data.price_to_beat,
+    ticker: data.ticker,
+  });
+}
+
 let pollTimer = null;
 function startPollLoop() {
   if (pollTimer) return;
   // Keep checking even if the page is backgrounded (while SW is allowed to run).
   pollTimer = setInterval(() => {
     checkTarget(false);
-  }, 15_000);
+    checkClearEdge(false);
+  }, 12_000);
   checkTarget(false);
+  checkClearEdge(false);
 }
 
 self.addEventListener("message", (event) => {
@@ -214,7 +288,12 @@ self.addEventListener("message", (event) => {
     );
   }
   if (msg.type === "check-now") {
-    event.waitUntil(checkTarget(!!msg.forceNotify));
+    event.waitUntil(
+      (async () => {
+        await checkTarget(!!msg.forceNotify);
+        await checkClearEdge(!!msg.forceNotify);
+      })()
+    );
   }
   if (msg.type === "test-notify") {
     event.waitUntil(
@@ -233,8 +312,7 @@ self.addEventListener("message", (event) => {
         const key = `${msg.side}:${Math.round(Number(msg.askCents) || 0)}`;
         const now = Date.now();
         const lastAt = Number(state.edgeAt) || 0;
-        if (state.edgeKey === key) return;
-        if (now - lastAt < 120000) return;
+        if (state.edgeKey === key && now - lastAt < 90000) return;
         state.edgeKey = key;
         state.edgeAt = now;
         await writeState(state);
@@ -258,13 +336,16 @@ self.addEventListener("push", (event) => {
   }
   if (kind === "clear_edge") {
     event.waitUntil(
-      showEdgeNotification({
-        side: payload.side,
-        askCents: payload.ask_cents ?? payload.askCents,
-        pWin: payload.p_win ?? payload.pWin,
-        beat: payload.beat ?? payload.price_to_beat ?? payload.target,
-        ticker: payload.ticker,
-      })
+      (async () => {
+        await showEdgeNotification({
+          side: payload.side,
+          askCents: payload.ask_cents ?? payload.askCents,
+          pWin: payload.p_win ?? payload.pWin,
+          suggest_stake: payload.suggest_stake ?? payload.suggestStake,
+          beat: payload.beat ?? payload.price_to_beat ?? payload.target,
+          ticker: payload.ticker,
+        });
+      })()
     );
     return;
   }

@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "8.2";
+  const APP_VERSION = "8.3";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
@@ -1874,7 +1874,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.0", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.1", { scope: "/" });
       await navigator.serviceWorker.ready;
       return reg;
     } catch (err) {
@@ -1894,8 +1894,8 @@
     el.pushBadge.classList.toggle("is-on", !!on);
     el.pushBadge.setAttribute("aria-pressed", on ? "true" : "false");
     el.pushBadge.title = on
-      ? "Alerts on — new targets + clear edge"
-      : "Alerts off — tap to turn on";
+      ? "Alerts on — tone for Best buy (works in background)"
+      : "Alerts off — tap to enable Best-buy tone";
   }
 
   function setBgStatus(ok, text) {
@@ -1977,7 +1977,7 @@
     setPushBadge(true);
     setBgStatus(null, "");
     await runChimeTest();
-    setStatus("ok", "Alerts on");
+    setStatus("ok", "Alerts on — Best-buy tone works in background");
     return true;
   }
 
@@ -2106,13 +2106,15 @@
         ? `Clear edge · Buy ${sideLabel} · suggest $${sug}${ask ? ` @ ${ask}¢` : ""}`
         : `Clear edge · Buy ${sideLabel}${ask ? ` @ ${ask}¢` : ""}`
     );
-    // System notification only when backgrounded — avoids foreground alert loops.
-    if (document.visibilityState !== "visible") {
+    // Background / locked phone: system notification carries the audible tone
+    // (Web Audio is usually muted when the tab is hidden).
+    if (document.visibilityState !== "visible" || document.hidden) {
       postToSW({
         type: "edge-notify",
         side,
         askCents: ask || null,
         pWin: best.pWin,
+        suggestStake: sug,
         ticker: lastTicker || lastFifteenTicker,
         beat: lastTarget,
       });
@@ -4165,7 +4167,7 @@
         startRolloverBurst();
         refreshTarget({ forceCandles: true });
       } else {
-        // Page hidden — rely on SW poll + server Web Push.
+        // Page hidden — rely on SW poll + server Web Push (audible notification).
         postToSW({ type: "check-now" });
         postToSW({
           type: "arm-state",
@@ -4173,6 +4175,17 @@
           target: lastFifteenTarget,
           chimeOn,
         });
+        if (chimeOn && lastBestPick && lastBestPick.side) {
+          postToSW({
+            type: "edge-notify",
+            side: lastBestPick.side,
+            askCents: lastBestPick.askCents || null,
+            pWin: lastBestPick.pWin,
+            suggestStake: lastBestPick.suggestedStake,
+            ticker: lastTicker || lastFifteenTicker,
+            beat: lastTarget,
+          });
+        }
       }
     });
 
@@ -4195,6 +4208,16 @@
         }
       }
     });
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("message", (event) => {
+        const msg = event.data || {};
+        if (msg.type === "play-edge-chime") {
+          if (!chimeOn) return;
+          ensureAudio();
+          playEdgeChime(true);
+        }
+      });
+    }
     // Target first so Price-to-beat line exists when candles paint.
     setupEphemeralBanner();
     hydrateDemoFromServer().finally(() => {

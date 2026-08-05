@@ -7,7 +7,7 @@ const STATE_KEY = "kalshiFifteenState";
 const STABLE_APP_URL = "https://beatline-1.onrender.com";
 const RENDER_DEPLOY_URL =
   "https://render.com/deploy?repo=https://github.com/hioncrypto/beatline";
-const EDGE_NOTIFY_COOLDOWN_MS = 120_000;
+const EDGE_NOTIFY_COOLDOWN_MS = 180_000;
 const KEEP_ALIVE_MS = 4 * 60 * 1000;
 
 self.addEventListener("install", (event) => {
@@ -339,14 +339,27 @@ self.addEventListener("message", (event) => {
       (async () => {
         const state = await readState();
         if (!state.chimeOn && !msg.force) return;
-        const key = `${msg.side}:${Math.round(Number(msg.askCents) || 0)}`;
+        const side = msg.side || "above";
+        const ask = Math.round(Number(msg.askCents) || 0);
+        const ticker = msg.ticker || "";
+        const sticky = `${ticker}:${side}`;
         const now = Date.now();
         const lastAt = Number(state.edgeAt) || 0;
+        const prevKey = state.edgeKey || "";
+        const prevAsk = Number(state.edgeAsk) || 0;
+        const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
+        const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
         if (!msg.force) {
-          if (state.edgeKey === key && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) return;
-          if (now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && state.edgeKey) return;
+          if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS)
+            return;
+          if (!sameSide && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && prevKey)
+            return;
+        } else if (sameSide && !askImproved && now - lastAt < 15_000) {
+          // Even forced notifies: suppress rapid duplicates from ask wobble.
+          return;
         }
-        state.edgeKey = key;
+        state.edgeKey = sticky;
+        state.edgeAsk = ask;
         state.edgeAt = now;
         await writeState(state);
         await showEdgeNotification(msg, { force: !!msg.force });
@@ -360,7 +373,9 @@ self.addEventListener("message", (event) => {
       (async () => {
         const state = await readState();
         if (msg.side) {
-          state.edgeKey = `${msg.side}:${Math.round(Number(msg.askCents) || 0)}`;
+          const ticker = msg.ticker || "";
+          state.edgeKey = `${ticker}:${msg.side}`;
+          state.edgeAsk = Math.round(Number(msg.askCents) || 0);
           state.edgeAt = Date.now();
         } else if (msg.clear === false) {
           // keep edgeKey until cooldown; just touch timestamp
@@ -392,14 +407,28 @@ self.addEventListener("push", (event) => {
           Number(payload.ask_cents ?? payload.askCents) || 0
         );
         const side = payload.side || "above";
-        const key = `${side}:${ask}`;
+        const ticker = payload.ticker || "";
+        // Sticky per window+side — ask wobble must not re-notify.
+        const sticky = `${ticker}:${side}`;
+        const key = sticky;
         const now = Date.now();
         const lastAt = Number(state.edgeAt) || 0;
-        // Already delivered / armed this edge recently (foreground or prior push).
-        if (state.edgeKey === key && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) {
+        const prevKey = state.edgeKey || "";
+        const prevAsk = Number(state.edgeAsk) || 0;
+        const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
+        const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
+        if (
+          sameSide &&
+          !askImproved &&
+          now - lastAt < EDGE_NOTIFY_COOLDOWN_MS
+        ) {
           return;
         }
-        state.edgeKey = key;
+        if (!sameSide && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && prevKey) {
+          return;
+        }
+        state.edgeKey = sticky;
+        state.edgeAsk = ask;
         state.edgeAt = now;
         await writeState(state);
         const visible = await hasVisibleClient();

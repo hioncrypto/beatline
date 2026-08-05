@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.36";
+  const APP_VERSION = "9.37";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -300,9 +300,12 @@
   let lastClearEdgeAlertKey = null;
   let lastClearEdgeAlertAt = 0;
   let lastClearEdgeGoneAt = 0;
-  const EDGE_ALERT_COOLDOWN_MS = 90_000;
-  const EDGE_GONE_RESET_MS = 45_000;
+  const EDGE_ALERT_COOLDOWN_MS = 180_000;
+  const EDGE_GONE_RESET_MS = 180_000;
   let edgeAlertsArmed = false;
+  // Hysteresis so Best Side doesn't flicker BUY ↔ wait and re-chime.
+  let clearEdgeLatched = false;
+  let clearEdgeLatchTicker = null;
   let lastChimeAt = 0;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
   let chartHeightPx = loadChartHeightPx();
@@ -3253,7 +3256,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.6", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.7", { scope: "/" });
       await navigator.serviceWorker.ready;
       return reg;
     } catch (err) {
@@ -3525,28 +3528,40 @@
   function alertClearEdge(best) {
     if (!best || !best.side) return;
     if (!chimeOn) return;
-    // If already long the opposite side, skip spam. Same-side clear edge
-    // still alerts — useful when deciding whether to add.
-    if (demo.position && demo.position.side !== best.side) return;
+    // Already holding a position — no Best Side buy/add chimes (stops loops).
+    if (demo.position) return;
 
     const side = best.side;
     const ask = Math.round(Number(best.askCents) || 0);
-    const alertKey = `${side}:${ask}`;
+    const ticker = lastTicker || lastFifteenTicker || "";
+    // Sticky per window+side; ask only used to detect a meaningfully better entry.
+    const alertKey = `${ticker}:${side}:${ask}`;
     const now = Date.now();
 
-    // Hard cooldown stops alert loops when Best Side flickers around the threshold.
     if (now - lastClearEdgeAlertAt < EDGE_ALERT_COOLDOWN_MS) return;
 
     const prev = lastClearEdgeAlertKey;
-    const sideChanged =
-      prev && prev !== "none" && !String(prev).startsWith(`${side}:`);
     const newlyClear = !prev || prev === "none";
-    const askMoved =
-      prev &&
-      String(prev).startsWith(`${side}:`) &&
-      Math.abs(Number(String(prev).split(":")[1]) - ask) >= 3;
+    const prevParts = prev && prev !== "none" ? String(prev).split(":") : null;
+    const prevTicker = prevParts && prevParts.length >= 3 ? prevParts[0] : null;
+    const prevSide = prevParts && prevParts.length >= 3 ? prevParts[1] : null;
+    const prevAsk =
+      prevParts && prevParts.length >= 3
+        ? Number(prevParts[2])
+        : prev && String(prev).includes(":")
+          ? Number(String(prev).split(":").pop())
+          : NaN;
+    const tickerChanged = !!(ticker && prevTicker && ticker !== prevTicker);
+    const sideChanged = !!(prevSide && prevSide !== side);
+    // Re-alert only if the ask got meaningfully cheaper — not on ±wobble.
+    const askImproved =
+      !tickerChanged &&
+      prevSide === side &&
+      Number.isFinite(prevAsk) &&
+      prevAsk > 0 &&
+      prevAsk - ask >= 5;
 
-    if (!(newlyClear || sideChanged || askMoved)) return;
+    if (!(newlyClear || tickerChanged || sideChanged || askImproved)) return;
 
     lastClearEdgeAlertKey = alertKey;
     lastClearEdgeAlertAt = now;
@@ -3617,6 +3632,7 @@
           type: "edge-armed",
           side,
           askCents: ask || null,
+          ticker: lastTicker || lastFifteenTicker || "",
           chimeOn,
         });
       }
@@ -4335,6 +4351,7 @@
       setDockBestDetail("—", null);
       lastBestSideKey = null;
       lastBestPick = null;
+      clearEdgeLatched = false;
       markClearEdgeGone();
       syncBestSideLayout();
       return;
@@ -4353,6 +4370,7 @@
       setRoiCardBest(null);
       setDockBestDetail("—", null);
       lastBestPick = null;
+      clearEdgeLatched = false;
       markClearEdgeGone();
       syncBestSideLayout();
       return;
@@ -4362,22 +4380,38 @@
     let best = scored[0];
     // Haircut noisy/thin books and early-window coin flips with tiny edge.
     if (lastThinBook) best = { ...best, score: best.score - 0.08 };
-    // EV-first clear edge (keep in sync with server score_clear_edge).
-    // Dollar EV already embeds model vs all-in ask+fee — no absolute 52%/45%
-    // win-rate floor (that blocked strong cheap-ask entries near 40–50%).
-    // Extra bar for lottery-cheap asks: model noise looks like huge EV there.
+    // EV-first clear edge with hysteresis (keep in sync with server).
+    // Enter bar is stricter; once latched, a softer stay bar prevents
+    // BUY ↔ wait flicker that re-armed alerts every minute.
+    if (lastTicker !== clearEdgeLatchTicker) {
+      clearEdgeLatchTicker = lastTicker;
+      clearEdgeLatched = false;
+    }
     const askC = Number(best.askCents) || 0;
-    const cheapOk =
+    const cheapEnter =
       askC > 25 ||
       (askC > 15
         ? best.pWin >= 0.42 && best.ev >= 0.05
         : best.pWin >= 0.5 && best.ev >= 0.08);
-    const clear =
+    const cheapStay =
+      askC > 25 ||
+      (askC > 15
+        ? best.pWin >= 0.38 && best.ev >= 0.03
+        : best.pWin >= 0.45 && best.ev >= 0.05);
+    const enterClear =
       best.ev >= 0.03 &&
       best.score > 0.05 &&
-      best.pWin >= 0.30 &&
-      cheapOk &&
+      best.pWin >= 0.3 &&
+      cheapEnter &&
       !(secs > 12 * 60 && best.ev < 0.05);
+    const stayClear =
+      best.ev >= 0.015 &&
+      best.score > 0.02 &&
+      best.pWin >= 0.28 &&
+      cheapStay &&
+      !(secs > 12 * 60 && best.ev < 0.025);
+    const clear = clearEdgeLatched ? stayClear : enterClear;
+    clearEdgeLatched = !!clear;
 
     el.bestSide.hidden = false;
     syncBestSideLayout();
@@ -4568,7 +4602,8 @@
         alertClearEdge(best);
       } else {
         const ask = Math.round(Number(best.askCents) || 0);
-        lastClearEdgeAlertKey = `${best.side}:${ask}`;
+        const ticker = lastTicker || lastFifteenTicker || "";
+        lastClearEdgeAlertKey = `${ticker}:${best.side}:${ask}`;
         lastClearEdgeAlertAt = Date.now();
         lastClearEdgeGoneAt = 0;
         persistEdgeAlertKey(lastClearEdgeAlertKey);
@@ -4576,6 +4611,7 @@
           type: "edge-armed",
           side: best.side,
           askCents: ask || null,
+          ticker,
           chimeOn,
         });
       }
@@ -5927,7 +5963,8 @@
         // replay every Best Side tone that stacked while we were away.
         if (lastBestPick && lastBestPick.side) {
           const ask = Math.round(Number(lastBestPick.askCents) || 0);
-          lastClearEdgeAlertKey = `${lastBestPick.side}:${ask}`;
+          const ticker = lastTicker || lastFifteenTicker || "";
+          lastClearEdgeAlertKey = `${ticker}:${lastBestPick.side}:${ask}`;
           lastClearEdgeAlertAt = Date.now();
           persistEdgeAlertKey(lastClearEdgeAlertKey);
           edgeAlertsArmed = true;

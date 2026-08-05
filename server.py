@@ -87,6 +87,9 @@ _last_push_ticker: str | None = None
 _last_edge_key: str | None = None
 _last_edge_at: float = 0.0
 _last_edge_gone_at: float = 0.0
+_last_edge_ask: int | None = None
+_clear_edge_latched: bool = False
+_clear_edge_latch_ticker: str | None = None
 _vapid_app_server_key: str | None = None
 _vapid_private_path: str | None = None
 TARGET_TTL = 0.75
@@ -94,8 +97,8 @@ CANDLES_TTL = 5.0
 SPOT_TTL = 1.0
 BRTI_TTL = 1.0
 PUSH_POLL_SEC = 2.0
-EDGE_PUSH_COOLDOWN_SEC = 120.0
-EDGE_GONE_RESET_SEC = 60.0
+EDGE_PUSH_COOLDOWN_SEC = 180.0
+EDGE_GONE_RESET_SEC = 180.0
 SETTLE_WINDOW_SEC = 60.0
 KALSHI_SERIES_URL = "https://kalshi.com/markets/kxbtc15m"
 
@@ -1140,7 +1143,9 @@ def _kalshi_taker_fee(contracts: int, price: float) -> float:
     return math.ceil(raw * 100 - 1e-9) / 100.0
 
 
-def score_clear_edge(data: dict, spot: float | None) -> dict | None:
+def score_clear_edge(
+    data: dict, spot: float | None, *, latched: bool = False
+) -> dict | None:
     """Mirror client Best Side clear-edge thresholds for background push."""
     if spot is None or not math.isfinite(float(spot)):
         return None
@@ -1213,24 +1218,33 @@ def score_clear_edge(data: dict, spot: float | None) -> dict | None:
     best = scored[0]
     if data.get("thin_book"):
         best = {**best, "score": best["score"] - 0.08}
-    # EV-first clear edge (keep in sync with client refreshBestSide).
-    # Dollar EV already embeds model vs all-in ask+fee — no absolute 52%/45%
-    # win-rate floor (that blocked strong cheap-ask entries near 40–50%).
-    # Extra bar for lottery-cheap asks: model noise looks like huge EV there.
+    # Enter vs stay hysteresis (same idea as client) — stops push spam when
+    # EV flickers around the clear threshold.
     ask_c = float(best["ask_cents"])
     if ask_c <= 15:
-        cheap_ok = best["p_win"] >= 0.5 and best["ev"] >= 0.08
+        cheap_enter = best["p_win"] >= 0.5 and best["ev"] >= 0.08
+        cheap_stay = best["p_win"] >= 0.45 and best["ev"] >= 0.05
     elif ask_c <= 25:
-        cheap_ok = best["p_win"] >= 0.42 and best["ev"] >= 0.05
+        cheap_enter = best["p_win"] >= 0.42 and best["ev"] >= 0.05
+        cheap_stay = best["p_win"] >= 0.38 and best["ev"] >= 0.03
     else:
-        cheap_ok = True
-    clear = (
+        cheap_enter = True
+        cheap_stay = True
+    enter_clear = (
         best["ev"] >= 0.03
         and best["score"] > 0.05
         and best["p_win"] >= 0.30
-        and cheap_ok
+        and cheap_enter
         and not (secs > 12 * 60 and best["ev"] < 0.05)
     )
+    stay_clear = (
+        best["ev"] >= 0.015
+        and best["score"] > 0.02
+        and best["p_win"] >= 0.28
+        and cheap_stay
+        and not (secs > 12 * 60 and best["ev"] < 0.025)
+    )
+    clear = stay_clear if latched else enter_clear
     if not clear:
         return None
     # Nominal $ size for push copy (phone uses its own bankroll in-app).
@@ -1297,6 +1311,7 @@ def current_clear_edge() -> dict | None:
 def push_watcher_loop() -> None:
     """Poll Kalshi and push to phones even when the PWA is backgrounded."""
     global _last_push_ticker, _last_edge_key, _last_edge_at, _last_edge_gone_at
+    global _last_edge_ask, _clear_edge_latched, _clear_edge_latch_ticker
     print("[kalshi-btc-target] background push watcher started")
     while True:
         try:
@@ -1328,6 +1343,9 @@ def push_watcher_loop() -> None:
                 )
                 _last_edge_key = None
                 _last_edge_gone_at = 0.0
+                _last_edge_ask = None
+                _clear_edge_latched = False
+                _clear_edge_latch_ticker = ticker
             if ticker:
                 _last_push_ticker = ticker
 
@@ -1339,12 +1357,28 @@ def push_watcher_loop() -> None:
                     spot = spot_payload.get("price")
             except Exception:
                 spot = None
-            edge = score_clear_edge(data, spot)
+            latched = bool(
+                _clear_edge_latched
+                and ticker
+                and ticker == _clear_edge_latch_ticker
+            )
+            edge = score_clear_edge(data, spot, latched=latched)
             now = time.time()
             if edge:
-                key = f"{edge['side']}:{edge['ask_cents']}"
+                _clear_edge_latched = True
+                _clear_edge_latch_ticker = ticker
+                sticky = f"{ticker}:{edge['side']}"
+                ask = int(edge["ask_cents"])
                 cooled = now - _last_edge_at >= EDGE_PUSH_COOLDOWN_SEC
-                if key != _last_edge_key and cooled:
+                ask_improved = (
+                    sticky == _last_edge_key
+                    and _last_edge_ask is not None
+                    and (_last_edge_ask - ask) >= 5
+                )
+                should_push = cooled and (
+                    sticky != _last_edge_key or ask_improved
+                )
+                if should_push:
                     n = send_web_push(
                         {
                             "type": "clear_edge",
@@ -1362,10 +1396,12 @@ def push_watcher_loop() -> None:
                         f"[kalshi-btc-target] clear edge {edge['side']} "
                         f"ask={edge['ask_cents']}¢ pushed={n}"
                     )
-                    _last_edge_key = key
+                    _last_edge_key = sticky
+                    _last_edge_ask = ask
                     _last_edge_at = now
                 _last_edge_gone_at = 0.0
             else:
+                _clear_edge_latched = False
                 # Only forget the edge after it has been gone for a while —
                 # prevents push loops when the score flickers around threshold.
                 if _last_edge_key is not None:
@@ -1373,6 +1409,7 @@ def push_watcher_loop() -> None:
                         _last_edge_gone_at = now
                     elif now - _last_edge_gone_at >= EDGE_GONE_RESET_SEC:
                         _last_edge_key = None
+                        _last_edge_ask = None
                         _last_edge_gone_at = 0.0
         except Exception as exc:
             print(f"[kalshi-btc-target] push watcher error: {exc}")
@@ -1554,7 +1591,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.1.6",
+                    "version": "2.1.7",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file(),

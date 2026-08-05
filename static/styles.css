@@ -535,26 +535,35 @@ h1 {
   margin-bottom: 10px;
 }
 
+.pl-chart-section {
+  margin: 12px 0 4px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
 .pl-chart-block {
-  margin: 0 0 10px;
+  margin: 0;
 }
 
 .pl-chart-head {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .pl-chart-caption {
-  font-size: 0.68rem;
+  margin-top: 4px;
+  font-size: 0.72rem;
   color: var(--muted);
-  text-align: right;
+  text-align: left;
+  line-height: 1.35;
 }
 
 .pl-chart {
-  height: 160px;
+  height: 180px;
   width: 100%;
   border-radius: 10px;
   border: 1px solid var(--border);

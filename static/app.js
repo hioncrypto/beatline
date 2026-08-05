@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "8.5";
+  const APP_VERSION = "8.6";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";

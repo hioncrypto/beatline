@@ -2753,6 +2753,33 @@ body.has-open-pl.open-pl-collapsed .app-shell > .trade-stack {
   z-index: 1;
 }
 
+.app-shell > .trade-stack > .stake-strip {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 6px 8px 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #101a15;
+  position: relative;
+  z-index: 1;
+}
+
+.stake-strip[hidden] {
+  display: none !important;
+}
+
+.stake-strip .roi-heading {
+  margin: 0 0 2px;
+}
+
+.stake-strip .stake-slider-wrap {
+  margin: 0;
+}
+
+.stake-strip .stake-ends {
+  margin-top: 0;
+}
+
 body.has-open-pl .app-shell > .trade-stack > .best-side {
   padding: 8px 10px;
 }

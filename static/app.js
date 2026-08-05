@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.24";
+  const APP_VERSION = "9.25";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -136,6 +136,7 @@
     oddsHint: document.getElementById("odds-hint"),
     edgeLine: document.getElementById("edge-line"),
     roiPanel: document.getElementById("roi-panel"),
+    stakeStrip: document.getElementById("stake-strip"),
     stakeSlider: document.getElementById("stake-slider"),
     stakeValue: document.getElementById("stake-value"),
     bestSide: document.getElementById("best-side"),
@@ -1706,8 +1707,8 @@
     const botGrip = el.chartResizeBottom
       ? el.chartResizeBottom.getBoundingClientRect().height
       : 34;
-    // Keep only a thin Best Side / odds band so the chart can grow nearly full-height.
-    const minTrade = 56;
+    // Keep a band for Best Side + trade-size slider (odds/ROI can scroll).
+    const minTrade = 110;
     const minChart = 96;
     const maxChart = Math.max(
       minChart,
@@ -3909,37 +3910,50 @@
     }
     const waiting = !!opts.waiting || !!s.lowProb;
     const adding = !!opts.adding;
-    // Waiting / sit-out copy used to inflate Best Side over the ROI cards.
-    // Keep that state compact — label + amount + short meta are enough.
-    if (waiting && !adding) {
-      el.bestSideSuggest.hidden = true;
-      return;
-    }
     el.bestSideSuggest.hidden = false;
     el.bestSideSuggest.classList.toggle("is-waiting", waiting);
     el.bestSideSuggest.classList.toggle("is-below", !waiting && side === "below");
+    const conf = s.pWin != null ? Math.round(s.pWin * 100) : null;
     const kicker = el.bestSideSuggest.querySelector(".best-side-suggest-kicker");
     if (kicker) {
-      kicker.textContent = adding ? "Suggested add" : "Suggested buy";
+      kicker.textContent = s.lowProb
+        ? "Suggested buy"
+        : adding
+          ? "Suggested add"
+          : waiting
+            ? "Best lean"
+            : "Suggested buy";
     }
     if (el.bestSideSuggestAmount) {
-      el.bestSideSuggestAmount.textContent = `$${s.stake}${
-        s.contracts ? ` · ${s.contracts} cts` : ""
-      }`;
+      if (waiting || s.lowProb) {
+        el.bestSideSuggestAmount.textContent =
+          side === "above" ? "Above · wait" : "Below · wait";
+      } else {
+        el.bestSideSuggestAmount.textContent = `$${s.stake}${
+          s.contracts ? ` · ${s.contracts} cts` : ""
+        }`;
+      }
     }
     if (el.bestSideSuggestMeta) {
-      const roi =
-        s.roiIfWin != null
-          ? `${s.roiIfWin >= 0 ? "+" : ""}${s.roiIfWin.toFixed(0)}% if win`
-          : "";
-      const bankTxt = bankPctText(s.bankPct);
-      const bank = bankTxt ? `risks ${bankTxt} of balance` : "";
-      const lead = adding
-        ? `${side === "above" ? "Above" : "Below"} add size`
-        : `${side === "above" ? "Above" : "Below"}`;
-      el.bestSideSuggestMeta.textContent = [lead, roi, bank]
-        .filter(Boolean)
-        .join(" · ");
+      if (waiting || s.lowProb) {
+        el.bestSideSuggestMeta.textContent =
+          conf != null
+            ? `${conf}% model · no clear edge at this ask yet`
+            : "No clear edge at this ask yet";
+      } else {
+        const roi =
+          s.roiIfWin != null
+            ? `${s.roiIfWin >= 0 ? "+" : ""}${s.roiIfWin.toFixed(0)}% if win`
+            : "";
+        const bankTxt = bankPctText(s.bankPct);
+        const bank = bankTxt ? `risks ${bankTxt} of balance` : "";
+        const lead = adding
+          ? `${side === "above" ? "Above" : "Below"} add size`
+          : `${side === "above" ? "Above" : "Below"}`;
+        el.bestSideSuggestMeta.textContent = [lead, roi, bank]
+          .filter(Boolean)
+          .join(" · ");
+      }
     }
   }
 
@@ -4278,6 +4292,7 @@
       tradeStake
     );
     el.roiPanel.hidden = !(okA || okB);
+    if (el.stakeStrip) el.stakeStrip.hidden = !(okA || okB);
     refreshBestSide();
     renderDemoUi();
     syncBuyDock();
@@ -4388,6 +4403,7 @@
       if (el.noBook) el.noBook.textContent = "—";
       lastYesPct = null;
       if (el.roiPanel) el.roiPanel.hidden = true;
+      if (el.stakeStrip) el.stakeStrip.hidden = true;
       if (el.bestSide) el.bestSide.hidden = true;
       setRoiCardBest(null);
       return;

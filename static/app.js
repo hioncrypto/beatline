@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 2000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.27";
+  const APP_VERSION = "9.28";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -1749,8 +1749,9 @@
     const botGrip = el.chartResizeBottom
       ? el.chartResizeBottom.getBoundingClientRect().height
       : 34;
-    // Keep a band for Best Side + trade-size slider (odds/ROI can scroll).
-    const minTrade = 110;
+    // Reserve room for Best Side + trade-size + Market Chance odds + ROI cards.
+    // 110px was too small — Best Side alone ate it and crushed odds/ROI to ~0.
+    const minTrade = 340;
     const minChart = 96;
     const maxChart = Math.max(
       minChart,
@@ -1779,6 +1780,7 @@
       el.chartWrap.style.minHeight = "";
       el.chartWrap.style.maxHeight = "";
       if (el.tradePanel) el.tradePanel.style.maxHeight = "";
+      if (el.tradePanel) el.tradePanel.style.minHeight = "";
       if (el.tradeStack) el.tradeStack.style.maxHeight = "";
       document.body.classList.remove("chart-height-locked");
       if (persist) saveChartHeightPx(null);
@@ -1802,7 +1804,7 @@
     el.chartWrap.style.setProperty("height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("min-height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("max-height", `${chartHeightPx}px`, "important");
-    // Leftover band for Best Side + odds/ROI — can shrink small when chart is tall.
+    // Leftover band must fit Best Side + stake + Market Chance + ROI.
     const leftover = Math.max(
       minTrade,
       shellH - topH - summaryH - chartHeightPx - dockH - openPlH - topGrip - botGrip - 4
@@ -1810,8 +1812,10 @@
     if (el.tradeStack) {
       el.tradeStack.style.maxHeight = `${Math.round(leftover)}px`;
       if (el.tradePanel) el.tradePanel.style.maxHeight = "";
+      if (el.tradePanel) el.tradePanel.style.minHeight = "168px";
     } else if (el.tradePanel) {
       el.tradePanel.style.maxHeight = `${Math.round(leftover)}px`;
+      el.tradePanel.style.minHeight = "168px";
     }
     document.body.classList.add("chart-height-locked");
     if (persist) saveChartHeightPx(chartHeightPx);

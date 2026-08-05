@@ -1726,7 +1726,8 @@ h1 {
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(22, 53, 40, 0.5), rgba(12, 20, 16, 0.72));
   overflow: auto;
-  max-height: min(28dvh, 240px);
+  max-height: min(42dvh, 320px);
+  min-height: 168px;
 }
 
 .buy-dock {
@@ -2733,30 +2734,33 @@ body.has-open-pl .app-shell > .chart-wrap {
 
 .app-shell > .trade-stack {
   flex: 0 1 auto;
-  min-height: 0;
+  min-height: 220px;
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin: 2px 8px 0;
-  max-height: min(48dvh, 420px);
+  max-height: min(58dvh, 520px);
   overflow: hidden;
 }
 
 body.has-open-pl .app-shell > .trade-stack {
-  max-height: min(42dvh, 380px);
+  max-height: min(52dvh, 480px);
 }
 
 body.has-open-pl.open-pl-collapsed .app-shell > .trade-stack {
-  max-height: min(46dvh, 400px);
+  max-height: min(55dvh, 500px);
 }
 
 .app-shell > .trade-stack > .best-side {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   margin: 0;
   /* Fully opaque — never see trade/ROI text bleeding through. */
   background: #101a15;
   position: relative;
   z-index: 1;
+  max-height: 42%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .app-shell > .trade-stack > .stake-strip {
@@ -2792,7 +2796,8 @@ body.has-open-pl .app-shell > .trade-stack > .best-side {
 
 .app-shell > .trade-stack > .trade-panel {
   flex: 1 1 auto;
-  min-height: 0;
+  /* Always leave room for Market Chance odds + Buy Above/Below ROI cards. */
+  min-height: 168px;
   max-height: none;
   margin: 0;
   overflow-x: hidden;
@@ -2814,7 +2819,7 @@ body.has-open-pl .app-shell > .trade-stack > .best-side {
 
 .app-shell > .trade-stack {
   flex: 0 1 auto;
-  min-height: 0;
+  min-height: 220px;
 }
 
 .top {
@@ -2988,10 +2993,10 @@ body.portrait-app #chart {
   flex-direction: column;
   gap: 6px;
   margin: 2px 8px 0;
-  max-height: min(48dvh, 420px);
+  max-height: min(58dvh, 520px);
   overflow: hidden;
   flex: 0 1 auto;
-  min-height: 0;
+  min-height: 220px;
 }
 
 .trade-panel {
@@ -3002,7 +3007,7 @@ body.portrait-app #chart {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 168px;
   overscroll-behavior: contain;
 }
 

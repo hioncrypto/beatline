@@ -1732,40 +1732,46 @@
   function chartHeightLimits() {
     const shell = document.querySelector(".app-shell");
     const shellH = shell ? shell.clientHeight : window.innerHeight || 640;
+    let padTop = 0;
+    let padBottom = 0;
+    if (shell) {
+      try {
+        const cs = getComputedStyle(shell);
+        padTop = parseFloat(cs.paddingTop) || 0;
+        padBottom = parseFloat(cs.paddingBottom) || 0;
+      } catch {
+        // ignore
+      }
+    }
+    // Flex children use the content box. Padding already reserves the fixed
+    // buy-dock / open-P/L — do not subtract those heights again.
+    const avail = Math.max(0, shellH - padTop - padBottom);
     const top = document.querySelector(".top");
     const topH = top ? top.getBoundingClientRect().height : 52;
     const summaryH = el.summaryPanel
       ? el.summaryPanel.getBoundingClientRect().height
       : 0;
-    const dock = document.querySelector(".buy-dock");
-    const dockH = dock ? dock.getBoundingClientRect().height : 78;
-    const openPlH =
-      el.openPlBar && !el.openPlBar.hidden
-        ? el.openPlBar.getBoundingClientRect().height
-        : 0;
     const topGrip = el.chartResizeTop
       ? el.chartResizeTop.getBoundingClientRect().height
       : 28;
     const botGrip = el.chartResizeBottom
       ? el.chartResizeBottom.getBoundingClientRect().height
-      : 34;
-    // Allow a tall chart: trade strip can compress and scroll (Best Side /
-    // slider / Market Chance stay reachable by scrolling — never deleted).
+      : 40;
+    // Trade strip can compress + scroll; chart resize needs room to grow.
     const minTrade = 112;
     const minChart = 96;
     const maxChart = Math.max(
       minChart,
-      shellH - topH - summaryH - dockH - openPlH - topGrip - botGrip - minTrade - 4
+      avail - topH - summaryH - topGrip - botGrip - minTrade - 4
     );
     return {
       minChart,
       maxChart,
       minTrade,
       shellH,
+      avail,
       topH,
       summaryH,
-      dockH,
-      openPlH,
       topGrip,
       botGrip,
     };
@@ -1797,11 +1803,9 @@
       minChart,
       maxChart,
       minTrade,
-      shellH,
+      avail,
       topH,
       summaryH,
-      dockH,
-      openPlH,
       topGrip,
       botGrip,
     } = chartHeightLimits();
@@ -1810,10 +1814,11 @@
     el.chartWrap.style.setProperty("height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("min-height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("max-height", `${chartHeightPx}px`, "important");
-    // Leftover for trade strip. May be smaller than full content — stack scrolls.
+    // Leftover for trade strip. May be smaller than full content — stack scrolls
+    // so Best Side can sit lower while the chart stays tall.
     const leftover = Math.max(
       minTrade,
-      shellH - topH - summaryH - chartHeightPx - dockH - openPlH - topGrip - botGrip - 4
+      avail - topH - summaryH - chartHeightPx - topGrip - botGrip - 4
     );
     if (el.tradeStack) {
       el.tradeStack.style.flex = "1 1 auto";

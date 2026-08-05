@@ -17,17 +17,17 @@
       name="description"
       content="BeatLine — trade the 15-minute BTC Price to beat with live odds, Best Side, and demo P/L."
     />
-    <link rel="manifest" href="/manifest.webmanifest?v=2.6" />
+    <link rel="manifest" href="/manifest.webmanifest?v=2.7" />
     <link rel="icon" href="/icons/icon.svg?v=2.6" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=9.11" />
+    <link rel="stylesheet" href="/styles.css?v=9.12" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=9.11" defer></script>
+    <script src="/app.js?v=9.12" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -306,6 +306,7 @@
           <div class="open-pl-value-stack">
             <div id="open-pl-value" class="open-pl-value">—</div>
             <div id="open-pl-balance" class="open-pl-balance" hidden>—</div>
+            <div id="open-pl-day-pct" class="open-pl-day-pct" hidden>—</div>
           </div>
         </div>
         <div id="open-pl-sub" class="open-pl-sub">—</div>
@@ -364,6 +365,7 @@
         <div class="demo-balance-block">
           <div class="demo-label">Account</div>
           <div id="demo-balance" class="demo-balance">$1,000.00</div>
+          <div id="demo-day-pct" class="demo-day-pct">Day —</div>
           <div id="demo-pl" class="demo-pl">Session P/L $0.00</div>
         </div>
 
@@ -419,6 +421,42 @@
           Update now
         </button>
       </div>
+
+      <section id="strategy-section" class="strategy-section" aria-label="Strategy report">
+        <button
+          type="button"
+          id="strategy-toggle"
+          class="pl-chart-toggle"
+          aria-expanded="true"
+          aria-controls="strategy-body"
+        >
+          <span>
+            <strong>Strategy report</strong>
+            <em>Best Side suggestions vs your own calls</em>
+          </span>
+          <span id="strategy-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
+        </button>
+        <div id="strategy-body" class="strategy-body">
+          <div class="strategy-grid">
+            <div class="strategy-card is-followed">
+              <div class="strategy-card-kicker">Followed Best Side</div>
+              <div id="strategy-followed" class="strategy-card-body">No tagged closes yet</div>
+            </div>
+            <div class="strategy-card is-own">
+              <div class="strategy-card-kicker">Your own calls</div>
+              <div id="strategy-own" class="strategy-card-body">No tagged closes yet</div>
+            </div>
+          </div>
+          <div id="strategy-missed" class="strategy-missed">Missed suggestions —</div>
+          <div id="strategy-verdict" class="strategy-verdict">
+            Close a few Best Side and own-call trades to compare win rate and P/L.
+          </div>
+          <div id="strategy-today" class="strategy-today">Today —</div>
+          <p class="strategy-hint">
+            New fills are tagged when Best Side has a clear edge on that side. Prior trades without a tag stay out of the comparison. Missed = clear-edge alerts you did not take on that window.
+          </p>
+        </div>
+      </section>
 
       <section class="pl-chart-section" aria-label="Wins and P/L chart">
         <button

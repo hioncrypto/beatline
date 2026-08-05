@@ -10,15 +10,18 @@
   const BG_ARMED_KEY = "kalshiBgAlertsArmed";
   const DEMO_KEY = "kalshiDemoState";
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
-  const HISTORY_LIMIT = 40;
+  const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.11";
+  const APP_VERSION = "9.12";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
   const EDGE_ALERT_STORE_KEY = "beatlineEdgeAlertKey";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
   const PL_UI_KEY = "beatlinePlChartUi";
+  const DAY_EQUITY_KEY = "beatlineDayEquity";
+  const SUGGEST_LOG_KEY = "beatlineSuggestLog";
+  const SUGGEST_LOG_LIMIT = 80;
   const CHIME_GAP_MS = 4_500;
 
   function loadPlUi() {
@@ -189,7 +192,18 @@
     openPlSide: document.getElementById("open-pl-side"),
     openPlValue: document.getElementById("open-pl-value"),
     openPlBalance: document.getElementById("open-pl-balance"),
+    openPlDayPct: document.getElementById("open-pl-day-pct"),
     openPlSub: document.getElementById("open-pl-sub"),
+    demoDayPct: document.getElementById("demo-day-pct"),
+    strategyFollowed: document.getElementById("strategy-followed"),
+    strategyOwn: document.getElementById("strategy-own"),
+    strategyMissed: document.getElementById("strategy-missed"),
+    strategyVerdict: document.getElementById("strategy-verdict"),
+    strategyToday: document.getElementById("strategy-today"),
+    strategyToggle: document.getElementById("strategy-toggle"),
+    strategyBody: document.getElementById("strategy-body"),
+    strategyChevron: document.getElementById("strategy-chevron"),
+    strategySection: document.getElementById("strategy-section"),
     openPlAdd: document.getElementById("open-pl-add"),
     openPlClose: document.getElementById("open-pl-close"),
     openPlToggle: document.getElementById("open-pl-toggle"),
@@ -997,6 +1011,12 @@
       const fills = t.fills > 1 ? ` · ${t.fills} fills` : "";
       const exit = t.exitCents != null ? ` @ ${t.exitCents}¢` : "";
       const mode = t.accounted ? "" : " · paper";
+      const tag =
+        t.followedSuggest === true
+          ? " · Best Side"
+          : t.followedSuggest === false
+            ? " · Own call"
+            : "";
       const plTxt =
         t.pl == null || !Number.isFinite(Number(t.pl))
           ? t.text || "—"
@@ -1004,12 +1024,12 @@
       rows.push(
         `<article class="trade-history-item ${plClass}">` +
           `<div class="trade-history-top">` +
-          `<span class="trade-history-kind">${kind} ${side}${exit}</span>` +
+          `<span class="trade-history-kind">${kind} ${side}${tag}</span>` +
           `<span class="trade-history-pl">${plTxt}</span>` +
           `</div>` +
           `<div class="trade-history-meta">${formatHistoryTime(t.at)} · ${
             t.contracts != null ? t.contracts : "—"
-          } cts @ avg ${t.askCents != null ? t.askCents + "¢" : "—"}${fills} · paid ${
+          } cts @ avg ${t.askCents != null ? t.askCents + "¢" : "—"}${fills}${exit} · paid ${
             t.total != null ? money(t.total) : "—"
           }${mode}</div>` +
           `</article>`
@@ -1033,6 +1053,7 @@
     if (el.menuBtn) el.menuBtn.setAttribute("aria-expanded", "true");
     renderDemoUi();
     renderTradeHistory();
+    renderStrategyReport();
     // Demo account sits at the top of the ⋮ sheet.
     if (el.optionsSheet) el.optionsSheet.scrollTop = 0;
     requestAnimationFrame(() => {
@@ -1233,6 +1254,267 @@
     }
     return Math.round(cash * 100) / 100;
   }
+
+  function etDateKey(ms = Date.now()) {
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/New_York",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(ms));
+    } catch {
+      return new Date(ms).toISOString().slice(0, 10);
+    }
+  }
+
+  function loadDayEquity() {
+    try {
+      const raw = localStorage.getItem(DAY_EQUITY_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.date || !Number.isFinite(Number(parsed.equity))) {
+        return null;
+      }
+      return { date: String(parsed.date), equity: Number(parsed.equity) };
+    } catch {
+      return null;
+    }
+  }
+
+  function saveDayEquity(date, equity) {
+    try {
+      localStorage.setItem(
+        DAY_EQUITY_KEY,
+        JSON.stringify({
+          date,
+          equity: Math.round(Number(equity) * 100) / 100,
+        })
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  /** Snapshot equity on first open of each ET calendar day. */
+  function ensureDayEquity(currentEquity) {
+    if (!Number.isFinite(currentEquity)) return null;
+    const today = etDateKey();
+    let stored = loadDayEquity();
+    if (!stored || stored.date !== today) {
+      stored = {
+        date: today,
+        equity: Math.round(currentEquity * 100) / 100,
+      };
+      saveDayEquity(stored.date, stored.equity);
+    }
+    return stored;
+  }
+
+  function dayChangePct(currentEquity) {
+    const stored = ensureDayEquity(currentEquity);
+    if (!stored || !(stored.equity > 0) || !Number.isFinite(currentEquity)) {
+      return null;
+    }
+    return {
+      pct: Math.round(((currentEquity - stored.equity) / stored.equity) * 1000) / 10,
+      start: stored.equity,
+      now: currentEquity,
+      date: stored.date,
+    };
+  }
+
+  function formatDayPct(pct) {
+    if (pct == null || !Number.isFinite(pct)) return "—";
+    const sign = pct > 0 ? "+" : "";
+    return `${sign}${pct.toFixed(1)}%`;
+  }
+
+  function loadSuggestLog() {
+    try {
+      const raw = localStorage.getItem(SUGGEST_LOG_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function persistSuggestLog(list) {
+    try {
+      localStorage.setItem(
+        SUGGEST_LOG_KEY,
+        JSON.stringify((list || []).slice(0, SUGGEST_LOG_LIMIT))
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  function pushSuggestLog(entry) {
+    if (!entry || !entry.side) return;
+    const list = loadSuggestLog();
+    const key =
+      entry.key ||
+      `${entry.ticker || "?"}:${entry.side}:${Math.round(entry.askCents || 0)}`;
+    if (list[0] && list[0].key === key && !list[0].taken) {
+      list[0] = { ...list[0], ...entry, key, at: entry.at || Date.now() };
+    } else {
+      list.unshift({
+        id: entry.id || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        at: entry.at || Date.now(),
+        ticker: entry.ticker || null,
+        side: entry.side,
+        askCents: entry.askCents != null ? Math.round(entry.askCents) : null,
+        stake: entry.stake != null ? entry.stake : null,
+        key,
+        taken: !!entry.taken,
+      });
+    }
+    persistSuggestLog(list.slice(0, SUGGEST_LOG_LIMIT));
+  }
+
+  function markSuggestTaken(ticker, side) {
+    const list = loadSuggestLog();
+    let changed = false;
+    for (const row of list) {
+      if (row.taken) continue;
+      if (side && row.side !== side) continue;
+      if (ticker && row.ticker && row.ticker !== ticker) continue;
+      row.taken = true;
+      row.takenAt = Date.now();
+      changed = true;
+      break;
+    }
+    if (changed) persistSuggestLog(list);
+  }
+
+  function followMetaForSide(side) {
+    const clear = !!(lastBestPick && lastBestPick.side);
+    const followed = !!(clear && lastBestPick.side === side);
+    return {
+      followedSuggest: followed,
+      suggestSide: clear ? lastBestPick.side : null,
+      entrySource: followed ? (buySheetFromBest ? "best" : "aligned") : "own",
+    };
+  }
+
+  function summarizeStrategyBucket(trades) {
+    const n = trades.length;
+    const wins = trades.filter((t) => t.won === true || Number(t.pl) > 0).length;
+    const losses = n - wins;
+    const pl = trades.reduce(
+      (sum, t) => sum + (Number.isFinite(Number(t.pl)) ? Number(t.pl) : 0),
+      0
+    );
+    const avg = n ? Math.round((pl / n) * 100) / 100 : null;
+    const wr = n ? Math.round((wins / n) * 1000) / 10 : null;
+    return { n, wins, losses, pl: Math.round(pl * 100) / 100, avg, wr };
+  }
+
+  function formatStrategyBucket(label, s) {
+    if (!s.n) return `${label}: no tagged closes yet`;
+    const wr = s.wr != null ? `${s.wr}%` : "—";
+    const avg = s.avg != null ? ` · avg ${formatPl(s.avg)}` : "";
+    return `${s.n} closed · ${s.wins}W-${s.losses}L (${wr}) · ${formatPl(s.pl)}${avg}`;
+  }
+
+  function buildStrategyReport() {
+    const closed = (Array.isArray(demo.history) ? demo.history : []).filter(
+      (t) =>
+        (t.kind === "close" || t.kind === "settle") &&
+        t.pl != null &&
+        Number.isFinite(Number(t.pl))
+    );
+    const followed = closed.filter((t) => t.followedSuggest === true);
+    const own = closed.filter((t) => t.followedSuggest === false);
+    const prior = closed.filter((t) => t.followedSuggest == null);
+    const followedS = summarizeStrategyBucket(followed);
+    const ownS = summarizeStrategyBucket(own);
+    const suggestLog = loadSuggestLog();
+    const missed = suggestLog.filter((s) => !s.taken).length;
+    const takenSuggest = suggestLog.filter((s) => s.taken).length;
+
+    let verdict =
+      "New buys are tagged when Best Side shows a clear edge on that side. Close a few of each to compare.";
+    if (followedS.n >= 3 && ownS.n >= 3) {
+      const wrDelta = (followedS.wr || 0) - (ownS.wr || 0);
+      const plDelta = followedS.pl - ownS.pl;
+      if (wrDelta >= 5 && plDelta > 0) {
+        verdict = `Advantageous: following Best Side is ahead by ${formatPl(
+          plDelta
+        )} and +${wrDelta.toFixed(1)} pts win rate vs your own calls.`;
+      } else if (wrDelta <= -5 && plDelta < 0) {
+        verdict = `Not yet advantageous: your own calls lead by ${formatPl(
+          -plDelta
+        )} and +${Math.abs(wrDelta).toFixed(1)} pts win rate. Keep sampling.`;
+      } else {
+        verdict = `Mixed so far: Best Side ${formatPl(followedS.pl)} / ${
+          followedS.wr
+        }% vs own ${formatPl(ownS.pl)} / ${ownS.wr}%. Need a clearer gap.`;
+      }
+    } else if (followedS.n + ownS.n > 0) {
+      verdict = `Sample still thin (${followedS.n} followed · ${ownS.n} own${
+        prior.length ? ` · ${prior.length} prior untagged` : ""
+      }). Keep trading both styles to judge the edge.`;
+    }
+
+    const mark = markOpenPosition(demo.position);
+    const equity = demo.on ? accountEquityNow(mark) : null;
+    const day = equity != null ? dayChangePct(equity) : null;
+
+    return {
+      followedS,
+      ownS,
+      priorCount: prior.length,
+      missed,
+      takenSuggest,
+      verdict,
+      day,
+      equity,
+    };
+  }
+
+  function renderStrategyReport() {
+    const report = buildStrategyReport();
+    if (el.strategyFollowed) {
+      el.strategyFollowed.textContent = formatStrategyBucket(
+        "Followed",
+        report.followedS
+      );
+      el.strategyFollowed.classList.toggle("is-up", report.followedS.pl > 0);
+      el.strategyFollowed.classList.toggle("is-down", report.followedS.pl < 0);
+    }
+    if (el.strategyOwn) {
+      el.strategyOwn.textContent = formatStrategyBucket("Own", report.ownS);
+      el.strategyOwn.classList.toggle("is-up", report.ownS.pl > 0);
+      el.strategyOwn.classList.toggle("is-down", report.ownS.pl < 0);
+    }
+    if (el.strategyMissed) {
+      el.strategyMissed.textContent = `Missed suggestions ${report.missed} · taken ${report.takenSuggest}${
+        report.priorCount
+          ? ` · ${report.priorCount} prior closes untagged`
+          : ""
+      }`;
+    }
+    if (el.strategyVerdict) el.strategyVerdict.textContent = report.verdict;
+    if (el.strategyToday) {
+      if (report.day) {
+        el.strategyToday.textContent = `Today ${formatDayPct(report.day.pct)} · start ${money(
+          report.day.start
+        )} → ${money(report.day.now)} (ET day)`;
+        el.strategyToday.classList.toggle("is-up", report.day.pct > 0);
+        el.strategyToday.classList.toggle("is-down", report.day.pct < 0);
+      } else {
+        el.strategyToday.textContent = "Today — turn on Demo to track day %";
+        el.strategyToday.classList.remove("is-up", "is-down");
+      }
+    }
+  }
+
+  let buySheetFromBest = false;
+  let lastLoggedSuggestKey = null;
 
   function loadChartHeightPx() {
     try {
@@ -1500,6 +1782,19 @@
         el.openPlBalance.hidden = true;
         el.openPlBalance.textContent = "";
       }
+      if (el.openPlDayPct) {
+        const day = equity != null ? dayChangePct(equity) : null;
+        if (day) {
+          el.openPlDayPct.hidden = false;
+          el.openPlDayPct.textContent = `(${formatDayPct(day.pct)})`;
+          el.openPlDayPct.classList.toggle("is-up", day.pct > 0);
+          el.openPlDayPct.classList.toggle("is-down", day.pct < 0);
+        } else {
+          el.openPlDayPct.hidden = true;
+          el.openPlDayPct.textContent = "";
+          el.openPlDayPct.classList.remove("is-up", "is-down");
+        }
+      }
     }
     if (el.openPlPeek) {
       const plTxt =
@@ -1570,6 +1865,21 @@
       el.demoStart.value = String(Math.round(demo.start));
     }
     if (el.demoBalance) el.demoBalance.textContent = money(demo.balance);
+    if (el.demoDayPct) {
+      const markForDay = markOpenPosition(demo.position);
+      const equity = demo.on ? accountEquityNow(markForDay) : null;
+      const day = equity != null ? dayChangePct(equity) : null;
+      if (day) {
+        el.demoDayPct.textContent = `Day ${formatDayPct(day.pct)} · from ${money(
+          day.start
+        )}`;
+        el.demoDayPct.classList.toggle("is-up", day.pct > 0);
+        el.demoDayPct.classList.toggle("is-down", day.pct < 0);
+      } else {
+        el.demoDayPct.textContent = "Day —";
+        el.demoDayPct.classList.remove("is-up", "is-down");
+      }
+    }
     if (el.demoPl) {
       const markPreview = markOpenPosition(demo.position);
       const sess = sessionPlBreakdown(markPreview);
@@ -1689,10 +1999,15 @@
       pl,
       won,
       accounted: !!accounted,
+      followedSuggest:
+        pos.followedSuggest == null ? null : !!pos.followedSuggest,
+      suggestSide: pos.suggestSide || null,
+      entrySource: pos.entrySource || null,
     });
     demo.position = null;
     saveDemoState();
     renderDemoUi();
+    renderStrategyReport();
     setStatus(won ? "ok" : "warn", demo.lastResult.text);
   }
 
@@ -1713,8 +2028,10 @@
     demo.position = null;
     demo.lastResult = null;
     // Keep trade history across bankroll resets (export/import backup to move it).
+    saveDayEquity(etDateKey(), start);
     saveDemoState();
     renderDemoUi();
+    renderStrategyReport();
     setStatus("ok", `Demo reset · ${money(start)}`);
   }
 
@@ -1794,6 +2111,7 @@
     const spotN = spotRaw != null ? Number(spotRaw) : null;
     const entrySpot =
       spotN != null && Number.isFinite(spotN) ? spotN : null;
+    const follow = followMetaForSide(side);
 
     if (existing) {
       const nextContracts = existing.contracts + sized.contracts;
@@ -1835,6 +2153,10 @@
         fills: (existing.fills || 1) + 1,
         lastAddedAt: Date.now(),
         accounted: existing.accounted !== false ? accounted : false,
+        followedSuggest:
+          !!existing.followedSuggest || !!follow.followedSuggest,
+        suggestSide: follow.suggestSide || existing.suggestSide || null,
+        entrySource: follow.entrySource || existing.entrySource || "own",
       };
     } else {
       demo.position = {
@@ -1850,8 +2172,12 @@
         openedAt: Date.now(),
         fills: 1,
         accounted,
+        followedSuggest: !!follow.followedSuggest,
+        suggestSide: follow.suggestSide,
+        entrySource: follow.entrySource,
       };
     }
+    if (follow.followedSuggest) markSuggestTaken(lastTicker, side);
     // Keep main trade-size slider in sync for Best Side sizing ($1–$100).
     if (stake >= BUY_AMOUNT_MIN && stake <= BUY_AMOUNT_MAX) {
       setTradeStake(Math.round(stake));
@@ -1871,20 +2197,24 @@
       pl: null,
       won: null,
       accounted: !!accounted,
+      followedSuggest: !!follow.followedSuggest,
+      suggestSide: follow.suggestSide,
+      entrySource: follow.entrySource,
     });
     saveDemoState();
     refreshBestSide();
     renderDemoUi();
+    renderStrategyReport();
     const sideLabel = side === "above" ? "Above" : "Below";
     setStatus(
       "ok",
       accounted
         ? `${added ? "Added to" : "Demo bought"} ${sideLabel} · ${sized.contracts} cts${
             added ? ` · now ${demo.position.contracts}` : ""
-          }`
+          }${follow.followedSuggest ? " · Best Side" : ""}`
         : `${added ? "Added to" : "Paper bought"} ${sideLabel} · ${sized.contracts} cts${
             added ? ` · now ${demo.position.contracts}` : ""
-          }`
+          }${follow.followedSuggest ? " · Best Side" : ""}`
     );
     return true;
   }
@@ -2060,6 +2390,7 @@
     closeOptions();
     buySheetSide = side;
     buySheetOpen = true;
+    buySheetFromBest = !!opts.fromBest;
     const adding = !!(demo.position && demo.position.side === side);
     // Always size from the live suggestion after a buy too (adds / re-entry).
     const wantSuggest = opts.useSuggest !== false;
@@ -2212,7 +2543,7 @@
       setStatus("warn", "No clear Best Side yet");
       return;
     }
-    openBuySheet(lastBestPick.side, { useSuggest: true });
+    openBuySheet(lastBestPick.side, { useSuggest: true, fromBest: true });
   }
 
   function resolveOutcomeForTicker(ticker, beatHint) {
@@ -2276,10 +2607,15 @@
       won,
       accounted: !!accounted,
       outcome,
+      followedSuggest:
+        pos.followedSuggest == null ? null : !!pos.followedSuggest,
+      suggestSide: pos.suggestSide || null,
+      entrySource: pos.entrySource || null,
     });
     demo.position = null;
     saveDemoState();
     renderDemoUi();
+    renderStrategyReport();
     setStatus(won ? "ok" : "warn", demo.lastResult.text);
   }
 
@@ -3354,6 +3690,19 @@
       suggestedStake: suggestStake,
       suggestion,
     };
+    const suggestKey = `${lastTicker || "?"}:${best.side}:${Math.round(
+      Number(best.askCents) || 0
+    )}`;
+    if (suggestKey !== lastLoggedSuggestKey) {
+      lastLoggedSuggestKey = suggestKey;
+      pushSuggestLog({
+        ticker: lastTicker || null,
+        side: best.side,
+        askCents: best.askCents,
+        stake: suggestStake,
+        key: suggestKey,
+      });
+    }
     const openPos = demo.position;
     const sameAsOpen = !!(openPos && openPos.side === best.side);
     const oppositeOpen = !!(openPos && openPos.side !== best.side);
@@ -4434,35 +4783,32 @@
     }
   }
 
+  function isInstalledPwa() {
+    try {
+      if (window.matchMedia("(display-mode: standalone)").matches) return true;
+      if (window.matchMedia("(display-mode: fullscreen)").matches) return true;
+      if (window.matchMedia("(display-mode: minimal-ui)").matches) return true;
+      if (navigator.standalone === true) return true;
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+
   async function enterFullscreenIfNeeded() {
-    if (document.fullscreenElement) return true;
-    const root = document.documentElement;
-    try {
-      if (typeof root.requestFullscreen === "function") {
-        await root.requestFullscreen({ navigationUI: "hide" });
-        return true;
-      }
-    } catch {
-      // ignore
-    }
-    try {
-      if (typeof root.webkitRequestFullscreen === "function") {
-        root.webkitRequestFullscreen();
-        return true;
-      }
-    } catch {
-      // ignore
-    }
-    return !!document.fullscreenElement;
+    // Do not call the Fullscreen API in a normal browser tab — Chrome shows a
+    // sticky "site — To exit full screen" toast that covers Market Chance.
+    // Installed PWAs already run without browser chrome; no API call needed.
+    if (isInstalledPwa()) return true;
+    return false;
   }
 
   async function ensurePortraitLock(fromGesture) {
-    // Chrome only allows orientation.lock from a gesture, and usually only
-    // after fullscreen — unless the app is an installed fullscreen/standalone PWA.
-    if (fromGesture) {
-      await enterFullscreenIfNeeded();
+    // Orientation.lock may work in installed PWAs. Never force browser
+    // fullscreen just to unlock it — that toast is worse than a soft lock miss.
+    if (fromGesture || isInstalledPwa()) {
+      await lockOrientationPortrait();
     }
-    await lockOrientationPortrait();
     syncRotateGate();
     setTimeout(resizeChart, 100);
     setTimeout(resizeChart, 350);
@@ -4539,6 +4885,20 @@
       el.plChartToggle.addEventListener("click", () => {
         setPlOptionsOpen(!plUi.optionsOpen);
       });
+    }
+    if (el.strategyToggle && el.strategyBody) {
+      el.strategyToggle.addEventListener("click", () => {
+        const open = el.strategyBody.hidden;
+        el.strategyBody.hidden = !open;
+        el.strategyToggle.setAttribute("aria-expanded", open ? "true" : "false");
+        if (el.strategySection) {
+          el.strategySection.classList.toggle("is-open", open);
+        }
+        if (open) renderStrategyReport();
+      });
+      el.strategyBody.hidden = false;
+      el.strategyToggle.setAttribute("aria-expanded", "true");
+      if (el.strategySection) el.strategySection.classList.add("is-open");
     }
     if (el.buySuggestUse) {
       el.buySuggestUse.addEventListener("click", () => {
@@ -4698,7 +5058,7 @@
       el.bestSide.title = "Tap to buy suggested size";
       el.bestSide.addEventListener("click", () => {
         if (lastBestPick && lastBestPick.side) {
-          openBuySheet(lastBestPick.side, { useSuggest: true });
+          openBuySheet(lastBestPick.side, { useSuggest: true, fromBest: true });
         } else if (demo.on) setStatus("warn", "No clear Best Side yet");
         else {
           setStatus("warn", "Turn on Demo in Options");

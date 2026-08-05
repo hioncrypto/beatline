@@ -370,6 +370,112 @@ h1 {
   color: var(--down);
 }
 
+.demo-day-pct {
+  margin-top: 4px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.demo-day-pct.is-up {
+  color: var(--accent);
+}
+
+.demo-day-pct.is-down {
+  color: var(--down);
+}
+
+.strategy-section {
+  margin: 12px 0 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+
+.strategy-body {
+  padding: 0 0 8px;
+}
+
+.strategy-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.strategy-card {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.strategy-card.is-followed {
+  border-color: rgba(26, 201, 107, 0.28);
+}
+
+.strategy-card.is-own {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.strategy-card-kicker {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.strategy-card-body {
+  margin-top: 4px;
+  font-size: 0.82rem;
+  font-weight: 650;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.strategy-card-body.is-up {
+  color: var(--accent);
+}
+
+.strategy-card-body.is-down {
+  color: var(--down);
+}
+
+.strategy-missed,
+.strategy-today {
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.strategy-today.is-up {
+  color: var(--accent);
+}
+
+.strategy-today.is-down {
+  color: var(--down);
+}
+
+.strategy-verdict {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+.strategy-hint {
+  margin: 8px 0 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
 .demo-start-row {
   display: grid;
   gap: 6px;
@@ -2866,6 +2972,23 @@ body.portrait-app #chart {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
   line-height: 1.1;
+}
+
+.open-pl-day-pct {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  line-height: 1.1;
+}
+
+.open-pl-day-pct.is-up {
+  color: var(--accent);
+}
+
+.open-pl-day-pct.is-down {
+  color: var(--down);
 }
 
 .open-pl-sub {

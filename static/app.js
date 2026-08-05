@@ -51,7 +51,7 @@
     },
     {
       title: "Odds & Best Side",
-      body: "Market chance shows Above/Below pricing. Best Side scores distance from the beat, time left, ask, and fees — then suggests a dollar size for high ROI with limited bankroll risk. When a clear edge appears, BeatLine chimes; tap Best to open the buy sheet pre-filled.",
+      body: "Market chance shows Above/Below pricing. Best Side scores distance from the beat, time left, ask, and fees — then suggests an advantageous dollar size for high ROI with limited bankroll risk. When a clear edge appears, BeatLine chimes; tap Best to open the buy sheet pre-filled.",
     },
     {
       title: "Set size, then buy",
@@ -2707,9 +2707,9 @@
   let lastRoiBids = { above: null, below: null };
   const STAKE_KEY = "kalshiTradeStake";
   let tradeStake = Number(localStorage.getItem(STAKE_KEY));
-  if (!Number.isFinite(tradeStake)) tradeStake = 1;
+  if (!Number.isFinite(tradeStake)) tradeStake = 10;
   tradeStake = Math.max(1, Math.min(100, Math.round(tradeStake)));
-  if (tradeStake < 1) tradeStake = 1;
+  if (tradeStake < 1) tradeStake = 10;
 
   function dollars(n) {
     if (n == null || !Number.isFinite(n)) return "—";
@@ -3276,7 +3276,7 @@
       if (el.bestSideLabel) el.bestSideLabel.textContent = "No clear edge";
       if (el.bestSideAmount) {
         el.bestSideAmount.textContent =
-          tradeStake > 0 ? `Holding $${tradeStake}` : "Set a trade size";
+          tradeStake > 0 ? `Holding $${tradeStake}` : "Open Buy to set size";
       }
       // Still show what we'd risk on the better-priced side, marked as a wait.
       renderBestSideSuggest(best.side, suggestStakeForEdge(best), {
@@ -3359,7 +3359,7 @@
           ? `Tap to add $${suggestStake}`
           : `Tap to buy $${suggestStake}`;
       } else if (tradeStake <= 0) {
-        el.bestSideAmount.textContent = "Set a trade size";
+        el.bestSideAmount.textContent = "Open Buy to set size";
       } else {
         el.bestSideAmount.textContent = `${
           sameAsOpen ? "Add" : "Buy"
@@ -3491,6 +3491,8 @@
 
   function renderRoi() {
     if (!el.roiPanel) return;
+    // Refresh Best Side first so ROI previews can follow the advantageous size.
+    refreshBestSide();
     syncStakeUi();
     const stakeAbove = previewStakeForSide("above");
     const stakeBelow = previewStakeForSide("below");
@@ -3509,7 +3511,6 @@
       stakeBelow
     );
     el.roiPanel.hidden = !(okA || okB);
-    refreshBestSide();
     renderDemoUi();
     syncBuyDock();
   }

@@ -973,6 +973,39 @@ def load_demo_account() -> dict | None:
         return None
 
 
+def _trade_history_id(h: dict) -> str:
+    if h.get("id"):
+        return str(h["id"])
+    return "|".join(
+        [
+            str(h.get("at") or ""),
+            str(h.get("kind") or ""),
+            str(h.get("side") or ""),
+            str(h.get("ticker") or ""),
+            str(h.get("pl") if h.get("pl") is not None else ""),
+            str(h.get("text") or ""),
+        ]
+    )
+
+
+def merge_trade_histories(*lists: list) -> list[dict]:
+    """Union trade rows by id so older days survive partial client syncs."""
+    by_id: dict[str, dict] = {}
+    for lst in lists:
+        if not isinstance(lst, list):
+            continue
+        for h in lst:
+            if not isinstance(h, dict):
+                continue
+            tid = _trade_history_id(h)
+            if not tid or tid in by_id:
+                continue
+            by_id[tid] = h
+    merged = list(by_id.values())
+    merged.sort(key=lambda h: int(h.get("at") or 0), reverse=True)
+    return merged[:DEMO_HISTORY_LIMIT]
+
+
 def save_demo_account(raw: dict) -> dict | None:
     normalized = _normalize_demo_account(raw)
     if not normalized:
@@ -981,6 +1014,18 @@ def save_demo_account(raw: dict) -> dict | None:
         normalized["updatedAt"] = int(time.time() * 1000)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     with _demo_lock:
+        prev_hist: list = []
+        if DEMO_ACCOUNT_FILE.is_file():
+            try:
+                prev = json.loads(DEMO_ACCOUNT_FILE.read_text())
+                if isinstance(prev, dict) and isinstance(prev.get("history"), list):
+                    prev_hist = prev["history"]
+            except Exception:
+                prev_hist = []
+        # Never drop older days when a client posts a shorter/today-only list.
+        normalized["history"] = merge_trade_histories(
+            normalized.get("history") or [], prev_hist
+        )
         tmp = DEMO_ACCOUNT_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(normalized, indent=2))
         tmp.replace(DEMO_ACCOUNT_FILE)
@@ -1480,7 +1525,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.1.1",
+                    "version": "2.1.2",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file(),

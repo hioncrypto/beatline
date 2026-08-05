@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 2000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.31";
+  const APP_VERSION = "9.32";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -752,9 +752,18 @@
     }
   }
 
-  /** Closed settle/close rows with a real P/L, oldest → newest. */
+  /** Closed settle/close rows with a real P/L, oldest → newest (all-time). */
   function closedPlTrades() {
-    const list = Array.isArray(demo.history) ? demo.history : [];
+    // Merge demo state + dedicated trade-history key so Options charts never
+    // drop older days after a partial server sync.
+    const list = mergeTradeHistory(
+      Array.isArray(demo.history) ? demo.history : [],
+      loadTradeHistory()
+    );
+    if (list.length && list.length !== (demo.history || []).length) {
+      demo.history = list;
+      persistTradeHistory(list);
+    }
     return list
       .filter((t) => {
         if (!t || typeof t !== "object") return false;
@@ -765,8 +774,20 @@
       .sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0));
   }
 
+  function plHistoryDaySpan(closed) {
+    if (!closed.length) return null;
+    const first = Number(closed[0].at) || 0;
+    const last = Number(closed[closed.length - 1].at) || 0;
+    if (!first || !last) return null;
+    const a = etDateKey(first);
+    const b = etDateKey(last);
+    if (!a || !b) return null;
+    if (a === b) return a;
+    return `${a} → ${b}`;
+  }
+
   /**
-   * Build equity candlesticks from the trade log:
+   * Build equity candlesticks from the full trade log (all days):
    * each closed trade is one candle (open=equity before, close=equity after).
    * Green = win / equity up; red = loss / equity down.
    */
@@ -785,6 +806,7 @@
       equity = Math.round((equity + pl) * 100) / 100;
       const close = equity;
       let time = Math.floor((Number(t.at) || Date.now()) / 1000);
+      // Keep chronological uniqueness for LWC without collapsing same-second fills.
       if (time <= lastTime) time = lastTime + 1;
       lastTime = time;
       candles.push({
@@ -797,6 +819,7 @@
         won: t.won === true || pl >= 0,
         side: t.side,
         kind: t.kind,
+        at: Number(t.at) || time * 1000,
       });
     }
     // Optional live candle for open mark P/L.
@@ -817,10 +840,17 @@
           won: mark.unrealized >= 0,
           side: demo.position.side,
           kind: "open",
+          at: Date.now(),
         });
       }
     }
-    return { candles, start, equity, closedCount: closed.length };
+    return {
+      candles,
+      start,
+      equity,
+      closedCount: closed.length,
+      daySpan: plHistoryDaySpan(closed),
+    };
   }
 
   function formatPlTickMark(time, tickMarkType) {
@@ -929,13 +959,13 @@
     const losses = Math.max(0, closed.length - wins);
     const openBit = plUi.optionsOpen ? "Expanded" : "Collapsed";
     if (!closed.length) {
-      el.plChartToggleMeta.textContent = `${openBit} · from your trade log`;
+      el.plChartToggleMeta.textContent = `${openBit} · all-time trade log`;
       return;
     }
-    el.plChartToggleMeta.textContent = `${openBit} · ${closed.length} closed · ${formatWinLossRecord(
-      wins,
-      losses
-    )}`;
+    const span = plHistoryDaySpan(closed);
+    el.plChartToggleMeta.textContent = `${openBit} · ${closed.length} closed${
+      span ? ` · ${span}` : ""
+    } · ${formatWinLossRecord(wins, losses)}`;
   }
 
   function ensurePlChart() {
@@ -960,7 +990,9 @@
         borderColor: "rgba(255,255,255,0.08)",
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 2,
+        rightOffset: 4,
+        barSpacing: 8,
+        minBarSpacing: 2,
         tickMarkFormatter: formatPlTickMark,
       },
       localization: {
@@ -993,23 +1025,25 @@
     updatePlToggleMeta();
     if (!isPlChartVisible()) return;
 
-    const { candles, start, closedCount } = buildPlCandles();
+    const { candles, start, closedCount, daySpan } = buildPlCandles();
     const hasBars = candles.length > 0;
 
     if (el.plChartEmpty) el.plChartEmpty.hidden = hasBars;
     el.plChart.hidden = !hasBars;
     if (el.plChartCaption) {
       if (!hasBars) {
-        el.plChartCaption.textContent = "Closed trades as equity candles · dates on bottom";
+        el.plChartCaption.textContent =
+          "All-time closed trades as equity candles · dates on bottom";
       } else {
         const wins = candles.filter((c) => c.kind !== "open" && c.won).length;
         const losses = Math.max(0, closedCount - wins);
         const last = candles[candles.length - 1];
         const net = Math.round((last.close - start) * 100) / 100;
-        el.plChartCaption.textContent = `${closedCount} closed · ${formatWinLossRecord(
+        const spanBit = daySpan ? ` · ${daySpan}` : "";
+        el.plChartCaption.textContent = `All-time · ${closedCount} closed · ${formatWinLossRecord(
           wins,
           losses
-        )} · equity ${money(last.close)} (${formatPl(net)})`;
+        )} · equity ${money(last.close)} (${formatPl(net)})${spanBit}`;
       }
     }
 
@@ -1025,8 +1059,22 @@
     }
 
     ensurePlChart();
-    if (!plSeries) return;
+    if (!plSeries || !plChart) return;
     resizePlChart();
+    // Pack bars so the full history fits; user can pinch/zoom into a day.
+    const spacing = Math.max(
+      2,
+      Math.min(14, Math.floor(280 / Math.max(8, candles.length)))
+    );
+    try {
+      plChart.timeScale().applyOptions({
+        barSpacing: spacing,
+        minBarSpacing: 2,
+        rightOffset: 4,
+      });
+    } catch {
+      // ignore
+    }
     plSeries.setData(
       candles.map((c) => ({
         time: c.time,
@@ -1038,14 +1086,27 @@
     );
     try {
       plChart.timeScale().fitContent();
+      // Force the visible window to include every candle (today + past).
+      plChart.timeScale().setVisibleLogicalRange({
+        from: -0.5,
+        to: Math.max(candles.length - 0.5, 0.5),
+      });
       plChartFitted = true;
     } catch {
-      // ignore
+      try {
+        plChart.timeScale().fitContent();
+        plChartFitted = true;
+      } catch {
+        // ignore
+      }
     }
   }
 
   function renderTradeHistory() {
-    if (!Array.isArray(demo.history)) demo.history = loadTradeHistory();
+    demo.history = mergeTradeHistory(
+      Array.isArray(demo.history) ? demo.history : [],
+      loadTradeHistory()
+    );
     const list = demo.history;
     const open = demo.position;
     const openMark = open ? markOpenPosition(open) : null;
@@ -1055,22 +1116,37 @@
         el.tradeHistorySummary.textContent = "No trades yet";
         el.tradeHistorySummary.classList.remove("is-up", "is-down");
       } else {
-        const wins = list.filter((t) => t.won).length;
-        const closed = list.length;
-        const totalPl = list.reduce(
+        const closedRows = list.filter(
+          (t) =>
+            (t.kind === "close" || t.kind === "settle") &&
+            Number.isFinite(Number(t.pl))
+        );
+        const wins = closedRows.filter(
+          (t) => t.won === true || Number(t.pl) >= 0
+        ).length;
+        const closed = closedRows.length;
+        const totalPl = closedRows.reduce(
           (sum, t) => sum + (Number.isFinite(Number(t.pl)) ? Number(t.pl) : 0),
           0
+        );
+        const span = plHistoryDaySpan(
+          closedRows
+            .slice()
+            .sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0))
         );
         const openBit = open
           ? ` · open ${open.side === "above" ? "Above" : "Below"}`
           : "";
+        const spanBit = span ? ` · ${span}` : "";
         el.tradeHistorySummary.textContent = closed
-          ? `${closed} closed · ${wins}W-${closed - wins}L · ${formatPl(
+          ? `All-time · ${closed} closed · ${wins}W-${closed - wins}L · ${formatPl(
               totalPl
-            )}${openBit}`
-          : `Open ${open.side === "above" ? "Above" : "Below"} · ${
-              open.contracts
-            } cts`;
+            )}${spanBit}${openBit}`
+          : open
+            ? `Open ${open.side === "above" ? "Above" : "Below"} · ${
+                open.contracts
+              } cts`
+            : "All-time log";
         el.tradeHistorySummary.classList.toggle("is-up", totalPl > 0);
         el.tradeHistorySummary.classList.toggle("is-down", totalPl < 0);
       }
@@ -1542,12 +1618,7 @@
   }
 
   function buildStrategyReport() {
-    const closed = (Array.isArray(demo.history) ? demo.history : []).filter(
-      (t) =>
-        (t.kind === "close" || t.kind === "settle") &&
-        t.pl != null &&
-        Number.isFinite(Number(t.pl))
-    );
+    const closed = closedPlTrades();
     const followed = closed.filter((t) => t.followedSuggest === true);
     const own = closed.filter((t) => t.followedSuggest === false);
     const prior = closed.filter((t) => t.followedSuggest == null);

@@ -477,9 +477,12 @@
     }
     serverSaveInFlight = true;
     try {
+      const history = mergeTradeHistory(demo.history, loadTradeHistory());
+      demo.history = history;
+      persistTradeHistory(history);
       const payload = {
         ...demo,
-        history: Array.isArray(demo.history) ? demo.history : [],
+        history,
         updatedAt: Date.now(),
       };
       demo.updatedAt = payload.updatedAt;
@@ -659,6 +662,7 @@
   function saveDemoState() {
     try {
       if (!Array.isArray(demo.history)) demo.history = [];
+      demo.history = mergeTradeHistory(demo.history, loadTradeHistory());
       demo.updatedAt = Date.now();
       persistTradeHistory(demo.history);
       localStorage.setItem(DEMO_KEY, JSON.stringify(demo));

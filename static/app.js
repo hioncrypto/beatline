@@ -1508,7 +1508,7 @@
     demo.realizedPl = 0;
     demo.position = null;
     demo.lastResult = null;
-    // Keep trade history across bankroll resets (use Clear in Options to wipe).
+    // Keep trade history across bankroll resets (export/import backup to move it).
     saveDemoState();
     renderDemoUi();
     setStatus("ok", `Demo reset · ${money(start)}`);

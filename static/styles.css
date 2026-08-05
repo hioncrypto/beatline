@@ -2379,6 +2379,10 @@ body.has-open-pl .best-side {
   min-height: auto;
 }
 
+.app-shell > .chart-resize {
+  flex: 0 0 auto;
+}
+
 .app-shell > .trade-panel {
   flex: 0 1 auto;
   min-height: 0;
@@ -2390,7 +2394,48 @@ body.has-open-pl .best-side {
   display: flex !important;
   flex-direction: column;
   overflow: hidden;
-  margin: 2px 8px;
+  margin: 0 8px;
+}
+
+body.chart-height-locked .app-shell > .chart-wrap {
+  flex: 0 0 auto !important;
+}
+
+.chart-resize {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 14px;
+  margin: 0 8px;
+  touch-action: none;
+  cursor: row-resize;
+  -webkit-user-select: none;
+  user-select: none;
+  z-index: 3;
+}
+
+.chart-resize-bar {
+  width: 42px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  transition: background 0.12s ease, width 0.12s ease;
+}
+
+.chart-resize.is-dragging .chart-resize-bar,
+.chart-resize:active .chart-resize-bar {
+  width: 56px;
+  background: rgba(26, 201, 107, 0.75);
+}
+
+body.is-resizing-chart {
+  cursor: row-resize;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body.is-resizing-chart #chart {
+  pointer-events: none;
 }
 
 .top {

@@ -12,10 +12,11 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.1";
+  const APP_VERSION = "9.2";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const SUMMARY_COLLAPSE_KEY = "beatlineSummaryCollapsed";
+  const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
   const PL_UI_KEY = "beatlinePlChartUi";
 
@@ -76,6 +77,9 @@
 
   const el = {
     chart: document.getElementById("chart"),
+    chartWrap: document.getElementById("chart-wrap"),
+    chartResizeTop: document.getElementById("chart-resize-top"),
+    chartResizeBottom: document.getElementById("chart-resize-bottom"),
     timeframe: document.getElementById("timeframe"),
     chartTfLabel: document.getElementById("chart-tf-label"),
     summaryPanel: document.getElementById("summary-panel"),
@@ -245,6 +249,7 @@
   const EDGE_GONE_RESET_MS = 60_000;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
   let summaryCollapsed = localStorage.getItem(SUMMARY_COLLAPSE_KEY) === "1";
+  let chartHeightPx = loadChartHeightPx();
   let lastBreakevenPrice = null;
   let settleHintByTicker = {};
   let optionsOpen = false;
@@ -1195,6 +1200,164 @@
     return { realized, open, total, hasOpen: !!(demo.position && mark) };
   }
 
+  function loadChartHeightPx() {
+    try {
+      const n = Number(localStorage.getItem(CHART_HEIGHT_KEY));
+      if (Number.isFinite(n) && n >= 120 && n <= 900) return Math.round(n);
+    } catch {
+      // ignore
+    }
+    return null;
+  }
+
+  function saveChartHeightPx(px) {
+    try {
+      if (px == null) localStorage.removeItem(CHART_HEIGHT_KEY);
+      else localStorage.setItem(CHART_HEIGHT_KEY, String(Math.round(px)));
+    } catch {
+      // ignore
+    }
+  }
+
+  function chartHeightLimits() {
+    const shell = document.querySelector(".app-shell");
+    const shellH = shell ? shell.clientHeight : window.innerHeight || 640;
+    const top = document.querySelector(".top");
+    const topH = top ? top.getBoundingClientRect().height : 52;
+    const summaryH = el.summaryPanel
+      ? el.summaryPanel.getBoundingClientRect().height
+      : 0;
+    const dock = document.querySelector(".buy-dock");
+    const dockH = dock ? dock.getBoundingClientRect().height : 78;
+    const openPlH =
+      el.openPlBar && !el.openPlBar.hidden
+        ? el.openPlBar.getBoundingClientRect().height
+        : 0;
+    const handleBudget = 28;
+    const minTrade = 88;
+    const minChart = 140;
+    const maxChart = Math.max(
+      minChart,
+      shellH - topH - summaryH - dockH - openPlH - handleBudget - minTrade
+    );
+    return { minChart, maxChart };
+  }
+
+  function applyChartHeight(px, { persist = true } = {}) {
+    if (!el.chartWrap) return;
+    if (px == null || !Number.isFinite(px)) {
+      chartHeightPx = null;
+      el.chartWrap.style.flex = "";
+      el.chartWrap.style.height = "";
+      el.chartWrap.style.minHeight = "";
+      el.chartWrap.style.maxHeight = "";
+      document.body.classList.remove("chart-height-locked");
+      if (persist) saveChartHeightPx(null);
+      setTimeout(resizeChart, 40);
+      return;
+    }
+    const { minChart, maxChart } = chartHeightLimits();
+    chartHeightPx = Math.round(Math.min(maxChart, Math.max(minChart, px)));
+    el.chartWrap.style.flex = `0 0 ${chartHeightPx}px`;
+    el.chartWrap.style.height = `${chartHeightPx}px`;
+    el.chartWrap.style.minHeight = `${chartHeightPx}px`;
+    el.chartWrap.style.maxHeight = `${chartHeightPx}px`;
+    document.body.classList.add("chart-height-locked");
+    if (persist) saveChartHeightPx(chartHeightPx);
+    setTimeout(resizeChart, 40);
+  }
+
+  function wireChartResizeHandle(handle, mode) {
+    if (!handle) return;
+    let startY = null;
+    let startH = null;
+    let pointerId = null;
+
+    const onMove = (clientY) => {
+      if (startY == null || startH == null) return;
+      const dy = clientY - startY;
+      // Top: drag up grows chart. Bottom: drag down grows chart.
+      const next = mode === "top" ? startH - dy : startH + dy;
+      // If growing from the top and summary is in the way, collapse it.
+      if (mode === "top" && next > startH + 24 && !summaryCollapsed) {
+        setSummaryCollapsed(true);
+      }
+      applyChartHeight(next, { persist: false });
+    };
+
+    const onEnd = () => {
+      if (startY == null) return;
+      startY = null;
+      startH = null;
+      pointerId = null;
+      handle.classList.remove("is-dragging");
+      document.body.classList.remove("is-resizing-chart");
+      if (chartHeightPx != null) saveChartHeightPx(chartHeightPx);
+      setTimeout(resizeChart, 40);
+    };
+
+    handle.addEventListener("pointerdown", (ev) => {
+      if (ev.button != null && ev.button !== 0) return;
+      ev.preventDefault();
+      handle.setPointerCapture?.(ev.pointerId);
+      pointerId = ev.pointerId;
+      startY = ev.clientY;
+      startH =
+        chartHeightPx != null
+          ? chartHeightPx
+          : el.chartWrap
+            ? el.chartWrap.getBoundingClientRect().height
+            : 240;
+      handle.classList.add("is-dragging");
+      document.body.classList.add("is-resizing-chart");
+    });
+    handle.addEventListener("pointermove", (ev) => {
+      if (pointerId != null && ev.pointerId !== pointerId) return;
+      if (startY == null) return;
+      onMove(ev.clientY);
+    });
+    handle.addEventListener("pointerup", onEnd);
+    handle.addEventListener("pointercancel", onEnd);
+
+    // Touch fallback for browsers without pointer events on the handle path.
+    handle.addEventListener(
+      "touchstart",
+      (ev) => {
+        if (pointerId != null) return;
+        const t = ev.touches && ev.touches[0];
+        if (!t) return;
+        startY = t.clientY;
+        startH =
+          chartHeightPx != null
+            ? chartHeightPx
+            : el.chartWrap
+              ? el.chartWrap.getBoundingClientRect().height
+              : 240;
+        handle.classList.add("is-dragging");
+        document.body.classList.add("is-resizing-chart");
+      },
+      { passive: true }
+    );
+    handle.addEventListener(
+      "touchmove",
+      (ev) => {
+        if (startY == null || pointerId != null) return;
+        const t = ev.touches && ev.touches[0];
+        if (!t) return;
+        onMove(t.clientY);
+      },
+      { passive: true }
+    );
+    handle.addEventListener(
+      "touchend",
+      () => {
+        if (pointerId != null) return;
+        onEnd();
+      },
+      { passive: true }
+    );
+  }
+
   function setOpenPlCollapsed(collapsed) {
     openPlCollapsed = !!collapsed;
     try {
@@ -1234,6 +1397,7 @@
         : "Slide numbers away for a bigger chart";
     }
     updateSummaryPeek();
+    if (chartHeightPx != null) applyChartHeight(chartHeightPx, { persist: false });
     setTimeout(resizeChart, 60);
   }
 
@@ -2891,7 +3055,7 @@
   function pullAllowedFrom(target) {
     if (pullRunning || buySheetOpen || optionsOpen || tutorialOpen) return false;
     if (!(target instanceof Element)) return true;
-    if (target.closest("#chart, .chart-wrap, .buy-sheet, .options-sheet, .tutorial"))
+    if (target.closest("#chart, .chart-wrap, .chart-resize, .buy-sheet, .options-sheet, .tutorial"))
       return false;
     if (target.closest("input, button, a, .open-pl-bar")) return false;
     // Respect scrollable panels that aren't already at the top.
@@ -4518,6 +4682,9 @@
     renderDemoUi();
     applyPlUi();
     setSummaryCollapsed(summaryCollapsed);
+    if (chartHeightPx != null) applyChartHeight(chartHeightPx, { persist: false });
+    wireChartResizeHandle(el.chartResizeTop, "top");
+    wireChartResizeHandle(el.chartResizeBottom, "bottom");
     syncAlertsUi();
     try {
       if (localStorage.getItem(TUTORIAL_KEY) !== "1") {
@@ -4611,6 +4778,7 @@
     window.addEventListener("resize", () => {
       syncRotateGate();
       tryLockPortrait();
+      if (chartHeightPx != null) applyChartHeight(chartHeightPx, { persist: false });
       resizeChart();
       if (isPlChartVisible()) resizePlChart();
     });

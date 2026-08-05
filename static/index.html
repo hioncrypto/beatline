@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=9.1" />
+    <link rel="stylesheet" href="/styles.css?v=9.2" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=9.1" defer></script>
+    <script src="/app.js?v=9.2" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -189,7 +189,17 @@
       </div>
       </div>
     </section>
-      <section class="chart-wrap">
+    <div
+      id="chart-resize-top"
+      class="chart-resize chart-resize-top"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Drag to resize chart from the top"
+      title="Drag to resize chart"
+    >
+      <span class="chart-resize-bar" aria-hidden="true"></span>
+    </div>
+      <section id="chart-wrap" class="chart-wrap">
       <div
         id="timeframe"
         class="tf-btns"
@@ -202,6 +212,16 @@
       </div>
       <main id="chart" role="img" aria-label="Bitcoin chart with Price to beat line"></main>
     </section>
+    <div
+      id="chart-resize-bottom"
+      class="chart-resize chart-resize-bottom"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Drag to resize chart from the bottom"
+      title="Drag to resize chart"
+    >
+      <span class="chart-resize-bar" aria-hidden="true"></span>
+    </div>
 
       <section class="trade-panel">
       <div class="odds-block">

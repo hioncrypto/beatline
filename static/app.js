@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.33";
+  const APP_VERSION = "9.34";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -3232,7 +3232,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.5", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.6", { scope: "/" });
       await navigator.serviceWorker.ready;
       return reg;
     } catch (err) {
@@ -3523,7 +3523,7 @@
     const askMoved =
       prev &&
       String(prev).startsWith(`${side}:`) &&
-      Math.abs(Number(String(prev).split(":")[1]) - ask) >= 5;
+      Math.abs(Number(String(prev).split(":")[1]) - ask) >= 3;
 
     if (!(newlyClear || sideChanged || askMoved)) return;
 
@@ -3567,7 +3567,30 @@
         vibrateEdge();
       }
       if (canNotify) {
-        postToSW(notifyPayload);
+        const ctrl =
+          navigator.serviceWorker && navigator.serviceWorker.controller;
+        if (ctrl) {
+          postToSW(notifyPayload);
+        } else {
+          // SW not controlling yet — still surface a Best Side alert.
+          try {
+            const title =
+              sug != null
+                ? `BeatLine · Best buy ${sideLabel} · $${sug}`
+                : `BeatLine · Best buy · ${sideLabel}`;
+            const bits = [];
+            if (ask) bits.push(`ask ${ask}¢`);
+            if (best.pWin != null) bits.push(`${Math.round(best.pWin * 100)}% model`);
+            new Notification(title, {
+              body: bits.length ? bits.join(" · ") : "Clear Best Side edge",
+              tag: "kalshi-clear-edge",
+              renotify: true,
+              silent: false,
+            });
+          } catch {
+            // ignore
+          }
+        }
       } else {
         postToSW({
           type: "edge-armed",
@@ -4221,11 +4244,13 @@
     let best = scored[0];
     // Haircut noisy/thin books and early-window coin flips with tiny edge.
     if (lastThinBook) best = { ...best, score: best.score - 0.08 };
+    // EV-first clear edge (keep in sync with server score_clear_edge).
+    // Cheap asks can be strong buys near ~50% model — do NOT require 52% pWin.
     const clear =
-      best.ev > 0.01 &&
-      best.score > 0.04 &&
-      best.pWin >= 0.52 &&
-      !(secs > 12 * 60 && Math.abs(best.ev) < 0.03);
+      best.ev >= 0.03 &&
+      best.score > 0.05 &&
+      best.pWin >= 0.45 &&
+      !(secs > 12 * 60 && best.ev < 0.06);
 
     el.bestSide.hidden = false;
     syncBestSideLayout();

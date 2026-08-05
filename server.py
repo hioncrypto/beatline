@@ -1213,11 +1213,13 @@ def score_clear_edge(data: dict, spot: float | None) -> dict | None:
     best = scored[0]
     if data.get("thin_book"):
         best = {**best, "score": best["score"] - 0.08}
+    # EV-first clear edge (keep in sync with client refreshBestSide).
+    # Cheap asks can be strong buys near ~50% model — do NOT require 52% p_win.
     clear = (
-        best["ev"] > 0.01
-        and best["score"] > 0.04
-        and best["p_win"] >= 0.52
-        and not (secs > 12 * 60 and abs(best["ev"]) < 0.03)
+        best["ev"] >= 0.03
+        and best["score"] > 0.05
+        and best["p_win"] >= 0.45
+        and not (secs > 12 * 60 and best["ev"] < 0.06)
     )
     if not clear:
         return None
@@ -1527,7 +1529,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.1.3",
+                    "version": "2.1.4",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file(),

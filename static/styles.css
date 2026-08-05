@@ -2182,6 +2182,10 @@ h1 {
     rgba(8, 14, 11, 0.72);
   text-align: center;
   transition: border-color 0.2s ease, background 0.2s ease;
+  /* Stay visible while the trade strip scrolls / open-P/L reflows. */
+  position: sticky;
+  top: 0;
+  z-index: 3;
 }
 
 .best-side.is-below {
@@ -2687,9 +2691,12 @@ body.has-open-pl .summary-panel:not(.is-collapsed) {
   max-height: none;
 }
 
-/* Chart keeps a usable floor; odds/ROI scroll underneath instead of crushing it. */
 body.has-open-pl .trade-panel {
-  max-height: min(24dvh, 210px);
+  max-height: min(28dvh, 240px);
+}
+
+body.has-open-pl.open-pl-collapsed .trade-panel {
+  max-height: min(34dvh, 280px);
 }
 
 body.has-open-pl .app-shell > .chart-wrap {

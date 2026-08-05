@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.12";
+  const APP_VERSION = "9.13";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -197,6 +197,7 @@
     demoDayPct: document.getElementById("demo-day-pct"),
     strategyFollowed: document.getElementById("strategy-followed"),
     strategyOwn: document.getElementById("strategy-own"),
+    strategyAll: document.getElementById("strategy-all"),
     strategyMissed: document.getElementById("strategy-missed"),
     strategyVerdict: document.getElementById("strategy-verdict"),
     strategyToday: document.getElementById("strategy-today"),
@@ -204,6 +205,9 @@
     strategyBody: document.getElementById("strategy-body"),
     strategyChevron: document.getElementById("strategy-chevron"),
     strategySection: document.getElementById("strategy-section"),
+    strategyBars: document.getElementById("strategy-bars"),
+    strategyChartCaption: document.getElementById("strategy-chart-caption"),
+    strategyChartEmpty: document.getElementById("strategy-chart-empty"),
     openPlAdd: document.getElementById("open-pl-add"),
     openPlClose: document.getElementById("open-pl-close"),
     openPlToggle: document.getElementById("open-pl-toggle"),
@@ -1414,10 +1418,10 @@
   }
 
   function formatStrategyBucket(label, s) {
-    if (!s.n) return `${label}: no tagged closes yet`;
-    const wr = s.wr != null ? `${s.wr}%` : "—";
+    if (!s.n) return "No closes yet";
+    const wr = s.wr != null ? `${s.wr}% win` : "—";
     const avg = s.avg != null ? ` · avg ${formatPl(s.avg)}` : "";
-    return `${s.n} closed · ${s.wins}W-${s.losses}L (${wr}) · ${formatPl(s.pl)}${avg}`;
+    return `${s.wins}W-${s.losses}L (${wr}) · ${formatPl(s.pl)}${avg}`;
   }
 
   function buildStrategyReport() {
@@ -1432,32 +1436,38 @@
     const prior = closed.filter((t) => t.followedSuggest == null);
     const followedS = summarizeStrategyBucket(followed);
     const ownS = summarizeStrategyBucket(own);
+    const priorS = summarizeStrategyBucket(prior);
+    const allS = summarizeStrategyBucket(closed);
     const suggestLog = loadSuggestLog();
     const missed = suggestLog.filter((s) => !s.taken).length;
     const takenSuggest = suggestLog.filter((s) => s.taken).length;
 
     let verdict =
-      "New buys are tagged when Best Side shows a clear edge on that side. Close a few of each to compare.";
-    if (followedS.n >= 3 && ownS.n >= 3) {
+      "Tap Best when it lights up (app suggestion), or Buy Above/Below on your own. After those closes settle, this chart shows whether Best Side earns trust.";
+    if (followedS.n >= 5 && ownS.n >= 5) {
       const wrDelta = (followedS.wr || 0) - (ownS.wr || 0);
       const plDelta = followedS.pl - ownS.pl;
-      if (wrDelta >= 5 && plDelta > 0) {
-        verdict = `Advantageous: following Best Side is ahead by ${formatPl(
+      if (wrDelta >= 8 && plDelta > 0) {
+        verdict = `Trust leaning yes: Best Side leads by ${formatPl(
           plDelta
-        )} and +${wrDelta.toFixed(1)} pts win rate vs your own calls.`;
-      } else if (wrDelta <= -5 && plDelta < 0) {
-        verdict = `Not yet advantageous: your own calls lead by ${formatPl(
+        )} and +${wrDelta.toFixed(1)} pts win rate vs your calls (${followedS.n} vs ${ownS.n} closes).`;
+      } else if (wrDelta <= -8 && plDelta < 0) {
+        verdict = `Trust leaning no: your own calls lead by ${formatPl(
           -plDelta
-        )} and +${Math.abs(wrDelta).toFixed(1)} pts win rate. Keep sampling.`;
+        )} and +${Math.abs(wrDelta).toFixed(1)} pts win rate. App edge is not beating you yet.`;
       } else {
-        verdict = `Mixed so far: Best Side ${formatPl(followedS.pl)} / ${
-          followedS.wr
-        }% vs own ${formatPl(ownS.pl)} / ${ownS.wr}%. Need a clearer gap.`;
+        verdict = `Too close to call: Best Side ${followedS.wr}% / ${formatPl(
+          followedS.pl
+        )} vs your ${ownS.wr}% / ${formatPl(ownS.pl)}. Keep sampling.`;
       }
     } else if (followedS.n + ownS.n > 0) {
-      verdict = `Sample still thin (${followedS.n} followed · ${ownS.n} own${
-        prior.length ? ` · ${prior.length} prior untagged` : ""
-      }). Keep trading both styles to judge the edge.`;
+      verdict = `Building the sample: Best Side ${followedS.n} closes · your calls ${ownS.n}${
+        prior.length ? ` · ${prior.length} older untagged` : ""
+      }. Aim for ~5+ of each before trusting the split.`;
+    } else if (allS.n > 0) {
+      verdict = `${allS.n} closes on file (${allS.wins}W-${allS.losses}L · ${formatPl(
+        allS.pl
+      )}), but none are tagged Best vs Own yet. New Best taps and own buys will split the next chart.`;
     }
 
     const mark = markOpenPosition(demo.position);
@@ -1467,6 +1477,8 @@
     return {
       followedS,
       ownS,
+      priorS,
+      allS,
       priorCount: prior.length,
       missed,
       takenSuggest,
@@ -1476,8 +1488,66 @@
     };
   }
 
+  function strategyBarColumn(label, s, tone) {
+    const maxN = Math.max(1, s.wins, s.losses);
+    const winH = s.n ? Math.max(8, Math.round((s.wins / maxN) * 100)) : 0;
+    const lossH = s.n ? Math.max(8, Math.round((s.losses / maxN) * 100)) : 0;
+    const wrTxt = s.wr != null ? `${s.wr}%` : "—";
+    const plClass = s.pl > 0 ? "is-up" : s.pl < 0 ? "is-down" : "";
+    return (
+      `<div class="strategy-col ${tone}">` +
+      `<div class="strategy-col-label">${label}</div>` +
+      `<div class="strategy-col-pair" role="img" aria-label="${label}: ${s.wins} wins, ${s.losses} losses">` +
+      `<div class="strategy-bar-wrap">` +
+      `<div class="strategy-bar win" style="height:${winH}%"></div>` +
+      `<span class="strategy-bar-n">${s.wins}</span>` +
+      `<span class="strategy-bar-cap">W</span>` +
+      `</div>` +
+      `<div class="strategy-bar-wrap">` +
+      `<div class="strategy-bar loss" style="height:${lossH}%"></div>` +
+      `<span class="strategy-bar-n">${s.losses}</span>` +
+      `<span class="strategy-bar-cap">L</span>` +
+      `</div>` +
+      `</div>` +
+      `<div class="strategy-col-meta">` +
+      `<strong>${wrTxt} win</strong>` +
+      `<span class="${plClass}">${s.n ? formatPl(s.pl) : "—"}</span>` +
+      `<em>${s.n} close${s.n === 1 ? "" : "s"}</em>` +
+      `</div>` +
+      `</div>`
+    );
+  }
+
+  function renderStrategyChart(report) {
+    if (!el.strategyBars) return;
+    const hasAny = report.allS.n > 0;
+    if (el.strategyChartEmpty) el.strategyChartEmpty.hidden = hasAny;
+    el.strategyBars.hidden = !hasAny;
+    if (el.strategyChartCaption) {
+      el.strategyChartCaption.textContent = hasAny
+        ? "Green = wins · Red = losses · compare Best Side vs your calls"
+        : "Green = wins · Red = losses · taller = more trades";
+    }
+    if (!hasAny) {
+      el.strategyBars.innerHTML = "";
+      return;
+    }
+    const cols = [];
+    // Always show Best + Own so the comparison is readable even at 0.
+    cols.push(strategyBarColumn("Best Side", report.followedS, "is-followed"));
+    cols.push(strategyBarColumn("Your calls", report.ownS, "is-own"));
+    if (report.priorS.n > 0 && report.followedS.n + report.ownS.n === 0) {
+      cols.push(strategyBarColumn("Before tags", report.priorS, "is-prior"));
+    } else if (report.priorS.n > 0) {
+      cols.push(strategyBarColumn("Untagged", report.priorS, "is-prior"));
+    }
+    cols.push(strategyBarColumn("All closes", report.allS, "is-all"));
+    el.strategyBars.innerHTML = cols.join("");
+  }
+
   function renderStrategyReport() {
     const report = buildStrategyReport();
+    renderStrategyChart(report);
     if (el.strategyFollowed) {
       el.strategyFollowed.textContent = formatStrategyBucket(
         "Followed",
@@ -1491,10 +1561,17 @@
       el.strategyOwn.classList.toggle("is-up", report.ownS.pl > 0);
       el.strategyOwn.classList.toggle("is-down", report.ownS.pl < 0);
     }
+    if (el.strategyAll) {
+      el.strategyAll.textContent = formatStrategyBucket("All", report.allS);
+      el.strategyAll.classList.toggle("is-up", report.allS.pl > 0);
+      el.strategyAll.classList.toggle("is-down", report.allS.pl < 0);
+    }
     if (el.strategyMissed) {
-      el.strategyMissed.textContent = `Missed suggestions ${report.missed} · taken ${report.takenSuggest}${
+      el.strategyMissed.textContent = `Suggestions logged ${
+        report.missed + report.takenSuggest
+      } · taken ${report.takenSuggest} · missed ${report.missed}${
         report.priorCount
-          ? ` · ${report.priorCount} prior closes untagged`
+          ? ` · ${report.priorCount} older closes untagged`
           : ""
       }`;
     }

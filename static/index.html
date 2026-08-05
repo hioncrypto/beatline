@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=9.12" />
+    <link rel="stylesheet" href="/styles.css?v=9.13" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=9.12" defer></script>
+    <script src="/app.js?v=9.13" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -432,19 +432,34 @@
         >
           <span>
             <strong>Strategy report</strong>
-            <em>Best Side suggestions vs your own calls</em>
+            <em>Can you trust Best Side? Wins vs losses</em>
           </span>
           <span id="strategy-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
         </button>
         <div id="strategy-body" class="strategy-body">
+          <div id="strategy-chart-caption" class="strategy-chart-caption">
+            Green = wins · Red = losses · taller = more trades
+          </div>
+          <div id="strategy-bars" class="strategy-bars" aria-label="Wins and losses by source"></div>
+          <div id="strategy-chart-empty" class="strategy-chart-empty" hidden>
+            Close or settle trades to build this chart. Tap <strong>Best</strong> for app suggestions, or Buy Above/Below for your own calls — each close is tagged automatically.
+          </div>
+          <div class="strategy-legend" aria-hidden="true">
+            <span class="strategy-leg win">Wins</span>
+            <span class="strategy-leg loss">Losses</span>
+          </div>
           <div class="strategy-grid">
             <div class="strategy-card is-followed">
-              <div class="strategy-card-kicker">Followed Best Side</div>
-              <div id="strategy-followed" class="strategy-card-body">No tagged closes yet</div>
+              <div class="strategy-card-kicker">Best Side (app)</div>
+              <div id="strategy-followed" class="strategy-card-body">—</div>
             </div>
             <div class="strategy-card is-own">
               <div class="strategy-card-kicker">Your own calls</div>
-              <div id="strategy-own" class="strategy-card-body">No tagged closes yet</div>
+              <div id="strategy-own" class="strategy-card-body">—</div>
+            </div>
+            <div class="strategy-card is-all">
+              <div class="strategy-card-kicker">All closes</div>
+              <div id="strategy-all" class="strategy-card-body">—</div>
             </div>
           </div>
           <div id="strategy-missed" class="strategy-missed">Missed suggestions —</div>
@@ -453,7 +468,7 @@
           </div>
           <div id="strategy-today" class="strategy-today">Today —</div>
           <p class="strategy-hint">
-            New fills are tagged when Best Side has a clear edge on that side. Prior trades without a tag stay out of the comparison. Missed = clear-edge alerts you did not take on that window.
+            How to read: compare the Best Side bars to Your calls. Higher win rate and greener P/L on Best Side means the app’s edge is earning trust. Untagged older closes still count under All closes until new tagged fills build the split.
           </p>
         </div>
       </section>

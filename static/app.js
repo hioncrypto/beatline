@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.34";
+  const APP_VERSION = "9.35";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -4245,12 +4245,13 @@
     // Haircut noisy/thin books and early-window coin flips with tiny edge.
     if (lastThinBook) best = { ...best, score: best.score - 0.08 };
     // EV-first clear edge (keep in sync with server score_clear_edge).
-    // Cheap asks can be strong buys near ~50% model — do NOT require 52% pWin.
+    // Dollar EV already embeds model vs all-in ask+fee — no absolute 52%/45%
+    // win-rate floor (that blocked strong cheap-ask entries near 40–50%).
     const clear =
       best.ev >= 0.03 &&
       best.score > 0.05 &&
-      best.pWin >= 0.45 &&
-      !(secs > 12 * 60 && best.ev < 0.06);
+      best.pWin >= 0.30 &&
+      !(secs > 12 * 60 && best.ev < 0.05);
 
     el.bestSide.hidden = false;
     syncBestSideLayout();

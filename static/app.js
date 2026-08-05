@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.9";
+  const APP_VERSION = "9.10";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -3854,10 +3854,10 @@
         borderColor: "rgba(255,255,255,0.08)",
         timeVisible: true,
         secondsVisible: false,
-        // Pack more history into the first viewport; user can still pinch-zoom.
-        barSpacing: 3.25,
-        minBarSpacing: 1.25,
-        rightOffset: 4,
+        // Start zoomed in near live price / TO BEAT; pinch or scroll for more history.
+        barSpacing: 18,
+        minBarSpacing: 2,
+        rightOffset: 3,
       },
       handleScroll: {
         mouseWheel: true,
@@ -3924,6 +3924,27 @@
     const h = Math.max(1, Math.floor(height || 1));
     if (w < 40 || h < 80) return;
     chart.applyOptions({ width: w, height: h });
+  }
+
+  /** Default viewport: ~8–10 recent candles (zoomed in), not full history. */
+  const CHART_VISIBLE_BARS = 10;
+
+  function applyDefaultChartZoom() {
+    if (!chart || !lastCandleData.length) return;
+    const n = lastCandleData.length;
+    const visible = Math.min(CHART_VISIBLE_BARS, n);
+    try {
+      chart.timeScale().setVisibleLogicalRange({
+        from: n - visible,
+        to: n - 1 + 2,
+      });
+    } catch {
+      try {
+        chart.timeScale().scrollToRealTime();
+      } catch {
+        // ignore
+      }
+    }
   }
 
   function clearTargetLine() {
@@ -4311,12 +4332,11 @@
         updateSpot(candles[candles.length - 1].close);
       }
       resizeChart();
-      // Re-fit when history depth jumps (e.g. BRTI-only → merged Coinbase history).
+      // Zoom to recent bars on first paint / big history jumps (not fit-all).
       if (!fittedOnce || grew) {
-        chart.timeScale().fitContent();
+        applyDefaultChartZoom();
         fittedOnce = true;
         lastCandleCount = candles.length;
-        // Fit can run before overlays paint; redraw beat once more.
         reapplyChartOverlays();
       }
     } catch (err) {

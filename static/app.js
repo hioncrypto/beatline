@@ -5998,6 +5998,7 @@
             type: "edge-armed",
             side: lastBestPick.side,
             askCents: lastBestPick.askCents || null,
+            ticker: lastTicker || lastFifteenTicker || "",
             chimeOn,
           });
         }

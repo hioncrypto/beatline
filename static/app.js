@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.5";
+  const APP_VERSION = "9.6";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -788,6 +788,22 @@
     try { localStorage.removeItem("beatlineSummaryCollapsed"); } catch {}
   }
 
+  function formatWinLossRatio(wins, losses) {
+    const w = Math.max(0, Math.floor(Number(wins) || 0));
+    const l = Math.max(0, Math.floor(Number(losses) || 0));
+    if (l === 0) return w > 0 ? "∞" : "—";
+    const r = w / l;
+    if (r >= 100) return r.toFixed(0);
+    if (r >= 10) return r.toFixed(1);
+    return (Math.round(r * 10) / 10).toFixed(1).replace(/\.0$/, ".0");
+  }
+
+  function formatWinLossRecord(wins, losses) {
+    const w = Math.max(0, Math.floor(Number(wins) || 0));
+    const l = Math.max(0, Math.floor(Number(losses) || 0));
+    return `${w}W-${l}L (${formatWinLossRatio(w, l)})`;
+  }
+
   function updatePlToggleMeta() {
     if (!el.plChartToggleMeta) return;
     const closed = closedPlTrades();
@@ -798,7 +814,10 @@
       el.plChartToggleMeta.textContent = `${openBit} · from your trade log`;
       return;
     }
-    el.plChartToggleMeta.textContent = `${openBit} · ${closed.length} closed · ${wins}W-${losses}L`;
+    el.plChartToggleMeta.textContent = `${openBit} · ${closed.length} closed · ${formatWinLossRecord(
+      wins,
+      losses
+    )}`;
   }
 
   function ensurePlChart() {
@@ -869,9 +888,10 @@
         const losses = Math.max(0, closedCount - wins);
         const last = candles[candles.length - 1];
         const net = Math.round((last.close - start) * 100) / 100;
-        el.plChartCaption.textContent = `${closedCount} closed · ${wins}W-${losses}L · equity ${money(
-          last.close
-        )} (${formatPl(net)})`;
+        el.plChartCaption.textContent = `${closedCount} closed · ${formatWinLossRecord(
+          wins,
+          losses
+        )} · equity ${money(last.close)} (${formatPl(net)})`;
       }
     }
 

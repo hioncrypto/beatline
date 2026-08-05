@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=9.20" />
+    <link rel="stylesheet" href="/styles.css?v=9.21" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=9.20" defer></script>
+    <script src="/app.js?v=9.21" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -357,6 +357,7 @@
           ✕
         </button>
       </div>
+      <div id="options-body" class="options-body">
 
       <label class="options-row toggle-row" for="demo-toggle">
         <span>
@@ -417,7 +418,7 @@
           <button type="button" id="demo-buy-below" class="demo-btn below">Buy Below</button>
         </div>
         <p class="demo-hint">
-          Tap Buy Best / Above / Below to open the slide-to-buy sheet. Enter dollars, slide to confirm — sheet closes after the fill. Same-side taps add to the open position (avg entry). Rolling mark updates while open; close early at the bid or hold to settle.
+          Buy Best / Above / Below opens the slide-to-buy sheet. Same-side buys average in; close at bid or hold to settle.
         </p>
         <div id="demo-last" class="demo-last">No trades yet</div>
       </div>
@@ -550,6 +551,7 @@
         <strong>Stop the link from expiring</strong>
         <em>Deploy free on Render — permanent URL (not a Cursor tunnel)</em>
       </a>
+      </div>
     </aside>
     <div id="pull-refresh" class="pull-refresh" aria-hidden="true">
       <span id="pull-refresh-spinner" class="pull-refresh-spinner"></span>

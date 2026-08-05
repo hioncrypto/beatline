@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.20";
+  const APP_VERSION = "9.21";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -164,6 +164,7 @@
     menuBtn: document.getElementById("menu-btn"),
     optionsBackdrop: document.getElementById("options-backdrop"),
     optionsSheet: document.getElementById("options-sheet"),
+    optionsBody: document.getElementById("options-body"),
     optionsClose: document.getElementById("options-close"),
     tutorial: document.getElementById("tutorial"),
     tutorialBackdrop: document.getElementById("tutorial-backdrop"),
@@ -1115,10 +1116,14 @@
     renderStrategyReport();
     applyTradeHistoryUi();
     syncAlertsUi();
-    // Demo account sits at the top of the ⋮ sheet.
-    if (el.optionsSheet) el.optionsSheet.scrollTop = 0;
+    const resetScroll = () => {
+      if (el.optionsBody) el.optionsBody.scrollTop = 0;
+      if (el.optionsSheet) el.optionsSheet.scrollTop = 0;
+    };
+    resetScroll();
     requestAnimationFrame(() => {
       applyPlUi();
+      resetScroll();
     });
   }
 

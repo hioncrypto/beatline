@@ -261,8 +261,10 @@ h1 {
   right: 0;
   bottom: 0;
   max-height: min(88dvh, 640px);
-  overflow: auto;
-  padding: 14px 16px calc(18px + var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
   border-radius: 18px 18px 0 0;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-bottom: none;
@@ -277,7 +279,23 @@ h1 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 14px 16px 10px;
+  position: relative;
+  z-index: 2;
+  background: #15231d;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.options-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 4px 16px calc(18px + var(--safe-bottom));
 }
 
 .options-head h2 {

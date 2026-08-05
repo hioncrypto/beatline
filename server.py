@@ -1216,23 +1216,47 @@ def score_clear_edge(data: dict, spot: float | None) -> dict | None:
     # EV-first clear edge (keep in sync with client refreshBestSide).
     # Dollar EV already embeds model vs all-in ask+fee — no absolute 52%/45%
     # win-rate floor (that blocked strong cheap-ask entries near 40–50%).
+    # Extra bar for lottery-cheap asks: model noise looks like huge EV there.
+    ask_c = float(best["ask_cents"])
+    if ask_c <= 15:
+        cheap_ok = best["p_win"] >= 0.5 and best["ev"] >= 0.08
+    elif ask_c <= 25:
+        cheap_ok = best["p_win"] >= 0.42 and best["ev"] >= 0.05
+    else:
+        cheap_ok = True
     clear = (
         best["ev"] >= 0.03
         and best["score"] > 0.05
         and best["p_win"] >= 0.30
+        and cheap_ok
         and not (secs > 12 * 60 and best["ev"] < 0.05)
     )
     if not clear:
         return None
     # Nominal $ size for push copy (phone uses its own bankroll in-app).
+    # Mirror client ask caps so push text doesn't advertise oversized buys.
     ask = float(best["ask_cents"])
     p_win = float(best["p_win"])
     cost = ask / 100.0
     edge_amt = p_win - cost
-    suggest = 10
+    if ask <= 12:
+        ask_cap = 15
+    elif ask <= 20:
+        ask_cap = 25
+    elif ask <= 30:
+        ask_cap = 40
+    elif ask <= 45:
+        ask_cap = 55
+    else:
+        ask_cap = 40
+    suggest = 8
     if edge_amt > 0 and cost < 1:
         kelly = edge_amt / max(0.01, 1.0 - cost)
-        suggest = int(max(5, min(40, round(100 * kelly * 0.3))))
+        suggest = int(max(5, min(ask_cap, round(100 * kelly * 0.18))))
+        if p_win < 0.48:
+            suggest = max(5, int(suggest * 0.5))
+        elif ask <= 20:
+            suggest = max(5, int(suggest * 0.55))
     best["suggest_stake"] = suggest
     return best
 
@@ -1530,7 +1554,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.1.5",
+                    "version": "2.1.6",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file(),

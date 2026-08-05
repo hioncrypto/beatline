@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.35";
+  const APP_VERSION = "9.36";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -2685,6 +2685,25 @@
   function renderBuySuggest(side, currentAmount) {
     if (!el.buySuggest) return;
     const s = suggestForSide(side);
+    if (s && s.atRiskCap) {
+      buySuggestStake = null;
+      el.buySuggest.hidden = false;
+      el.buySuggest.classList.remove("is-active");
+      if (el.buySuggestAmount) {
+        el.buySuggestAmount.textContent = "Hold — max risk";
+      }
+      if (el.buySuggestMeta) {
+        const pct = bankPctText(s.bankPct);
+        el.buySuggestMeta.textContent = pct
+          ? `Open already risks ${pct} of balance`
+          : "Open position at max suggested risk";
+      }
+      if (el.buySuggestUse) {
+        el.buySuggestUse.textContent = "—";
+        el.buySuggestUse.disabled = true;
+      }
+      return;
+    }
     buySuggestStake =
       s && !s.lowProb && s.stake >= BUY_AMOUNT_MIN ? s.stake : null;
     if (buySuggestStake == null) {
@@ -2707,7 +2726,9 @@
       const conf = s.pWin != null ? `${Math.round(s.pWin * 100)}% model` : "";
       const bankTxt = bankPctText(s.bankPct);
       const bank = bankTxt ? `${bankTxt} of balance` : "";
-      el.buySuggestMeta.textContent = [conf, roi, bank]
+      const cool =
+        s.streak >= 2 ? "cooled after losses" : s.streak >= 1 ? "sized down" : "";
+      el.buySuggestMeta.textContent = [conf, roi, bank, cool]
         .filter(Boolean)
         .join(" · ");
     }
@@ -3834,16 +3855,76 @@
   }
 
   /**
-   * Suggest $ for a clear Best Side: fractional Kelly sized for high ROI /
-   * low bankroll risk, clamped to $1–$100 and available balance.
+   * Suggest $ for a clear Best Side: fractional Kelly with drawdown guards.
+   * Cheap asks, loss streaks, and open-position exposure all shrink size so
+   * stacked Best Side adds can't recreate a multi-hundred-dollar dump.
    */
+  function recentLossStreak() {
+    const closed = closedPlTrades();
+    let n = 0;
+    for (let i = closed.length - 1; i >= 0; i--) {
+      if (Number(closed[i].pl) < 0) n += 1;
+      else break;
+    }
+    return n;
+  }
+
+  function openPositionRiskUsd() {
+    if (!demo.position) return 0;
+    const t = Number(demo.position.total);
+    return Number.isFinite(t) && t > 0 ? t : 0;
+  }
+
+  function askStakeCap(askCents) {
+    const ask = Number(askCents);
+    if (!(ask > 0)) return 40;
+    // Hard $ caps: cheap contracts buy huge contract counts per dollar.
+    if (ask <= 12) return 15;
+    if (ask <= 20) return 25;
+    if (ask <= 30) return 40;
+    if (ask <= 45) return 55;
+    if (ask <= 65) return 70;
+    return 80;
+  }
+
   function suggestStakeForEdge(best) {
     if (!best || best.askCents == null) return null;
     const bank = sizingBankroll();
-    const hardCap = Math.max(
+    const askCents = Number(best.askCents);
+    const askCap = askStakeCap(askCents);
+    let hardCap = Math.max(
       BUY_AMOUNT_MIN,
-      Math.min(BUY_AMOUNT_MAX, Math.floor(bank) || BUY_AMOUNT_MIN)
+      Math.min(BUY_AMOUNT_MAX, askCap, Math.floor(bank) || BUY_AMOUNT_MIN)
     );
+
+    // Cap total risk in the open position (~8% of bank). Remaining room is
+    // what Best Side may still suggest as an add.
+    const maxPosUsd = Math.max(BUY_AMOUNT_MIN, bank * 0.08);
+    const openRisk = openPositionRiskUsd();
+    const sameSideOpen =
+      !!(demo.position && best.side && demo.position.side === best.side);
+    if (sameSideOpen) {
+      const room = Math.max(0, maxPosUsd - openRisk);
+      if (room < BUY_AMOUNT_MIN) {
+        return {
+          stake: 0,
+          atRiskCap: true,
+          contracts: 0,
+          total: 0,
+          profitIfWin: 0,
+          roiIfWin: best.roiIfWin,
+          bankPct: bank > 0 ? (openRisk / bank) * 100 : 0,
+          pWin: Math.max(0.01, Math.min(0.99, Number(best.pWin) || 0.5)),
+          lowProb: false,
+          note: "max risk",
+        };
+      }
+      hardCap = Math.max(
+        BUY_AMOUNT_MIN,
+        Math.min(hardCap, Math.floor(room) || BUY_AMOUNT_MIN)
+      );
+    }
+
     const unit = roiForStake(best.askCents, Math.min(10, hardCap));
     if (!unit || unit.empty || !(unit.contracts > 0)) return null;
     const costPer = unit.total / unit.contracts;
@@ -3869,26 +3950,40 @@
 
     // Full Kelly for $1 payout contracts priced at costPer.
     const kellyFull = edge / (1 - costPer);
-    // Stronger model edge → allow a bit more of Kelly; still fractional.
     const edgeStrength = Math.min(
       1,
       Math.max(0, (Number(best.score) - 0.04) / 0.18)
     );
-    const kellyShare = 0.22 + 0.18 * edgeStrength; // ~22–40% Kelly
-    // Cap bankroll risk: ~3–10% (minimal risk / balance).
-    let maxBankPct = 0.03 + 0.07 * edgeStrength;
-    // Cheap ask (high ROI) can use more of the risk budget; expensive ask less.
-    const roi = Number(best.roiIfWin);
-    if (Number.isFinite(roi)) {
-      if (roi >= 120) maxBankPct *= 1.15;
-      else if (roi < 40) maxBankPct *= 0.7;
-    }
-    maxBankPct = Math.min(0.12, Math.max(0.025, maxBankPct));
+    // More conservative than before (~12–24% Kelly, ~2–6% bank).
+    let kellyShare = 0.12 + 0.12 * edgeStrength;
+    let maxBankPct = 0.02 + 0.04 * edgeStrength;
+
+    // Cheap / high-ROI asks: SHRINK size (model noise looks like huge edge).
+    if (askCents <= 12) maxBankPct *= 0.25;
+    else if (askCents <= 20) maxBankPct *= 0.4;
+    else if (askCents <= 30) maxBankPct *= 0.6;
+    else if (askCents <= 40) maxBankPct *= 0.8;
+    else if (askCents >= 70) maxBankPct *= 0.75;
+
+    if (pWin < 0.48) maxBankPct *= 0.5;
+    else if (pWin < 0.55) maxBankPct *= 0.75;
+
+    // After a losing streak, cut suggestions hard.
+    const streak = recentLossStreak();
+    if (streak >= 3) maxBankPct *= 0.25;
+    else if (streak >= 2) maxBankPct *= 0.4;
+    else if (streak >= 1) maxBankPct *= 0.65;
+
+    // Late in the window — less size (settlement noise / thin books).
+    const secs = secondsLeft();
+    if (secs != null && secs < 3 * 60) maxBankPct *= 0.55;
+    else if (secs != null && secs < 6 * 60) maxBankPct *= 0.75;
+
+    maxBankPct = Math.min(0.06, Math.max(0.01, maxBankPct));
 
     const kellyUsd = bank * kellyFull * kellyShare;
     const riskUsd = bank * maxBankPct;
     let raw = Math.min(kellyUsd, riskUsd, hardCap);
-    // Need at least one contract after fees.
     const minForOne = Math.ceil(costPer * 100) / 100;
     raw = Math.max(raw, Math.min(hardCap, Math.max(BUY_AMOUNT_MIN, minForOne)));
 
@@ -3897,15 +3992,15 @@
     return {
       stake,
       pWin,
-      // Cheap longshots can screen as +EV on model noise; never present them
-      // as a "minimize risk" size.
+      atRiskCap: false,
       lowProb: pWin < 0.5,
       contracts: sized && !sized.empty ? sized.contracts : 0,
       total: sized && !sized.empty ? sized.total : stake,
       profitIfWin: sized && !sized.empty ? sized.profitIfWin : 0,
       roiIfWin: sized && !sized.empty ? sized.roiIfWin : unit.roiIfWin,
       bankPct: bank > 0 ? (stake / bank) * 100 : 0,
-      note: "¼-Kelly bal",
+      streak,
+      note: streak >= 2 ? "cooled after losses" : "¼-Kelly bal",
     };
   }
 
@@ -4105,7 +4200,28 @@
   function renderBestSideSuggest(side, suggestion, opts = {}) {
     if (!el.bestSideSuggest) return;
     const s = suggestion || (side ? suggestForSide(side) : null);
-    if (!side || !s || !(s.stake >= BUY_AMOUNT_MIN)) {
+    if (!side || !s) {
+      el.bestSideSuggest.hidden = true;
+      return;
+    }
+    if (s.atRiskCap) {
+      el.bestSideSuggest.hidden = false;
+      el.bestSideSuggest.classList.add("is-waiting");
+      el.bestSideSuggest.classList.remove("is-below");
+      const kicker = el.bestSideSuggest.querySelector(".best-side-suggest-kicker");
+      if (kicker) kicker.textContent = "Position sized";
+      if (el.bestSideSuggestAmount) {
+        el.bestSideSuggestAmount.textContent = "Hold — max risk";
+      }
+      if (el.bestSideSuggestMeta) {
+        const pct = bankPctText(s.bankPct);
+        el.bestSideSuggestMeta.textContent = pct
+          ? `Open position already risks ${pct} of balance`
+          : "Open position at max suggested risk";
+      }
+      return;
+    }
+    if (!(s.stake >= BUY_AMOUNT_MIN)) {
       el.bestSideSuggest.hidden = true;
       return;
     }
@@ -4148,10 +4264,12 @@
             : "";
         const bankTxt = bankPctText(s.bankPct);
         const bank = bankTxt ? `risks ${bankTxt} of balance` : "";
+        const cool =
+          s.streak >= 2 ? "cooled after losses" : s.streak >= 1 ? "sized down" : "";
         const lead = adding
           ? `${side === "above" ? "Above" : "Below"} add size`
           : `${side === "above" ? "Above" : "Below"}`;
-        el.bestSideSuggestMeta.textContent = [lead, roi, bank]
+        el.bestSideSuggestMeta.textContent = [lead, roi, bank, cool]
           .filter(Boolean)
           .join(" · ");
       }
@@ -4247,10 +4365,18 @@
     // EV-first clear edge (keep in sync with server score_clear_edge).
     // Dollar EV already embeds model vs all-in ask+fee — no absolute 52%/45%
     // win-rate floor (that blocked strong cheap-ask entries near 40–50%).
+    // Extra bar for lottery-cheap asks: model noise looks like huge EV there.
+    const askC = Number(best.askCents) || 0;
+    const cheapOk =
+      askC > 25 ||
+      (askC > 15
+        ? best.pWin >= 0.42 && best.ev >= 0.05
+        : best.pWin >= 0.5 && best.ev >= 0.08);
     const clear =
       best.ev >= 0.03 &&
       best.score > 0.05 &&
       best.pWin >= 0.30 &&
+      cheapOk &&
       !(secs > 12 * 60 && best.ev < 0.05);
 
     el.bestSide.hidden = false;
@@ -4297,8 +4423,13 @@
 
     lastClearEdgeGoneAt = 0;
     const suggestion = suggestStakeForEdge(best);
+    const atRiskCap = !!(suggestion && suggestion.atRiskCap);
     const suggestStake =
-      suggestion && suggestion.stake >= BUY_AMOUNT_MIN ? suggestion.stake : null;
+      !atRiskCap &&
+      suggestion &&
+      suggestion.stake >= BUY_AMOUNT_MIN
+        ? suggestion.stake
+        : null;
     if (suggestStake != null && suggestion) {
       best = {
         ...best,
@@ -4315,6 +4446,7 @@
       pWin: best.pWin,
       suggestedStake: suggestStake,
       suggestion,
+      atRiskCap,
     };
     const suggestKey = `${lastTicker || "?"}:${best.side}:${Math.round(
       Number(best.askCents) || 0
@@ -4332,7 +4464,15 @@
     const openPos = demo.position;
     const sameAsOpen = !!(openPos && openPos.side === best.side);
     const oppositeOpen = !!(openPos && openPos.side !== best.side);
-    const label = oppositeOpen
+    const label = atRiskCap
+      ? sameAsOpen
+        ? best.side === "above"
+          ? "HOLD ABOVE"
+          : "HOLD BELOW"
+        : best.side === "above"
+          ? "BUY ABOVE"
+          : "BUY BELOW"
+      : oppositeOpen
       ? best.side === "above"
         ? "BEST ABOVE"
         : "BEST BELOW"
@@ -4345,7 +4485,9 @@
           : "BUY BELOW";
     if (el.bestSideLabel) el.bestSideLabel.textContent = label;
     if (el.bestSideAmount) {
-      if (oppositeOpen) {
+      if (atRiskCap && sameAsOpen) {
+        el.bestSideAmount.textContent = "Max risk — no add suggested";
+      } else if (oppositeOpen) {
         el.bestSideAmount.textContent =
           suggestStake != null
             ? `Best entry $${suggestStake} · close to flip`
@@ -4380,12 +4522,15 @@
         : oppositeOpen
           ? ` · opposite your open ${openPos.side === "above" ? "Above" : "Below"}`
           : "";
-      const sizeNote =
-        suggestion && suggestStake != null
+      const sizeNote = atRiskCap
+        ? " · hold size"
+        : suggestion && suggestStake != null
           ? ` · ~${suggestion.bankPct.toFixed(0)}% bal`
           : "";
+      const coolNote =
+        suggestion && suggestion.streak >= 2 ? " · cooled" : "";
       el.bestSideMeta.textContent =
-        `${conf}% model · ask ${best.askCents}¢ · ${roiTxt}${sizeNote} · live ${
+        `${conf}% model · ask ${best.askCents}¢ · ${roiTxt}${sizeNote}${coolNote} · live ${
           lead >= 0 ? "+" : ""
         }$${lead.toFixed(0)} · ${m}:${String(s).padStart(2, "0")} left${openNote}`;
     }
@@ -4397,9 +4542,11 @@
     });
     setRoiCardBest(best.side);
     setDockBestDetail(
-      suggestStake != null
-        ? `${best.side === "above" ? "Above" : "Below"} $${suggestStake}`
-        : `${best.side === "above" ? "Above" : "Below"} ${best.askCents}¢`,
+      atRiskCap && sameAsOpen
+        ? "Hold · max risk"
+        : suggestStake != null
+          ? `${best.side === "above" ? "Above" : "Below"} $${suggestStake}`
+          : `${best.side === "above" ? "Above" : "Below"} ${best.askCents}¢`,
       best.side
     );
 
@@ -4416,7 +4563,8 @@
       edgeAlertsArmed = true;
       // Still fire once when alerts are on — opening onto a live BUY suggestion
       // used to arm quietly and skip the only alert for that edge.
-      if (chimeOn) {
+      // Skip when already at max open risk (no add suggested).
+      if (chimeOn && !atRiskCap) {
         alertClearEdge(best);
       } else {
         const ask = Math.round(Number(best.askCents) || 0);
@@ -4433,7 +4581,7 @@
       }
       return;
     }
-    alertClearEdge(best);
+    if (!atRiskCap) alertClearEdge(best);
   }
 
   function fillRoiCard(priceEl, summaryEl, detailEl, askCents, stakeUsd) {

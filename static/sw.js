@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.3-edge-fallback";
+const SW_VERSION = "3.4-edge-always";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const STATE_KEY = "kalshiFifteenState";

@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.16";
+  const APP_VERSION = "9.17";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -23,6 +23,7 @@
   const DAY_EQUITY_KEY = "beatlineDayEquity";
   const SUGGEST_LOG_KEY = "beatlineSuggestLog";
   const SUGGEST_LOG_LIMIT = 80;
+  const VAPID_CACHE_KEY = "beatlineVapidPublic";
   const CHIME_GAP_MS = 4_500;
 
   function loadPlUi() {
@@ -291,11 +292,13 @@
   let lastBestSideKey = null;
   let bestSideFlashTimer = null;
   let lastBestPick = null; // { side } | null when clear edge
-  let lastClearEdgeAlertKey = loadStoredEdgeAlertKey();
+  // Do NOT restore a prior edge key on boot — that blocked Best Side alerts
+  // after reopen when a suggestion was already on screen.
+  let lastClearEdgeAlertKey = null;
   let lastClearEdgeAlertAt = 0;
   let lastClearEdgeGoneAt = 0;
-  const EDGE_ALERT_COOLDOWN_MS = 120_000;
-  const EDGE_GONE_RESET_MS = 60_000;
+  const EDGE_ALERT_COOLDOWN_MS = 90_000;
+  const EDGE_GONE_RESET_MS = 45_000;
   let edgeAlertsArmed = false;
   let lastChimeAt = 0;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
@@ -2984,7 +2987,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.3", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.4", { scope: "/" });
       await navigator.serviceWorker.ready;
       return reg;
     } catch (err) {
@@ -3045,16 +3048,16 @@
     if (el.alertsStatusLine) {
       if (on) {
         el.alertsStatusLine.textContent =
-          "On — chime + notification for Best Side & new 15m targets";
+          "On — chime + notification for Best Side suggestions (foreground & background)";
       } else if (chimeOn && "Notification" in window && Notification.permission === "denied") {
         el.alertsStatusLine.textContent =
-          "Blocked — Chrome site settings → Notifications → Allow, then tap Enable";
+          "Blocked — site settings → Notifications → Allow, then Enable";
       } else if (chimeOn && "Notification" in window && Notification.permission !== "granted") {
         el.alertsStatusLine.textContent =
-          "Off — tap Enable (or the bell) and Allow Notifications";
+          "Off — tap Enable and Allow Notifications (needed for background)";
       } else {
         el.alertsStatusLine.textContent =
-          "Off — tap Enable for Best Side / new-window alerts";
+          "Off — tap Enable for Best Side buy alerts";
       }
     }
     if (el.alertsEnable) {
@@ -3062,12 +3065,11 @@
       el.alertsEnable.classList.toggle("primary", !on);
       el.alertsEnable.classList.toggle("ghost", on);
     }
-    // Persistent main-screen hint when alerts are not fully armed.
     if (!on) {
       if ("Notification" in window && Notification.permission === "denied") {
-        setBgStatus(false, "Alerts blocked — allow Notifications in site settings, then tap 🔔");
+        setBgStatus(false, "Alerts blocked — allow Notifications, then tap 🔔");
       } else {
-        setBgStatus(false, "Alerts off — tap 🔔 then Allow, or Options → Enable");
+        setBgStatus(false, "Alerts off — tap 🔔 → Allow, or Options → Enable");
       }
     } else {
       setBgStatus(null, "");
@@ -3146,18 +3148,50 @@
       const keyRes = await fetch("/api/push/vapid-public", { cache: "no-store" });
       const keyData = await keyRes.json();
       if (!keyData.ok || !keyData.publicKey) return false;
+      const publicKey = String(keyData.publicKey);
+      let cachedKey = null;
+      try {
+        cachedKey = localStorage.getItem(VAPID_CACHE_KEY);
+      } catch {
+        // ignore
+      }
       let sub = await reg.pushManager.getSubscription();
+      // Render restarts regenerate VAPID keys — old subs go dead (subscribers: 0).
+      if (sub && cachedKey && cachedKey !== publicKey) {
+        try {
+          await fetch("/api/push/unsubscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint: sub.endpoint }),
+          });
+        } catch {
+          // ignore
+        }
+        try {
+          await sub.unsubscribe();
+        } catch {
+          // ignore
+        }
+        sub = null;
+      }
       if (!sub) {
         sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(keyData.publicKey),
+          applicationServerKey: urlBase64ToUint8Array(publicKey),
         });
       }
-      await fetch("/api/push/subscribe", {
+      const res = await fetch("/api/push/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subscription: sub.toJSON() }),
       });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.ok === false) return false;
+      try {
+        localStorage.setItem(VAPID_CACHE_KEY, publicKey);
+      } catch {
+        // ignore
+      }
       postToSW({ type: "set-chime", enabled: chimeOn });
       return true;
     } catch (err) {
@@ -3250,6 +3284,8 @@
 
     const visible =
       document.visibilityState === "visible" && !document.hidden;
+    const canNotify =
+      "Notification" in window && Notification.permission === "granted";
     const notifyPayload = {
       type: "edge-notify",
       side,
@@ -3258,27 +3294,25 @@
       suggestStake: sug,
       ticker: lastTicker || lastFifteenTicker,
       beat: lastTarget,
+      force: true,
     };
 
-    // Resume audio, then chime. If audio can't run while the app is open,
-    // force a system notification — otherwise edge-armed would silence SW too.
+    // Always try chime + vibrate when visible. Always force a system
+    // notification when permission is granted — silent phones miss WebAudio.
     ensureAudioReady().then((ctx) => {
-      const audioOk = !!ctx;
       if (visible) {
-        if (audioOk) playEdgeChime(true);
+        if (ctx) playEdgeChime(true);
         vibrateEdge();
-        if (!audioOk && "Notification" in window && Notification.permission === "granted") {
-          postToSW({ ...notifyPayload, force: true });
-        } else {
-          postToSW({
-            type: "edge-armed",
-            side,
-            askCents: ask || null,
-            chimeOn,
-          });
-        }
-      } else {
+      }
+      if (canNotify) {
         postToSW(notifyPayload);
+      } else {
+        postToSW({
+          type: "edge-armed",
+          side,
+          askCents: ask || null,
+          chimeOn,
+        });
       }
     });
   }
@@ -4074,20 +4108,24 @@
       flashBestSide();
     }
     if (!edgeAlertsArmed) {
-      // Quietly adopt whatever edge is already clear so opening the app
-      // doesn't dump a pile of tones for a market that was already edged.
       edgeAlertsArmed = true;
-      const ask = Math.round(Number(best.askCents) || 0);
-      lastClearEdgeAlertKey = `${best.side}:${ask}`;
-      lastClearEdgeAlertAt = Date.now();
-      lastClearEdgeGoneAt = 0;
-      persistEdgeAlertKey(lastClearEdgeAlertKey);
-      postToSW({
-        type: "edge-armed",
-        side: best.side,
-        askCents: ask || null,
-        chimeOn,
-      });
+      // Still fire once when alerts are on — opening onto a live BUY suggestion
+      // used to arm quietly and skip the only alert for that edge.
+      if (chimeOn) {
+        alertClearEdge(best);
+      } else {
+        const ask = Math.round(Number(best.askCents) || 0);
+        lastClearEdgeAlertKey = `${best.side}:${ask}`;
+        lastClearEdgeAlertAt = Date.now();
+        lastClearEdgeGoneAt = 0;
+        persistEdgeAlertKey(lastClearEdgeAlertKey);
+        postToSW({
+          type: "edge-armed",
+          side: best.side,
+          askCents: ask || null,
+          chimeOn,
+        });
+      }
       return;
     }
     alertClearEdge(best);
@@ -5427,8 +5465,14 @@
         }
         refreshTarget({ forceCandles: true });
       } else {
-        // Page hidden — SW poll + server Web Push carry audible alerts.
-        // Do NOT edge-notify on every hide (that renotify-spammed on return).
+        // Page hidden — re-upsert push, then SW poll + server Web Push.
+        if (
+          chimeOn &&
+          "Notification" in window &&
+          Notification.permission === "granted"
+        ) {
+          subscribePush().catch(() => {});
+        }
         postToSW({
           type: "arm-state",
           ticker: lastFifteenTicker,
@@ -5453,8 +5497,23 @@
     ensureServiceWorker().then(async (reg) => {
       swReg = reg;
       postToSW({ type: "set-chime", enabled: chimeOn });
-      if (chimeOn) {
-        subscribePush().catch(() => {});
+      // Always re-register with the server when permission is already granted —
+      // Render restarts wipe subscribers and rotate VAPID keys.
+      if (
+        chimeOn &&
+        "Notification" in window &&
+        Notification.permission === "granted"
+      ) {
+        const ok = await subscribePush().catch(() => false);
+        if (ok) localStorage.setItem(BG_ARMED_KEY, "1");
+        else {
+          localStorage.setItem(BG_ARMED_KEY, "0");
+          setBgStatus(
+            false,
+            "Background push not registered — Options → Enable, then Test"
+          );
+        }
+        syncAlertsUi();
       }
       if (reg && "periodicSync" in reg) {
         try {

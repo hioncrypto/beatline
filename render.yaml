@@ -2,6 +2,8 @@
 # https://render.com/deploy?repo=https://github.com/hioncrypto/beatline
 #
 # Free plan: URL stays the same. Sleeps after ~15m idle; wakes on next visit.
+# Optional: set VAPID_PUBLIC_KEY + VAPID_PRIVATE_PEM as Render secrets so push
+# subscriptions survive restarts (disk is ephemeral on free).
 
 services:
   - type: web
@@ -18,3 +20,7 @@ services:
         value: 0.0.0.0
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_PEM
+        sync: false

@@ -851,7 +851,11 @@ def fetch_candles(granularity: int = 60, limit: int = 300) -> dict:
 
 
 def ensure_vapid_keys() -> tuple[str | None, str | None]:
-    """Return (applicationServerKey, private_pem_path)."""
+    """Return (applicationServerKey, private_pem_path).
+
+    Prefer env VAPID_PRIVATE_PEM + VAPID_PUBLIC_KEY so Render restarts don't
+    wipe keys (ephemeral disk) and kill all push subscriptions.
+    """
     global _vapid_app_server_key, _vapid_private_path
     if _vapid_app_server_key and _vapid_private_path:
         return _vapid_app_server_key, _vapid_private_path
@@ -862,6 +866,17 @@ def ensure_vapid_keys() -> tuple[str | None, str | None]:
     except Exception as exc:
         print(f"[kalshi-btc-target] Web Push unavailable (install pywebpush): {exc}")
         return None, None
+
+    env_pub = (os.environ.get("VAPID_PUBLIC_KEY") or "").strip()
+    env_priv = (os.environ.get("VAPID_PRIVATE_PEM") or "").strip()
+    if env_pub and env_priv:
+        priv_path = DATA_DIR / "vapid_private_env.pem"
+        priv_path.write_text(env_priv if env_priv.endswith("\n") else env_priv + "\n")
+        VAPID_PUBLIC_RAW.write_text(env_pub)
+        _vapid_app_server_key = env_pub
+        _vapid_private_path = str(priv_path)
+        print("[kalshi-btc-target] VAPID keys loaded from environment")
+        return _vapid_app_server_key, _vapid_private_path
 
     vapid = Vapid()
     if VAPID_PRIVATE.is_file() and VAPID_PUBLIC_RAW.is_file():
@@ -876,6 +891,10 @@ def ensure_vapid_keys() -> tuple[str | None, str | None]:
         )
         app_key = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
         VAPID_PUBLIC_RAW.write_text(app_key)
+        print(
+            "[kalshi-btc-target] generated new VAPID keys — set VAPID_PUBLIC_KEY + "
+            "VAPID_PRIVATE_PEM on Render to keep push alive across restarts"
+        )
 
     _vapid_app_server_key = app_key
     _vapid_private_path = str(VAPID_PRIVATE)

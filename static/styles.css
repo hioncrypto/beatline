@@ -3343,7 +3343,7 @@ body.portrait-app #chart {
 }
 
 .open-pl-bar.is-collapsed {
-  padding-bottom: 4px;
+  padding-bottom: 6px;
 }
 
 .open-pl-bar.is-collapsed .open-pl-body {
@@ -3352,6 +3352,8 @@ body.portrait-app #chart {
 
 .open-pl-bar.is-collapsed .open-pl-peek {
   display: block;
+  font-size: 0.78rem;
+  padding: 2px 0 2px;
 }
 
 .open-pl-bar:not(.is-collapsed) .open-pl-peek {

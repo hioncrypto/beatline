@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=9.21" />
+    <link rel="stylesheet" href="/styles.css?v=9.22" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=9.21" defer></script>
+    <script src="/app.js?v=9.22" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -176,17 +176,17 @@
         <div id="demo-live-meta" class="demo-live-meta" hidden>—</div>
       </div>
     </section>
+    <div
+      id="chart-resize-top"
+      class="chart-resize chart-resize-top"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Drag to resize chart from the top"
+      title="Drag to resize chart"
+    >
+      <span class="chart-resize-bar" aria-hidden="true"></span>
+    </div>
     <section id="chart-wrap" class="chart-wrap">
-      <div
-        id="chart-resize-top"
-        class="chart-resize chart-resize-top"
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Drag to resize chart from the top"
-        title="Drag to resize chart"
-      >
-        <span class="chart-resize-bar" aria-hidden="true"></span>
-      </div>
       <div
         id="timeframe"
         class="tf-btns"
@@ -198,17 +198,18 @@
         <button type="button" class="tf-btn" data-tf="1m" aria-pressed="false">1m</button>
       </div>
       <main id="chart" role="img" aria-label="Bitcoin chart with Price to beat line"></main>
-      <div
-        id="chart-resize-bottom"
-        class="chart-resize chart-resize-bottom"
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Drag to resize chart from the bottom"
-        title="Drag to resize chart"
-      >
-        <span class="chart-resize-bar" aria-hidden="true"></span>
-      </div>
     </section>
+    <div
+      id="chart-resize-bottom"
+      class="chart-resize chart-resize-bottom"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Drag to expand or shrink the chart"
+      title="Drag to expand or shrink the chart"
+    >
+      <span class="chart-resize-bar" aria-hidden="true"></span>
+      <span class="chart-resize-label">Chart size</span>
+    </div>
 
     <!-- Best Side pinned above the scrollable odds/ROI strip (no overlay ghosting). -->
     <section class="trade-stack">

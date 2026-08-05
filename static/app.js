@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.21";
+  const APP_VERSION = "9.22";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -1688,12 +1688,18 @@
       el.openPlBar && !el.openPlBar.hidden
         ? el.openPlBar.getBoundingClientRect().height
         : 0;
+    const topGrip = el.chartResizeTop
+      ? el.chartResizeTop.getBoundingClientRect().height
+      : 28;
+    const botGrip = el.chartResizeBottom
+      ? el.chartResizeBottom.getBoundingClientRect().height
+      : 34;
     // Trade stack (Best Side + odds/ROI) must keep a usable band.
     const minTrade = 130;
-    const minChart = 160;
+    const minChart = 140;
     const maxChart = Math.max(
       minChart,
-      shellH - topH - summaryH - dockH - openPlH - minTrade - 8
+      shellH - topH - summaryH - dockH - openPlH - topGrip - botGrip - minTrade - 8
     );
     return {
       minChart,
@@ -1704,6 +1710,8 @@
       summaryH,
       dockH,
       openPlH,
+      topGrip,
+      botGrip,
     };
   }
 
@@ -1722,8 +1730,18 @@
       setTimeout(resizeChart, 40);
       return;
     }
-    const { minChart, maxChart, minTrade, shellH, topH, summaryH, dockH, openPlH } =
-      chartHeightLimits();
+    const {
+      minChart,
+      maxChart,
+      minTrade,
+      shellH,
+      topH,
+      summaryH,
+      dockH,
+      openPlH,
+      topGrip,
+      botGrip,
+    } = chartHeightLimits();
     chartHeightPx = Math.round(Math.min(maxChart, Math.max(minChart, px)));
     el.chartWrap.style.setProperty("flex", `0 0 ${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("height", `${chartHeightPx}px`, "important");
@@ -1732,7 +1750,7 @@
     // One leftover band for Best Side + scrollable odds/ROI (no sibling overlap).
     const leftover = Math.max(
       minTrade,
-      shellH - topH - summaryH - chartHeightPx - dockH - openPlH - 8
+      shellH - topH - summaryH - chartHeightPx - dockH - openPlH - topGrip - botGrip - 8
     );
     if (el.tradeStack) {
       el.tradeStack.style.maxHeight = `${Math.round(leftover)}px`;
@@ -4678,13 +4696,8 @@
     let height = el.chart.clientHeight || 0;
     if ((height < 120 || width < 40) && wrap) {
       const tf = wrap.querySelector(".tf-btns");
-      const topGrip = wrap.querySelector(".chart-resize-top");
-      const botGrip = wrap.querySelector(".chart-resize-bottom");
-      const chrome =
-        (tf ? tf.offsetHeight : 0) +
-        (topGrip ? topGrip.offsetHeight : 0) +
-        (botGrip ? botGrip.offsetHeight : 0);
-      height = Math.max(height, wrap.clientHeight - chrome - 2);
+      const tfH = tf ? tf.offsetHeight : 0;
+      height = Math.max(height, wrap.clientHeight - tfH - 2);
     }
     const w = Math.max(1, Math.floor(width || 1));
     const h = Math.max(1, Math.floor(height || 1));

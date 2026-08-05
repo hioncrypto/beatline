@@ -2690,11 +2690,11 @@ body.portrait-app {
 }
 
 body.has-open-pl .app-shell {
-  padding-bottom: calc(148px + var(--safe-bottom));
+  padding-bottom: calc(168px + var(--safe-bottom));
 }
 
 body.has-open-pl.open-pl-collapsed .app-shell {
-  padding-bottom: calc(88px + var(--safe-bottom));
+  padding-bottom: calc(118px + var(--safe-bottom));
 }
 
 body.has-open-pl .summary-panel:not(.is-collapsed) {
@@ -2764,6 +2764,10 @@ body.has-open-pl .app-shell > .trade-stack > .best-side {
   min-height: auto;
 }
 
+.app-shell > .chart-resize {
+  flex: 0 0 auto;
+}
+
 .app-shell > .trade-stack {
   flex: 0 1 auto;
   min-height: 0;
@@ -2802,46 +2806,66 @@ body.chart-height-locked .app-shell > .chart-wrap {
   min-height: 0 !important;
 }
 
-/* Resize grips live inside the chart wrap so they can't float over Best Side. */
-.chart-wrap > .chart-resize {
-  flex: 0 0 auto;
+/* Chart size grips sit outside the chart wrap so they never clip away. */
+.app-shell > .chart-resize {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 22px;
-  margin: 0;
+  gap: 2px;
+  height: 28px;
+  margin: 0 8px;
   padding: 0;
   touch-action: none;
   cursor: row-resize;
   -webkit-user-select: none;
   user-select: none;
   position: relative;
-  z-index: 5;
+  z-index: 6;
   background: #0b1210;
   pointer-events: auto;
 }
 
-.chart-wrap > .chart-resize-top {
+.app-shell > .chart-resize-top {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.chart-wrap > .chart-resize-bottom {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+.app-shell > .chart-resize-bottom {
+  height: 34px;
+  margin: 0 8px 2px;
+  border: 1px solid rgba(26, 201, 107, 0.28);
+  border-radius: 10px;
+  background: #101a15;
 }
 
 .chart-resize-bar {
   width: 48px;
   height: 5px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.4);
   transition: background 0.12s ease, width 0.12s ease;
   pointer-events: none;
+}
+
+.chart-resize-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  pointer-events: none;
+  line-height: 1;
 }
 
 .chart-resize.is-dragging .chart-resize-bar,
 .chart-resize:active .chart-resize-bar {
   width: 64px;
   background: rgba(26, 201, 107, 0.85);
+}
+
+.chart-resize.is-dragging .chart-resize-label,
+.chart-resize:active .chart-resize-label {
+  color: var(--accent);
 }
 
 body.is-resizing-chart {
@@ -2907,7 +2931,7 @@ body.portrait-app .live-time {
 .app-shell > .chart-wrap > #chart,
 body.portrait-app #chart {
   flex: 1 1 auto !important;
-  min-height: 160px !important;
+  min-height: 100px !important;
   height: auto !important;
 }
 
@@ -3116,7 +3140,7 @@ body.portrait-app #chart {
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 20;
+  z-index: 30;
   margin: 0;
   top: auto;
   display: grid;
@@ -3124,7 +3148,6 @@ body.portrait-app #chart {
   gap: 8px;
   padding: 8px 10px calc(8px + var(--safe-bottom));
   border-top: 1px solid var(--border);
-  /* Keep dock from covering trade-panel text */
   box-shadow: 0 -8px 20px rgba(0, 0, 0, 0.35);
   background: rgba(8, 14, 11, 0.97);
   backdrop-filter: blur(8px);
@@ -3134,8 +3157,9 @@ body.portrait-app #chart {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: calc(56px + var(--safe-bottom));
-  z-index: 19;
+  /* Sit fully above the buy dock (dock ~64px + safe area). */
+  bottom: calc(72px + var(--safe-bottom));
+  z-index: 31;
   margin: 0;
   padding: 0 0 8px;
   border-top: 1px solid rgba(255, 210, 138, 0.35);

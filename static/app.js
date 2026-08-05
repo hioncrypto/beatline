@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 60;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.15";
+  const APP_VERSION = "9.16";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -2677,29 +2677,81 @@
   }
 
   function resolveOutcomeForTicker(ticker, beatHint) {
-    const hinted = settleHintByTicker[ticker];
+    const hinted = ticker ? settleHintByTicker[ticker] : null;
     if (hinted === "above" || hinted === "below") return hinted;
     if (lastSettlementSide === "above" || lastSettlementSide === "below") {
       if (!ticker || ticker === lastTicker) return lastSettlementSide;
     }
-    const spotRaw = el.spotValue && el.spotValue.dataset.last;
-    const spot = spotRaw != null ? Number(spotRaw) : null;
     const beat =
       beatHint != null && Number.isFinite(beatHint)
         ? beatHint
         : lastTarget;
+    // Prefer Kalshi settlement average over live tick — live can reverse after 0:00.
+    if (
+      lastSettlementAvg != null &&
+      Number.isFinite(lastSettlementAvg) &&
+      beat != null &&
+      Number.isFinite(beat)
+    ) {
+      return lastSettlementAvg >= beat ? "above" : "below";
+    }
+    const spotRaw = el.spotValue && el.spotValue.dataset.last;
+    const spot = spotRaw != null ? Number(spotRaw) : null;
     if (spot != null && Number.isFinite(spot) && beat != null && Number.isFinite(beat)) {
       return spot >= beat ? "above" : "below";
     }
     return null;
   }
 
-  function settleDemoPosition(tickerJustClosed) {
+  function windowHasClosed(data) {
+    if (!data) return false;
+    if (data.stale_previous || data.waiting_next) return true;
+    if (data.seconds_to_close != null && Number(data.seconds_to_close) <= 0) {
+      return true;
+    }
+    const closeIso = data.close_time || closeTimeIso;
+    if (closeIso) {
+      const ms = Date.parse(closeIso);
+      if (Number.isFinite(ms) && ms <= Date.now()) return true;
+    }
+    return false;
+  }
+
+  function settleDemoPosition(tickerJustClosed, opts = {}) {
     const pos = demo.position;
-    if (!pos) return;
-    if (tickerJustClosed && pos.ticker && pos.ticker !== tickerJustClosed) return;
-    const outcome = resolveOutcomeForTicker(pos.ticker, pos.beat);
-    if (!outcome) return;
+    if (!pos) return false;
+    if (tickerJustClosed && pos.ticker && pos.ticker !== tickerJustClosed) {
+      return false;
+    }
+    if (opts.settleSide === "above" || opts.settleSide === "below") {
+      if (pos.ticker) settleHintByTicker[pos.ticker] = opts.settleSide;
+    }
+    let outcome = resolveOutcomeForTicker(pos.ticker, pos.beat);
+    if (!outcome && opts.force) {
+      const beat =
+        pos.beat != null && Number.isFinite(Number(pos.beat))
+          ? Number(pos.beat)
+          : lastTarget;
+      const avg =
+        opts.settleAvg != null && Number.isFinite(opts.settleAvg)
+          ? Number(opts.settleAvg)
+          : lastSettlementAvg;
+      if (avg != null && Number.isFinite(avg) && beat != null && Number.isFinite(beat)) {
+        outcome = avg >= beat ? "above" : "below";
+      } else {
+        const spotRaw = el.spotValue && el.spotValue.dataset.last;
+        const spot = spotRaw != null ? Number(spotRaw) : null;
+        if (
+          spot != null &&
+          Number.isFinite(spot) &&
+          beat != null &&
+          Number.isFinite(beat)
+        ) {
+          outcome = spot >= beat ? "above" : "below";
+        }
+      }
+    }
+    if (!outcome) return false;
     const won = outcome === pos.side;
     const payout = won ? pos.contracts * 1 : 0;
     const pl = Math.round((payout - pos.total) * 100) / 100;
@@ -2716,11 +2768,11 @@
       ticker: pos.ticker,
       text: accounted
         ? won
-          ? `WIN ${sideLabel} · ${money(pl)} · bal ${money(demo.balance)}`
-          : `LOSS ${sideLabel} · ${money(pl)} · bal ${money(demo.balance)}`
+          ? `SETTLED WIN ${sideLabel} · ${money(pl)} · bal ${money(demo.balance)}`
+          : `SETTLED LOSS ${sideLabel} · ${money(pl)} · bal ${money(demo.balance)}`
         : won
-          ? `WIN ${sideLabel} · ${money(pl)} · paper`
-          : `LOSS ${sideLabel} · ${money(pl)} · paper`,
+          ? `SETTLED WIN ${sideLabel} · ${money(pl)} · paper`
+          : `SETTLED LOSS ${sideLabel} · ${money(pl)} · paper`,
     };
     pushTradeHistory({
       id: `${Date.now()}-${pos.ticker || "x"}`,
@@ -2747,6 +2799,46 @@
     renderDemoUi();
     renderStrategyReport();
     setStatus(won ? "ok" : "warn", demo.lastResult.text);
+    return true;
+  }
+
+  /** Settle an open demo trade once its 15m window is over. */
+  function trySettleOpenAfterClose(data, prevTicker, prevSettleSide, prevSettleAvg) {
+    const pos = demo.position;
+    if (!pos) return false;
+    const closed = windowHasClosed(data);
+    const rolled =
+      !!(prevTicker && data && data.ticker && prevTicker !== data.ticker) ||
+      !!(data && data.waiting_next);
+
+    if (prevTicker && (prevSettleSide === "above" || prevSettleSide === "below")) {
+      settleHintByTicker[prevTicker] = prevSettleSide;
+    }
+    if (
+      data &&
+      (data.settlement_side === "above" || data.settlement_side === "below")
+    ) {
+      const tipTicker = data.ticker || prevTicker || pos.ticker;
+      if (tipTicker) settleHintByTicker[tipTicker] = data.settlement_side;
+    }
+
+    // Still inside the live window — keep marking, don't settle yet.
+    if (!closed && !rolled) return false;
+
+    const targetTicker =
+      rolled && prevTicker && pos.ticker === prevTicker
+        ? prevTicker
+        : pos.ticker;
+    return settleDemoPosition(targetTicker, {
+      force: true,
+      settleSide: prevSettleSide || data.settlement_side || null,
+      settleAvg:
+        prevSettleAvg != null
+          ? prevSettleAvg
+          : data.settlement_avg != null
+            ? data.settlement_avg
+            : lastSettlementAvg,
+    });
   }
 
   function ensureAudio() {
@@ -4351,6 +4443,17 @@
           : "Until this 15m window ends";
     }
     if (totalSec <= 25) startRolloverBurst();
+    // Clock at 0:00 with an open trade — force a settle attempt even if the
+    // next Kalshi ticker hasn't appeared yet.
+    if (totalSec <= 0 && demo.position) {
+      const side = lastSettlementSide;
+      const avg = lastSettlementAvg;
+      settleDemoPosition(demo.position.ticker, {
+        force: true,
+        settleSide: side,
+        settleAvg: avg,
+      });
+    }
     refreshBestSide();
     if (demo.position) renderDemoUi();
   }
@@ -4743,6 +4846,8 @@
       const beatOk = beat != null && Number.isFinite(beat) ? beat : null;
       const prevClose = closeTimeIso;
       const prevTicker = lastTicker;
+      const prevSettleSide = lastSettlementSide;
+      const prevSettleAvg = lastSettlementAvg;
       closeTimeIso = data.close_time || null;
       updateCountdown();
       updateSettlement(data);
@@ -4758,24 +4863,9 @@
         !!data.stale_previous ||
         !!data.waiting_next;
 
-      if (prevTicker && data.ticker && prevTicker !== data.ticker) {
-        if (
-          data.settlement_side === "above" ||
-          data.settlement_side === "below"
-        ) {
-          // Rare: payload already carries prior outcome.
-          settleHintByTicker[prevTicker] = data.settlement_side;
-        }
-        settleDemoPosition(prevTicker);
-      } else if (
-        demo.position &&
-        data.settlement_mode &&
-        (data.settlement_side === "above" || data.settlement_side === "below") &&
-        demo.position.ticker === data.ticker
-      ) {
-        settleHintByTicker[data.ticker] = data.settlement_side;
-        // Hold until window actually rolls so late fills aren't cut mid-settle.
-      }
+      // Auto-settle as soon as the clock hits zero / window is stale — don't
+      // wait for the next ticker (that gap left open trades stuck at 0:00).
+      trySettleOpenAfterClose(data, prevTicker, prevSettleSide, prevSettleAvg);
 
       if (rolled && (data.odds_fresh || data.stale_previous || data.yes_pct == null)) {
         updateOdds({
@@ -4798,8 +4888,7 @@
       }
 
       if ((!data.ok && beatOk == null) || data.waiting_next) {
-        if (prevTicker) settleDemoPosition(prevTicker);
-        else if (demo.position) settleDemoPosition(demo.position.ticker);
+        trySettleOpenAfterClose(data, prevTicker, prevSettleSide, prevSettleAvg);
         setStatus("warn", data.error || "Waiting for next window");
         el.targetValue.textContent = beatOk != null ? money(beatOk) : "—";
         el.targetMeta.textContent = data.error || "Next Kalshi 15m opening…";

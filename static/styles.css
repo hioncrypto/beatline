@@ -2402,19 +2402,10 @@ body.has-open-pl .summary-panel {
   max-height: min(22dvh, 160px);
 }
 
+/* Keep Best Side + Buy Above/Below ROI cards visible while a trade is open
+   so you can still size adds from the live asks. Trade panel scrolls. */
 body.has-open-pl .trade-panel {
-  max-height: min(28dvh, 220px);
-}
-
-body.has-open-pl .app-shell > .chart-wrap {
-  flex: 1 1 auto !important;
-  min-height: 38dvh !important;
-}
-
-/* Keep Best Side visible while open so adds can follow the edge.
-   Hide the bulky ROI cards only — stake is set in the buy sheet. */
-body.has-open-pl .roi-panel {
-  display: none !important;
+  max-height: min(36dvh, 300px);
 }
 
 body.has-open-pl .best-side {

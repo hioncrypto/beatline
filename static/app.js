@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 40;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.10";
+  const APP_VERSION = "9.11";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -188,6 +188,7 @@
     openPlBar: document.getElementById("open-pl-bar"),
     openPlSide: document.getElementById("open-pl-side"),
     openPlValue: document.getElementById("open-pl-value"),
+    openPlBalance: document.getElementById("open-pl-balance"),
     openPlSub: document.getElementById("open-pl-sub"),
     openPlAdd: document.getElementById("open-pl-add"),
     openPlClose: document.getElementById("open-pl-close"),
@@ -1222,6 +1223,17 @@
     return { realized, open, total, hasOpen: !!(demo.position && mark) };
   }
 
+  /** Cash + open mark (what the account is worth if you closed now). */
+  function accountEquityNow(mark) {
+    if (!demo.on) return null;
+    const cash = Number(demo.balance);
+    if (!Number.isFinite(cash)) return null;
+    if (mark && mark.proceeds != null && Number.isFinite(mark.proceeds)) {
+      return Math.round((cash + mark.proceeds) * 100) / 100;
+    }
+    return Math.round(cash * 100) / 100;
+  }
+
   function loadChartHeightPx() {
     try {
       const n = Number(localStorage.getItem(CHART_HEIGHT_KEY));
@@ -1478,6 +1490,16 @@
         "is-down",
         !!(mark && mark.unrealized < 0)
       );
+    }
+    if (el.openPlBalance) {
+      const equity = accounted ? accountEquityNow(mark) : null;
+      if (equity != null) {
+        el.openPlBalance.hidden = false;
+        el.openPlBalance.textContent = `(${money(equity)})`;
+      } else {
+        el.openPlBalance.hidden = true;
+        el.openPlBalance.textContent = "";
+      }
     }
     if (el.openPlPeek) {
       const plTxt =

@@ -4425,10 +4425,19 @@
       el.countdown.textContent = "0:00";
       el.countdown.classList.add("urgent");
       if (el.countdownMeta) {
-        el.countdownMeta.textContent = "Window closed · loading next…";
+        el.countdownMeta.textContent = "Window closed · settling trade…";
       }
       startRolloverBurst();
+      // Lock the demo trade at close — don't leave it open to reverse.
+      if (demo.position) {
+        settleDemoPosition(demo.position.ticker, {
+          force: true,
+          settleSide: lastSettlementSide,
+          settleAvg: lastSettlementAvg,
+        });
+      }
       refreshBestSide();
+      if (demo.position) renderDemoUi();
       return;
     }
     const totalSec = Math.floor(ms / 1000);

@@ -1725,9 +1725,9 @@ h1 {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: linear-gradient(180deg, rgba(22, 53, 40, 0.5), rgba(12, 20, 16, 0.72));
-  overflow: auto;
-  max-height: min(42dvh, 320px);
-  min-height: 120px;
+  overflow: visible;
+  max-height: none;
+  min-height: auto;
 }
 
 .buy-dock {

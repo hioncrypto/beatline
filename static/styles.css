@@ -313,14 +313,18 @@ h1 {
 }
 
 .options-close {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.25);
+  background: rgba(0, 0, 0, 0.35);
   color: var(--fg);
-  font-size: 1rem;
+  font-size: 1.05rem;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+  z-index: 3;
 }
 
 .options-row {

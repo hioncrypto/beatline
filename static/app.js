@@ -4421,11 +4421,20 @@
       syncRotateGate();
       tryLockPortrait();
       resizeChart();
+      if (optionsOpen) resizePlChart();
     });
     if (typeof ResizeObserver === "function" && el.chart) {
       const ro = new ResizeObserver(() => resizeChart());
       ro.observe(el.chart);
       if (el.chart.parentElement) ro.observe(el.chart.parentElement);
+    }
+    if (typeof ResizeObserver === "function" && el.plChart) {
+      const plRo = new ResizeObserver(() => {
+        if (optionsOpen) {
+          resizePlChart();
+        }
+      });
+      plRo.observe(el.plChart);
     }
     window.addEventListener("orientationchange", afterOrientationSettle);
     if (screen.orientation && typeof screen.orientation.addEventListener === "function") {

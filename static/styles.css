@@ -2137,6 +2137,12 @@ h1 {
   gap: 8px;
 }
 
+/* Author `display:grid` overrides UA [hidden] — without this the Market
+   Chance Above/Below boxes stay visible as "—" when odds are briefly null. */
+.odds-row[hidden] {
+  display: none !important;
+}
+
 .odd {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -3032,7 +3038,8 @@ body.portrait-app #chart {
 }
 
 .roi-panel[hidden],
-.best-side[hidden] {
+.best-side[hidden],
+.odds-row[hidden] {
   display: none !important;
 }
 

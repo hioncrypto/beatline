@@ -12,7 +12,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 2000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.26";
+  const APP_VERSION = "9.27";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -4455,12 +4455,19 @@
     const yes = data && data.yes_pct;
     const no = data && data.no_pct;
     if (yes == null || no == null || !Number.isFinite(yes) || !Number.isFinite(no)) {
+      // Keep the last good Market Chance paint through brief Kalshi gaps /
+      // rollover blips — flashing "—" looked like the book was broken.
+      if (lastYesPct != null) {
+        if (el.oddsHint) {
+          el.oddsHint.textContent = "Refreshing book…";
+        }
+        return;
+      }
       el.oddsRow.hidden = true;
       el.yesPct.textContent = "—";
       el.noPct.textContent = "—";
       if (el.yesBook) el.yesBook.textContent = "—";
       if (el.noBook) el.noBook.textContent = "—";
-      lastYesPct = null;
       if (el.roiPanel) el.roiPanel.hidden = true;
       if (el.stakeStrip) el.stakeStrip.hidden = true;
       if (el.bestSide) el.bestSide.hidden = true;

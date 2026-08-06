@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.44";
+  const APP_VERSION = "9.45";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -3435,9 +3435,152 @@
         // ignore
       }
     }
-    // Return the context even if still suspended — callers still try to play;
-    // a later user gesture / pendingEdgeChime will finish the unlock.
     return ctx;
+  }
+
+  /** Build a short ascending WAV for HTMLAudio fallback (iOS-friendly). */
+  function buildChimeWavUrl(tones) {
+    const sr = 22050;
+    const gap = Math.floor(sr * 0.03);
+    let total = gap;
+    for (const tone of tones) total += Math.floor(sr * tone.d) + gap;
+    const data = new Float32Array(total);
+    let cursor = gap;
+    for (const tone of tones) {
+      const n = Math.floor(sr * tone.d);
+      for (let i = 0; i < n; i++) {
+        const t = i / sr;
+        const env = Math.min(1, i / (sr * 0.01)) * Math.min(1, (n - i) / (sr * 0.03));
+        data[cursor + i] = Math.sin(2 * Math.PI * tone.f * t) * 0.55 * env;
+      }
+      cursor += n + gap;
+    }
+    const bytes = new ArrayBuffer(44 + data.length * 2);
+    const view = new DataView(bytes);
+    const writeStr = (offset, str) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+    writeStr(0, "RIFF");
+    view.setUint32(4, 36 + data.length * 2, true);
+    writeStr(8, "WAVE");
+    writeStr(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sr, true);
+    view.setUint32(28, sr * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, "data");
+    view.setUint32(40, data.length * 2, true);
+    let o = 44;
+    for (let i = 0; i < data.length; i++) {
+      const s = Math.max(-1, Math.min(1, data[i]));
+      view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      o += 2;
+    }
+    return URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+  }
+
+  let edgeChimeUrl = null;
+  let targetChimeUrl = null;
+  let edgeAudioEl = null;
+  let targetAudioEl = null;
+  let audioUnlocked = false;
+
+  function getEdgeAudio() {
+    if (!edgeChimeUrl) {
+      edgeChimeUrl = buildChimeWavUrl([
+        { f: 740, d: 0.12 },
+        { f: 988, d: 0.14 },
+        { f: 1319, d: 0.28 },
+      ]);
+    }
+    if (!edgeAudioEl) {
+      edgeAudioEl = new Audio(edgeChimeUrl);
+      edgeAudioEl.preload = "auto";
+      edgeAudioEl.setAttribute("playsinline", "true");
+    }
+    return edgeAudioEl;
+  }
+
+  function getTargetAudio() {
+    if (!targetChimeUrl) {
+      targetChimeUrl = buildChimeWavUrl([
+        { f: 880, d: 0.18 },
+        { f: 1175, d: 0.28 },
+      ]);
+    }
+    if (!targetAudioEl) {
+      targetAudioEl = new Audio(targetChimeUrl);
+      targetAudioEl.preload = "auto";
+      targetAudioEl.setAttribute("playsinline", "true");
+    }
+    return targetAudioEl;
+  }
+
+  /** Call from a user gesture so later alert tones are allowed. */
+  function unlockAudioPlayback() {
+    const ctx = ensureAudio();
+    if (ctx && ctx.state === "suspended") {
+      ctx.resume().catch(() => {});
+    }
+    // Prime HTMLAudio — required on iOS before programmatic .play() works.
+    try {
+      const a = getEdgeAudio();
+      const wasMuted = a.muted;
+      a.muted = true;
+      const p = a.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => {
+          a.pause();
+          a.currentTime = 0;
+          a.muted = wasMuted;
+          audioUnlocked = true;
+        }).catch(() => {
+          a.muted = wasMuted;
+        });
+      } else {
+        a.pause();
+        a.currentTime = 0;
+        a.muted = wasMuted;
+        audioUnlocked = true;
+      }
+    } catch {
+      // ignore
+    }
+    audioUnlocked = true;
+  }
+
+  function playHtmlChime(kind) {
+    try {
+      const a = kind === "edge" ? getEdgeAudio() : getTargetAudio();
+      a.muted = false;
+      a.volume = 1;
+      a.currentTime = 0;
+      const p = a.play();
+      if (p && typeof p.then === "function") return p.then(() => true).catch(() => false);
+      return Promise.resolve(true);
+    } catch {
+      return Promise.resolve(false);
+    }
+  }
+
+  function scheduleOscTones(ctx, tones, wave, peakGain) {
+    const now = ctx.currentTime;
+    for (const tone of tones) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = wave;
+      osc.frequency.value = tone.f;
+      gain.gain.setValueAtTime(0.0001, now + tone.t);
+      gain.gain.exponentialRampToValueAtTime(peakGain, now + tone.t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + tone.t + tone.d);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + tone.t);
+      osc.stop(now + tone.t + tone.d + 0.02);
+    }
   }
 
   function vibrateEdge() {
@@ -3475,30 +3618,26 @@
     return true;
   }
 
-  function playChime(force) {
-    if (!chimeOn && !force) return;
-    if (document.visibilityState !== "visible") return;
-    if (!force && !canPlayTone()) return;
+  async function playChime(force) {
+    if (!chimeOn && !force) return false;
+    if (document.visibilityState !== "visible") return false;
+    if (!force && !canPlayTone()) return false;
     if (force) lastChimeAt = Date.now();
-    const ctx = ensureAudio();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const tones = [
-      { f: 880, t: 0.0, d: 0.18 },
-      { f: 1174.7, t: 0.14, d: 0.28 },
-    ];
-    for (const tone of tones) {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = tone.f;
-      gain.gain.setValueAtTime(0.0001, now + tone.t);
-      gain.gain.exponentialRampToValueAtTime(0.22, now + tone.t + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + tone.t + tone.d);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + tone.t);
-      osc.stop(now + tone.t + tone.d + 0.02);
+    let ok = await playHtmlChime("target");
+    if (!ok) {
+      const ctx = await ensureAudioReady();
+      if (ctx && ctx.state === "running") {
+        scheduleOscTones(
+          ctx,
+          [
+            { f: 880, t: 0.0, d: 0.18 },
+            { f: 1174.7, t: 0.14, d: 0.28 },
+          ],
+          "sine",
+          0.35
+        );
+        ok = true;
+      }
     }
     if (navigator.vibrate) {
       try {
@@ -3507,36 +3646,35 @@
         // ignore
       }
     }
+    return ok;
   }
 
   /** Distinct ascending chime for clear-edge Best Side. */
-  function playEdgeChime(force) {
-    if (!chimeOn && !force) return;
-    if (document.visibilityState !== "visible") return;
+  async function playEdgeChime(force) {
+    if (!chimeOn && !force) return false;
+    if (document.visibilityState !== "visible") return false;
     // Always debounce unless forced (audio-fallback / test paths).
-    if (!force && !canPlayTone()) return;
+    if (!force && !canPlayTone()) return false;
     if (force) lastChimeAt = Date.now();
-    const ctx = ensureAudio();
-    if (!ctx) return;
-    const now = ctx.currentTime;
-    const tones = [
-      { f: 740, t: 0.0, d: 0.12 },
-      { f: 988, t: 0.11, d: 0.14 },
-      { f: 1319, t: 0.24, d: 0.28 },
-    ];
-    for (const tone of tones) {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "triangle";
-      osc.frequency.value = tone.f;
-      gain.gain.setValueAtTime(0.0001, now + tone.t);
-      gain.gain.exponentialRampToValueAtTime(0.2, now + tone.t + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + tone.t + tone.d);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + tone.t);
-      osc.stop(now + tone.t + tone.d + 0.02);
+    // HTMLAudio first — reliable on iPhone PWAs after unlockAudioPlayback().
+    let ok = await playHtmlChime("edge");
+    if (!ok) {
+      const ctx = await ensureAudioReady();
+      if (ctx && ctx.state === "running") {
+        scheduleOscTones(
+          ctx,
+          [
+            { f: 740, t: 0.0, d: 0.12 },
+            { f: 988, t: 0.11, d: 0.14 },
+            { f: 1319, t: 0.24, d: 0.32 },
+          ],
+          "triangle",
+          0.4
+        );
+        ok = true;
+      }
     }
+    if (!ok) pendingEdgeChime = true;
     if (navigator.vibrate) {
       try {
         navigator.vibrate([30, 40, 30, 40, 90]);
@@ -3544,6 +3682,7 @@
         // ignore
       }
     }
+    return ok;
   }
 
   function urlBase64ToUint8Array(base64String) {
@@ -3648,8 +3787,9 @@
   }
 
   async function runChimeTest() {
+    unlockAudioPlayback();
     await ensureAudioReady();
-    playChime(true);
+    await playChime(true);
     vibrateEdge();
     if ("Notification" in window && Notification.permission === "granted") {
       postToSW({
@@ -3687,6 +3827,7 @@
   }
 
   async function turnAlertsOn() {
+    unlockAudioPlayback();
     await ensureAudioReady();
     chimeOn = true;
     localStorage.setItem(CHIME_KEY, "1");
@@ -3901,11 +4042,11 @@
 
     // Always try chime + vibrate when visible. Always force a system
     // notification when permission is granted — silent phones miss WebAudio.
-    ensureAudioReady().then((ctx) => {
+    ensureAudioReady().then(async (ctx) => {
       if (visible) {
-        playEdgeChime(true);
+        const played = await playEdgeChime(true);
         vibrateEdge();
-        if (!ctx || ctx.state !== "running") pendingEdgeChime = true;
+        if (!played || !ctx || ctx.state !== "running") pendingEdgeChime = true;
       }
       if (canNotify) {
         const ctrl =
@@ -6254,7 +6395,7 @@
       // ignore
     }
     const unlock = () => {
-      ensureAudio();
+      unlockAudioPlayback();
       if (pendingEdgeChime && chimeOn) {
         pendingEdgeChime = false;
         playEdgeChime(true);
@@ -6267,7 +6408,7 @@
     window.addEventListener("keydown", unlock);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
-        ensureAudio();
+        unlockAudioPlayback();
         ensurePortraitLock(true);
         startRolloverBurst();
         // Re-enter quietly: keep the current edge armed so refresh doesn't
@@ -6358,7 +6499,7 @@
           // Legacy SW messages — ignore when hidden and always debounce.
           if (!chimeOn) return;
           if (document.visibilityState !== "visible") return;
-          ensureAudio();
+          unlockAudioPlayback();
           playEdgeChime(true);
         }
       });

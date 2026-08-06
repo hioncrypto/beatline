@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.39";
+  const APP_VERSION = "9.40";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -3175,7 +3175,13 @@
         outcome = avg >= beat ? "above" : "below";
       } else {
         const spotRaw = el.spotValue && el.spotValue.dataset.last;
-        const spot = spotRaw != null ? Number(spotRaw) : null;
+        let spot = spotRaw != null ? Number(spotRaw) : null;
+        if (spot == null || !Number.isFinite(spot)) {
+          spot =
+            pos.entrySpot != null && Number.isFinite(Number(pos.entrySpot))
+              ? Number(pos.entrySpot)
+              : null;
+        }
         if (
           spot != null &&
           Number.isFinite(spot) &&
@@ -3185,6 +3191,11 @@
           outcome = spot >= beat ? "above" : "below";
         }
       }
+    }
+    // Never leave a trade open across windows when force-settling.
+    if (!outcome && opts.force) {
+      const hinted = pos.ticker ? settleHintByTicker[pos.ticker] : null;
+      if (hinted === "above" || hinted === "below") outcome = hinted;
     }
     if (!outcome) return false;
     const won = outcome === pos.side;
@@ -3241,10 +3252,16 @@
   function trySettleOpenAfterClose(data, prevTicker, prevSettleSide, prevSettleAvg) {
     const pos = demo.position;
     if (!pos) return false;
+    const liveTicker = data && data.ticker ? data.ticker : null;
     const closed = windowHasClosed(data);
     const rolled =
-      !!(prevTicker && data && data.ticker && prevTicker !== data.ticker) ||
-      !!(data && data.waiting_next);
+      !!(prevTicker && liveTicker && prevTicker !== liveTicker) ||
+      !!(data && data.waiting_next) ||
+      !!(data && data.stale_previous);
+    // Position is from a prior window (app slept through 0:00 / reopen).
+    const stalePosition =
+      !!(pos.ticker && liveTicker && pos.ticker !== liveTicker) ||
+      !!(prevTicker && pos.ticker && pos.ticker === prevTicker && rolled);
 
     if (prevTicker && (prevSettleSide === "above" || prevSettleSide === "below")) {
       settleHintByTicker[prevTicker] = prevSettleSide;
@@ -3257,13 +3274,15 @@
       if (tipTicker) settleHintByTicker[tipTicker] = data.settlement_side;
     }
 
-    // Still inside the live window — keep marking, don't settle yet.
-    if (!closed && !rolled) return false;
+    // Still inside the live window for THIS position — keep marking.
+    if (!closed && !rolled && !stalePosition) return false;
 
     const targetTicker =
-      rolled && prevTicker && pos.ticker === prevTicker
-        ? prevTicker
-        : pos.ticker;
+      stalePosition && pos.ticker
+        ? pos.ticker
+        : rolled && prevTicker && pos.ticker === prevTicker
+          ? prevTicker
+          : pos.ticker;
     return settleDemoPosition(targetTicker, {
       force: true,
       settleSide: prevSettleSide || data.settlement_side || null,

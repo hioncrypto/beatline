@@ -3712,6 +3712,7 @@
 
   async function turnAlertsOff() {
     chimeOn = false;
+    pendingEdgeChime = false;
     localStorage.setItem(CHIME_KEY, "0");
     localStorage.setItem(BG_ARMED_KEY, "0");
     postToSW({ type: "set-chime", enabled: false });

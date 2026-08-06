@@ -6102,7 +6102,7 @@
         const btn = ev.target.closest(".tf-btn");
         if (!btn || !el.timeframe.contains(btn)) return;
         setTimeframe(btn.dataset.tf);
-        ensureAudio();
+        unlockAudioPlayback();
         ensurePortraitLock(true);
       });
     }
@@ -6114,13 +6114,13 @@
     }
     if (el.alertsEnable) {
       el.alertsEnable.addEventListener("click", () => {
-        ensureAudio();
+        unlockAudioPlayback();
         toggleAlerts();
       });
     }
     if (el.alertsTest) {
       el.alertsTest.addEventListener("click", () => {
-        ensureAudio();
+        unlockAudioPlayback();
         runChimeTest();
       });
     }

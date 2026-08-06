@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.40";
+  const APP_VERSION = "9.41";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -1972,7 +1972,7 @@
   function loadChartHeightPx() {
     try {
       const n = Number(localStorage.getItem(CHART_HEIGHT_KEY));
-      if (Number.isFinite(n) && n >= 90 && n <= 1200) return Math.round(n);
+      if (Number.isFinite(n) && n >= 90 && n <= 2000) return Math.round(n);
     } catch {
       // ignore
     }
@@ -2016,12 +2016,13 @@
     const botGrip = el.chartResizeBottom
       ? el.chartResizeBottom.getBoundingClientRect().height
       : 40;
-    // Trade strip can compress + scroll; chart resize needs room to grow.
-    const minTrade = 112;
+    // Thin scrollable peek of the trade strip — Chart size tab can travel
+    // almost to the buy dock. Best Side / slider / odds stay via scroll.
+    const minTrade = 40;
     const minChart = 96;
     const maxChart = Math.max(
       minChart,
-      avail - topH - summaryH - topGrip - botGrip - minTrade - 4
+      avail - topH - summaryH - topGrip - botGrip - minTrade - 2
     );
     return {
       minChart,
@@ -2116,7 +2117,7 @@
       const dy = clientY - startY;
       // Top: drag up grows chart. Bottom: drag down grows chart.
       // Strong gain so Chart size tabs can push Best Side down quickly.
-      const next = mode === "top" ? startH - dy * 2.6 : startH + dy * 2.6;
+      const next = mode === "top" ? startH - dy * 4 : startH + dy * 4;
       applyChartHeight(next, { persist: false });
     };
 

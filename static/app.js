@@ -3758,7 +3758,7 @@
     if (el.alertsStatusLine) {
       if (on) {
         el.alertsStatusLine.textContent =
-          "On — chime + notification for Best Side suggestions (foreground & background)";
+          "On — in-app chime when open · notification tone when backgrounded";
       } else if (chimeOn && "Notification" in window && Notification.permission === "denied") {
         el.alertsStatusLine.textContent =
           "Blocked — site settings → Notifications → Allow, then Enable";
@@ -3814,8 +3814,21 @@
       } catch {
         // local SW test above still ran
       }
+      // Sounding Best-buy style notification (what you hear when backgrounded).
+      postToSW({
+        type: "edge-notify",
+        force: true,
+        bypassDedupe: true,
+        side: (lastBestPick && lastBestPick.side) || "above",
+        askCents: (lastBestPick && lastBestPick.askCents) || 40,
+        pWin: (lastBestPick && lastBestPick.pWin) || 0.55,
+        suggestStake: (lastBestPick && lastBestPick.suggestedStake) || null,
+        ticker: lastTicker || lastFifteenTicker || "TEST",
+        beat: lastTarget || lastFifteenTarget,
+        chimeOn: true,
+      });
     }
-    setStatus("ok", "Test alert — you should hear a chime and/or see a notification");
+    setStatus("ok", "Test alert — chime now; leave app to hear notification tone");
   }
 
   async function ensureNotificationPermission() {

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.46";
+  const APP_VERSION = "9.47";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -3484,9 +3484,13 @@
 
   let edgeChimeUrl = null;
   let targetChimeUrl = null;
+  let clickChimeUrl = null;
   let edgeAudioEl = null;
   let targetAudioEl = null;
+  let clickAudioEl = null;
   let audioUnlocked = false;
+  /** Last ADD ABOVE / ADD BELOW suggestion key that already clicked. */
+  let lastAddSuggestClickKey = null;
 
   function getEdgeAudio() {
     if (!edgeChimeUrl) {
@@ -3519,6 +3523,19 @@
     return targetAudioEl;
   }
 
+  function getClickAudio() {
+    if (!clickChimeUrl) {
+      // Short sharp tick — distinct from the Best Side ascending tone.
+      clickChimeUrl = buildChimeWavUrl([{ f: 1680, d: 0.045 }]);
+    }
+    if (!clickAudioEl) {
+      clickAudioEl = new Audio(clickChimeUrl);
+      clickAudioEl.preload = "auto";
+      clickAudioEl.setAttribute("playsinline", "true");
+    }
+    return clickAudioEl;
+  }
+
   /** Call from a user gesture so later alert tones are allowed. */
   function unlockAudioPlayback() {
     const ctx = ensureAudio();
@@ -3549,12 +3566,38 @@
     } catch {
       // ignore
     }
+    try {
+      const c = getClickAudio();
+      const wasMuted = c.muted;
+      c.muted = true;
+      const p = c.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => {
+          c.pause();
+          c.currentTime = 0;
+          c.muted = wasMuted;
+        }).catch(() => {
+          c.muted = wasMuted;
+        });
+      } else {
+        c.pause();
+        c.currentTime = 0;
+        c.muted = wasMuted;
+      }
+    } catch {
+      // ignore
+    }
     audioUnlocked = true;
   }
 
   function playHtmlChime(kind) {
     try {
-      const a = kind === "edge" ? getEdgeAudio() : getTargetAudio();
+      const a =
+        kind === "edge"
+          ? getEdgeAudio()
+          : kind === "click"
+            ? getClickAudio()
+            : getTargetAudio();
       a.muted = false;
       a.volume = 1;
       a.currentTime = 0;
@@ -3683,6 +3726,62 @@
       }
     }
     return ok;
+  }
+
+  /**
+   * Short click for each new ADD ABOVE / ADD BELOW suggestion.
+   * Keeps the original Best Side alert tone; this is an extra tick after it.
+   */
+  async function playAddSuggestClick({ afterTone = false } = {}) {
+    if (!chimeOn) return false;
+    if (document.visibilityState !== "visible") return false;
+    const play = async () => {
+      let ok = await playHtmlChime("click");
+      if (!ok) {
+        const ctx = await ensureAudioReady();
+        if (ctx && ctx.state === "running") {
+          scheduleOscTones(
+            ctx,
+            [{ f: 1680, t: 0.0, d: 0.05 }],
+            "square",
+            0.28
+          );
+          ok = true;
+        }
+      }
+      if (ok && navigator.vibrate) {
+        try {
+          navigator.vibrate(18);
+        } catch {
+          // ignore
+        }
+      }
+      return ok;
+    };
+    if (afterTone) {
+      await new Promise((r) => setTimeout(r, 420));
+      return play();
+    }
+    return play();
+  }
+
+  /**
+   * Click once per new ADD ABOVE / ADD BELOW suggestion (same-side add).
+   * Original clear-edge alert tone is unchanged — click is additive.
+   */
+  function maybeClickAddSuggest(best, { sameAsOpen, atRiskCap, suggestStake, afterTone }) {
+    if (!best || !best.side) return;
+    if (!sameAsOpen || atRiskCap) {
+      if (!sameAsOpen) lastAddSuggestClickKey = null;
+      return;
+    }
+    const ask = Math.round(Number(best.askCents) || 0);
+    const stake = suggestStake != null ? suggestStake : Math.round(Number(tradeStake) || 0);
+    const ticker = lastTicker || lastFifteenTicker || "";
+    const key = `${ticker}:${best.side}:${ask}:${stake}`;
+    if (key === lastAddSuggestClickKey) return;
+    lastAddSuggestClickKey = key;
+    playAddSuggestClick({ afterTone: !!afterTone });
   }
 
   function urlBase64ToUint8Array(base64String) {
@@ -3983,11 +4082,11 @@
   }
 
   function alertClearEdge(best) {
-    if (!best || !best.side) return;
-    if (!chimeOn) return;
+    if (!best || !best.side) return false;
+    if (!chimeOn) return false;
     // Flat: always alert. Same-side open: still alert (add decision).
     // Opposite open: skip — that used to spam BUY while already long the other way.
-    if (demo.position && demo.position.side !== best.side) return;
+    if (demo.position && demo.position.side !== best.side) return false;
 
     const side = best.side;
     const ask = Math.round(Number(best.askCents) || 0);
@@ -3996,7 +4095,7 @@
     const alertKey = `${ticker}:${side}:${ask}`;
     const now = Date.now();
 
-    if (now - lastClearEdgeAlertAt < EDGE_ALERT_COOLDOWN_MS) return;
+    if (now - lastClearEdgeAlertAt < EDGE_ALERT_COOLDOWN_MS) return false;
 
     const prev = lastClearEdgeAlertKey;
     const newlyClear = !prev || prev === "none";
@@ -4019,7 +4118,7 @@
       prevAsk > 0 &&
       prevAsk - ask >= 5;
 
-    if (!(newlyClear || tickerChanged || sideChanged || askImproved)) return;
+    if (!(newlyClear || tickerChanged || sideChanged || askImproved)) return false;
 
     lastClearEdgeAlertKey = alertKey;
     lastClearEdgeAlertAt = now;

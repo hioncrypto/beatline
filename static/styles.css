@@ -2941,7 +2941,15 @@ body.chart-height-locked .app-shell > .chart-wrap {
 }
 
 .app-shell > .chart-resize-top {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  height: 40px;
+  margin: 2px 8px;
+  border: 1px solid rgba(26, 201, 107, 0.35);
+  border-radius: 10px;
+  background: #101a15;
+}
+
+body.summary-pushed .app-shell > .summary-panel {
+  flex: 0 0 auto;
 }
 
 .app-shell > .chart-resize-bottom {

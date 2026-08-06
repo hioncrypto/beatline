@@ -13,10 +13,11 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.42";
+  const APP_VERSION = "9.43";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
+  const SUMMARY_PUSH_KEY = "beatlineSummaryPushPx";
   const EDGE_ALERT_STORE_KEY = "beatlineEdgeAlertKey";
   const EPHEMERAL_DISMISS_KEY = "beatlineEphemeralDismissedAt";
   const PL_UI_KEY = "beatlinePlChartUi";
@@ -316,6 +317,8 @@
   let lastChimeAt = 0;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
   let chartHeightPx = loadChartHeightPx();
+  let summaryPushPx = loadSummaryPushPx();
+  let summaryNaturalH = null;
   let lastBreakevenPrice = null;
   let settleHintByTicker = {};
   let optionsOpen = false;
@@ -1988,6 +1991,86 @@
     }
   }
 
+  function loadSummaryPushPx() {
+    try {
+      const n = Number(localStorage.getItem(SUMMARY_PUSH_KEY));
+      if (Number.isFinite(n) && n >= 0 && n <= 900) return Math.round(n);
+    } catch {
+      // ignore
+    }
+    return 0;
+  }
+
+  function saveSummaryPushPx(px) {
+    try {
+      if (!px) localStorage.removeItem(SUMMARY_PUSH_KEY);
+      else localStorage.setItem(SUMMARY_PUSH_KEY, String(Math.round(px)));
+    } catch {
+      // ignore
+    }
+  }
+
+  /** Natural summary height (Price to beat strip) before top-grip push. */
+  function measureSummaryNaturalH() {
+    if (!el.summaryPanel) return 0;
+    if (summaryNaturalH != null && summaryNaturalH > 0) return summaryNaturalH;
+    const prevMax = el.summaryPanel.style.maxHeight;
+    const prevMin = el.summaryPanel.style.minHeight;
+    const prevOverflow = el.summaryPanel.style.overflow;
+    const prevFlex = el.summaryPanel.style.flex;
+    el.summaryPanel.style.maxHeight = "";
+    el.summaryPanel.style.minHeight = "";
+    el.summaryPanel.style.overflow = "";
+    el.summaryPanel.style.flex = "";
+    summaryNaturalH = Math.round(el.summaryPanel.getBoundingClientRect().height);
+    el.summaryPanel.style.maxHeight = prevMax;
+    el.summaryPanel.style.minHeight = prevMin;
+    el.summaryPanel.style.overflow = prevOverflow;
+    el.summaryPanel.style.flex = prevFlex;
+    return summaryNaturalH;
+  }
+
+  /** Top grip pushes the numbers strip away so the chart can grow into it. */
+  function applySummaryPush(px, { persist = true } = {}) {
+    if (!el.summaryPanel) {
+      summaryPushPx = 0;
+      return;
+    }
+    const natural = measureSummaryNaturalH();
+    summaryPushPx = Math.round(Math.min(Math.max(natural, 0), Math.max(0, px)));
+    const h = Math.max(0, natural - summaryPushPx);
+    if (summaryPushPx <= 0 || h >= natural - 1) {
+      summaryPushPx = 0;
+      el.summaryPanel.style.removeProperty("max-height");
+      el.summaryPanel.style.removeProperty("min-height");
+      el.summaryPanel.style.removeProperty("overflow");
+      el.summaryPanel.style.removeProperty("flex");
+      el.summaryPanel.style.removeProperty("opacity");
+      el.summaryPanel.style.removeProperty("padding");
+      el.summaryPanel.style.removeProperty("margin");
+      el.summaryPanel.style.removeProperty("border-width");
+      document.body.classList.remove("summary-pushed");
+    } else {
+      el.summaryPanel.style.setProperty("flex", "0 0 auto", "important");
+      el.summaryPanel.style.setProperty("max-height", `${h}px`, "important");
+      el.summaryPanel.style.setProperty("min-height", "0px", "important");
+      el.summaryPanel.style.setProperty("overflow", "hidden", "important");
+      if (h < 8) {
+        el.summaryPanel.style.setProperty("opacity", "0", "important");
+        el.summaryPanel.style.setProperty("padding", "0", "important");
+        el.summaryPanel.style.setProperty("margin", "0", "important");
+        el.summaryPanel.style.setProperty("border-width", "0", "important");
+      } else {
+        el.summaryPanel.style.removeProperty("opacity");
+        el.summaryPanel.style.removeProperty("padding");
+        el.summaryPanel.style.removeProperty("margin");
+        el.summaryPanel.style.removeProperty("border-width");
+      }
+      document.body.classList.add("summary-pushed");
+    }
+    if (persist) saveSummaryPushPx(summaryPushPx);
+  }
+
   function chartHeightLimits() {
     const shell = document.querySelector(".app-shell");
     const shellH = shell ? shell.clientHeight : window.innerHeight || 640;
@@ -2012,19 +2095,20 @@
       : 0;
     const topGrip = el.chartResizeTop
       ? el.chartResizeTop.getBoundingClientRect().height
-      : 28;
+      : 40;
     const botGrip = el.chartResizeBottom
       ? el.chartResizeBottom.getBoundingClientRect().height
       : 40;
     // Chart size may push Best Side / trade controls below the fold.
     // fitMax puts the bottom grip at the buy-dock edge; overshoot lets the
     // chart grow further so the shell scrolls and trade sits underneath.
+    // Top grip can also crush the summary strip, which raises fitMax live.
     const minTrade = 0;
     const minChart = 96;
     const fitMax = avail - topH - summaryH - topGrip - botGrip;
     const maxChart = Math.max(
       minChart,
-      Math.min(2000, fitMax + Math.max(280, Math.round(avail * 0.45)))
+      Math.min(2000, fitMax + Math.max(320, Math.round(avail * 0.55)))
     );
     return {
       minChart,
@@ -2100,15 +2184,20 @@
     if (!handle) return;
     let startY = null;
     let startH = null;
+    let startPush = 0;
     let pointerId = null;
 
     const onMove = (clientY) => {
       if (startY == null || startH == null) return;
       const dy = clientY - startY;
-      // Top: drag up grows chart. Bottom: drag down grows chart.
-      // Strong gain so Chart size tabs can push Best Side down quickly.
-      const next = mode === "top" ? startH - dy * 4 : startH + dy * 4;
-      applyChartHeight(next, { persist: false });
+      // Top: drag up grows chart and pushes Price-to-beat away.
+      // Bottom: drag down grows chart and pushes trade controls away.
+      const delta = mode === "top" ? -dy * 4 : dy * 4;
+      if (mode === "top") {
+        // Crush or restore the Price-to-beat strip so the chart can use that space.
+        applySummaryPush(startPush + delta, { persist: false });
+      }
+      applyChartHeight(startH + delta, { persist: false });
     };
 
     const onEnd = () => {
@@ -2118,13 +2207,42 @@
       pointerId = null;
       handle.classList.remove("is-dragging");
       document.body.classList.remove("is-resizing-chart");
+      window.removeEventListener("pointermove", onWinPointerMove);
+      window.removeEventListener("pointerup", onWinPointerUp);
+      window.removeEventListener("pointercancel", onWinPointerUp);
+      window.removeEventListener("touchmove", onWinTouchMove);
+      window.removeEventListener("touchend", onWinTouchEnd);
+      window.removeEventListener("touchcancel", onWinTouchEnd);
       if (chartHeightPx != null) saveChartHeightPx(chartHeightPx);
+      saveSummaryPushPx(summaryPushPx);
       setTimeout(resizeChart, 40);
     };
+
+    const onWinPointerMove = (ev) => {
+      if (startY == null) return;
+      if (pointerId >= 0 && ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+      onMove(ev.clientY);
+    };
+    const onWinPointerUp = (ev) => {
+      if (pointerId >= 0 && ev.pointerId !== pointerId) return;
+      onEnd();
+    };
+    const onWinTouchMove = (ev) => {
+      if (startY == null) return;
+      const t = ev.touches && ev.touches[0];
+      if (!t) return;
+      ev.preventDefault();
+      onMove(t.clientY);
+    };
+    const onWinTouchEnd = () => onEnd();
 
     const begin = (clientY, pid) => {
       pointerId = pid == null ? -1 : pid;
       startY = clientY;
+      startPush = summaryPushPx || 0;
+      summaryNaturalH = null;
+      measureSummaryNaturalH();
       startH =
         chartHeightPx != null
           ? chartHeightPx
@@ -2133,6 +2251,12 @@
             : 240;
       handle.classList.add("is-dragging");
       document.body.classList.add("is-resizing-chart");
+      window.addEventListener("pointermove", onWinPointerMove, { passive: false });
+      window.addEventListener("pointerup", onWinPointerUp);
+      window.addEventListener("pointercancel", onWinPointerUp);
+      window.addEventListener("touchmove", onWinTouchMove, { passive: false });
+      window.addEventListener("touchend", onWinTouchEnd);
+      window.addEventListener("touchcancel", onWinTouchEnd);
     };
 
     handle.addEventListener("pointerdown", (ev) => {
@@ -2142,7 +2266,7 @@
       try {
         handle.setPointerCapture(ev.pointerId);
       } catch {
-        // ignore
+        // ignore — window listeners still drive the drag
       }
       begin(ev.clientY, ev.pointerId);
     });
@@ -2154,7 +2278,8 @@
     });
     handle.addEventListener("pointerup", onEnd);
     handle.addEventListener("pointercancel", onEnd);
-    handle.addEventListener("lostpointercapture", onEnd);
+    // Reflow while resizing (summary crush / chart grow) can drop capture.
+    // Window listeners keep the gesture alive — do not end on lost capture.
 
     handle.addEventListener(
       "touchstart",
@@ -6109,6 +6234,7 @@
     }
     renderDemoUi();
     applyPlUi();
+    if (summaryPushPx > 0) applySummaryPush(summaryPushPx, { persist: false });
     if (chartHeightPx != null) applyChartHeight(chartHeightPx, { persist: false });
     wireChartResizeHandle(el.chartResizeTop, "top");
     wireChartResizeHandle(el.chartResizeBottom, "bottom");
@@ -6247,6 +6373,8 @@
     window.addEventListener("resize", () => {
       syncRotateGate();
       tryLockPortrait();
+      summaryNaturalH = null;
+      if (summaryPushPx > 0) applySummaryPush(summaryPushPx, { persist: false });
       if (chartHeightPx != null) applyChartHeight(chartHeightPx, { persist: false });
       resizeChart();
       if (isPlChartVisible()) resizePlChart();

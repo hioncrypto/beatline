@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.41";
+  const APP_VERSION = "9.42";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -2016,18 +2016,21 @@
     const botGrip = el.chartResizeBottom
       ? el.chartResizeBottom.getBoundingClientRect().height
       : 40;
-    // Thin scrollable peek of the trade strip — Chart size tab can travel
-    // almost to the buy dock. Best Side / slider / odds stay via scroll.
-    const minTrade = 40;
+    // Chart size may push Best Side / trade controls below the fold.
+    // fitMax puts the bottom grip at the buy-dock edge; overshoot lets the
+    // chart grow further so the shell scrolls and trade sits underneath.
+    const minTrade = 0;
     const minChart = 96;
+    const fitMax = avail - topH - summaryH - topGrip - botGrip;
     const maxChart = Math.max(
       minChart,
-      avail - topH - summaryH - topGrip - botGrip - minTrade - 2
+      Math.min(2000, fitMax + Math.max(280, Math.round(avail * 0.45)))
     );
     return {
       minChart,
       maxChart,
       minTrade,
+      fitMax,
       shellH,
       avail,
       topH,
@@ -2059,41 +2062,24 @@
       setTimeout(resizeChart, 40);
       return;
     }
-    const {
-      minChart,
-      maxChart,
-      minTrade,
-      avail,
-      topH,
-      summaryH,
-      topGrip,
-      botGrip,
-    } = chartHeightLimits();
+    const { minChart, maxChart } = chartHeightLimits();
     chartHeightPx = Math.round(Math.min(maxChart, Math.max(minChart, px)));
     el.chartWrap.style.setProperty("flex", `0 0 ${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("min-height", `${chartHeightPx}px`, "important");
     el.chartWrap.style.setProperty("max-height", `${chartHeightPx}px`, "important");
-    // Leftover for trade strip. May be smaller than full content — stack scrolls
-    // so Best Side can sit lower while the chart stays tall.
-    const leftover = Math.max(
-      minTrade,
-      avail - topH - summaryH - chartHeightPx - topGrip - botGrip - 4
-    );
+    // Keep trade strip at natural height — a tall chart pushes it below the
+    // fold; the locked shell scrolls so Best Side / slider / odds stay reachable.
     if (el.tradeStack) {
-      el.tradeStack.style.flex = "1 1 auto";
-      el.tradeStack.style.setProperty("min-height", `${minTrade}px`, "important");
-      el.tradeStack.style.setProperty(
-        "max-height",
-        `${Math.round(leftover)}px`,
-        "important"
-      );
+      el.tradeStack.style.flex = "0 0 auto";
+      el.tradeStack.style.setProperty("min-height", "0px", "important");
+      el.tradeStack.style.setProperty("max-height", "none", "important");
       if (el.tradePanel) {
         el.tradePanel.style.maxHeight = "";
         el.tradePanel.style.minHeight = "";
       }
     } else if (el.tradePanel) {
-      el.tradePanel.style.maxHeight = `${Math.round(leftover)}px`;
+      el.tradePanel.style.maxHeight = "";
       el.tradePanel.style.minHeight = "";
     }
     document.body.classList.add("chart-height-locked");

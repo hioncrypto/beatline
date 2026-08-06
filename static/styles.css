@@ -2781,10 +2781,10 @@ body.has-open-pl .app-shell > .chart-wrap {
 }
 
 .app-shell > .trade-stack {
-  /* Default: natural height. When chart is locked tall, JS sets max-height
-     and this stack scrolls so Best Side / slider / odds stay reachable. */
+  /* Default: natural height. When chart is locked tall, trade is pushed
+     below the fold and the shell scrolls to reach it. */
   flex: 0 1 auto;
-  min-height: 40px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -2797,10 +2797,19 @@ body.has-open-pl .app-shell > .chart-wrap {
   touch-action: pan-y;
 }
 
+body.chart-height-locked .app-shell {
+  /* Tall chart may push Best Side / trade controls below the fold. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
 body.chart-height-locked .app-shell > .trade-stack {
-  /* Chart resize owns the leftover band — scroll trade content as needed. */
-  flex: 1 1 auto;
-  min-height: 40px;
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
 }
 
 body.has-open-pl .app-shell > .trade-stack {
@@ -2875,7 +2884,7 @@ body.has-open-pl .app-shell > .trade-stack > .best-side {
 
 .app-shell > .trade-stack {
   flex: 0 1 auto;
-  min-height: 40px;
+  min-height: 0;
 }
 
 .top {
@@ -3053,7 +3062,7 @@ body.portrait-app #chart {
   overflow-x: hidden;
   overflow-y: auto;
   flex: 0 1 auto;
-  min-height: 40px;
+  min-height: 0;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }

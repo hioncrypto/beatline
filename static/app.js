@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.45";
+  const APP_VERSION = "9.46";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -3697,7 +3697,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.7", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.8", { scope: "/" });
       await navigator.serviceWorker.ready;
       return reg;
     } catch (err) {
@@ -4029,32 +4029,51 @@
       document.visibilityState === "visible" && !document.hidden;
     const canNotify =
       "Notification" in window && Notification.permission === "granted";
-    const notifyPayload = {
-      type: "edge-notify",
+    const edgePayload = {
       side,
       askCents: ask || null,
       pWin: best.pWin,
       suggestStake: sug,
       ticker: lastTicker || lastFifteenTicker,
       beat: lastTarget,
-      force: true,
+      chimeOn,
     };
 
-    // Always try chime + vibrate when visible. Always force a system
-    // notification when permission is granted — silent phones miss WebAudio.
+    // Foreground: in-app chime. Background: system notification is the tone
+    // (iOS suppresses notification sound while the app is open — so do NOT
+    // force a notify while visible or the SW arms the edge and never rings
+    // when you leave).
     ensureAudioReady().then(async (ctx) => {
       if (visible) {
         const played = await playEdgeChime(true);
         vibrateEdge();
-        if (!played || !ctx || ctx.state !== "running") pendingEdgeChime = true;
+        if (!played || !ctx || ctx.state !== "running") {
+          pendingEdgeChime = true;
+          // Chime failed — fall back to a sounding system notification.
+          if (canNotify) {
+            postToSW({ type: "edge-notify", force: true, ...edgePayload });
+          }
+        } else {
+          pendingEdgeChime = false;
+          // Remember this edge so SW/push don't re-blast it on background.
+          postToSW({
+            type: "edge-armed",
+            side,
+            askCents: ask || null,
+            ticker: lastTicker || lastFifteenTicker || "",
+            chimeOn,
+          });
+        }
+        return;
       }
+
+      // App in background / locked — notification sound IS the chime.
       if (canNotify) {
         const ctrl =
           navigator.serviceWorker && navigator.serviceWorker.controller;
         if (ctrl) {
-          postToSW(notifyPayload);
+          postToSW({ type: "edge-notify", force: true, ...edgePayload });
         } else {
-          // SW not controlling yet — still surface a Best Side alert.
           try {
             const title =
               sug != null
@@ -6431,7 +6450,7 @@
         }
         refreshTarget({ forceCandles: true });
       } else {
-        // Page hidden — re-upsert push, then SW poll + server Web Push.
+        // Page hidden — system notification is the only audible chime.
         if (
           chimeOn &&
           "Notification" in window &&
@@ -6445,15 +6464,35 @@
           target: lastFifteenTarget,
           chimeOn,
         });
-        if (lastBestPick && lastBestPick.side) {
-          postToSW({
-            type: "edge-armed",
-            side: lastBestPick.side,
-            askCents: lastBestPick.askCents || null,
-            ticker: lastTicker || lastFifteenTicker || "",
-            chimeOn,
-          });
+        if (chimeOn && lastBestPick && lastBestPick.side) {
+          const ask = Math.round(Number(lastBestPick.askCents) || 0);
+          const ticker = lastTicker || lastFifteenTicker || "";
+          if (pendingEdgeChime) {
+            // Foreground chime never landed — ring via notification now.
+            pendingEdgeChime = false;
+            postToSW({
+              type: "edge-notify",
+              force: true,
+              bypassDedupe: true,
+              side: lastBestPick.side,
+              askCents: ask || null,
+              pWin: lastBestPick.pWin,
+              suggestStake: lastBestPick.suggestedStake,
+              ticker,
+              beat: lastTarget,
+              chimeOn,
+            });
+          } else {
+            postToSW({
+              type: "edge-armed",
+              side: lastBestPick.side,
+              askCents: ask || null,
+              ticker,
+              chimeOn,
+            });
+          }
         }
+        // Poll for a NEW clear edge while backgrounded (SW + server push).
         postToSW({ type: "check-now" });
       }
     });

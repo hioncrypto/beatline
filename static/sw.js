@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.5-bg-push";
+const SW_VERSION = "3.8-bg-chime";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -7,7 +7,7 @@ const STATE_KEY = "kalshiFifteenState";
 const STABLE_APP_URL = "https://beatline-1.onrender.com";
 const RENDER_DEPLOY_URL =
   "https://render.com/deploy?repo=https://github.com/hioncrypto/beatline";
-const EDGE_NOTIFY_COOLDOWN_MS = 180_000;
+const EDGE_NOTIFY_COOLDOWN_MS = 90_000;
 const KEEP_ALIVE_MS = 4 * 60 * 1000;
 
 self.addEventListener("install", (event) => {
@@ -112,9 +112,9 @@ async function showTargetNotification(payload, { force = false } = {}) {
 }
 
 async function showEdgeNotification(payload, { force = false } = {}) {
-  // When BeatLine is open, the page plays its own edge chime — don't also
-  // fire a system notification (and never postMessage-chime into the page;
-  // those messages queue up and stack when you return).
+  // When BeatLine is open and visible, the page plays its own edge chime —
+  // skip a duplicate system banner. Background / locked: this notification
+  // IS the audible chime (silent:false + renotify).
   if (!force && (await hasVisibleClient())) return;
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const ask =
@@ -242,24 +242,36 @@ async function checkClearEdge(forceNotify) {
     return;
   }
   const ask = Math.round(Number(data.ask_cents) || 0);
-  const key = `${data.side}:${ask}`;
+  const ticker = data.ticker || "";
+  // Sticky per window+side (match page + push) so ask wobble doesn't re-ring.
+  const sticky = `${ticker}:${data.side}`;
+  const key = sticky;
   const now = Date.now();
   const lastAt = Number(state.edgeAt) || 0;
+  const prevKey = state.edgeKey || "";
+  const prevAsk = Number(state.edgeAsk) || 0;
+  const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
+  const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
   if (!forceNotify) {
-    if (state.edgeKey === key) return;
-    if (now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) return;
+    if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) return;
+    if (!sameSide && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && prevKey) return;
   }
-  state.edgeKey = key;
+  state.edgeKey = sticky;
+  state.edgeAsk = ask;
   state.edgeAt = now;
   await writeState(state);
-  await showEdgeNotification({
-    side: data.side,
-    askCents: ask,
-    pWin: data.p_win,
-    suggest_stake: data.suggest_stake,
-    beat: data.beat ?? data.price_to_beat,
-    ticker: data.ticker,
-  });
+  // Background poll found a clear edge — ring via system notification.
+  await showEdgeNotification(
+    {
+      side: data.side,
+      askCents: ask,
+      pWin: data.p_win,
+      suggest_stake: data.suggest_stake,
+      beat: data.beat ?? data.price_to_beat,
+      ticker: data.ticker,
+    },
+    { force: !(await hasVisibleClient()) }
+  );
 }
 
 let pollTimer = null;
@@ -349,14 +361,16 @@ self.addEventListener("message", (event) => {
         const prevAsk = Number(state.edgeAsk) || 0;
         const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
-        if (!msg.force) {
-          if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS)
+        if (!msg.bypassDedupe) {
+          if (!msg.force) {
+            if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS)
+              return;
+            if (!sameSide && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && prevKey)
+              return;
+          } else if (sameSide && !askImproved && now - lastAt < 15_000) {
+            // Even forced notifies: suppress rapid duplicates from ask wobble.
             return;
-          if (!sameSide && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && prevKey)
-            return;
-        } else if (sameSide && !askImproved && now - lastAt < 15_000) {
-          // Even forced notifies: suppress rapid duplicates from ask wobble.
-          return;
+          }
         }
         state.edgeKey = sticky;
         state.edgeAsk = ask;

@@ -2082,8 +2082,12 @@
     );
     if (el.tradeStack) {
       el.tradeStack.style.flex = "1 1 auto";
-      el.tradeStack.style.minHeight = `${minTrade}px`;
-      el.tradeStack.style.maxHeight = `${Math.round(leftover)}px`;
+      el.tradeStack.style.setProperty("min-height", `${minTrade}px`, "important");
+      el.tradeStack.style.setProperty(
+        "max-height",
+        `${Math.round(leftover)}px`,
+        "important"
+      );
       if (el.tradePanel) {
         el.tradePanel.style.maxHeight = "";
         el.tradePanel.style.minHeight = "";

@@ -847,6 +847,54 @@ h1 {
   margin-bottom: 10px;
 }
 
+.account-share-card {
+  grid-column: 1 / -1;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.account-user-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+  margin: 4px 0 8px;
+  color: #e8f2ec;
+  word-break: break-all;
+}
+
+.account-share-hint {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: rgba(232, 242, 236, 0.7);
+}
+
+.account-share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.account-restore-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.account-restore-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: #e8f2ec;
+  padding: 8px 10px;
+  font-size: 0.85rem;
+}
+
 .pl-chart-section {
   margin: 12px 0 4px;
   padding: 4px 0 8px;

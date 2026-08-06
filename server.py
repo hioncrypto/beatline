@@ -29,11 +29,35 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 DATA_DIR = Path(__file__).resolve().parent / "data"
 PUSH_SUBS_FILE = DATA_DIR / "push_subscriptions.json"
 DEMO_ACCOUNT_FILE = DATA_DIR / "demo_account.json"
+ACCOUNTS_DIR = DATA_DIR / "accounts"
 VAPID_PRIVATE = DATA_DIR / "vapid_private.pem"
 VAPID_PUBLIC_RAW = DATA_DIR / "vapid_public_raw.txt"
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:kalshi-btc-target@localhost")
 DEMO_HISTORY_LIMIT = 50000
+_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _demo_lock = threading.Lock()
+
+
+def _normalize_user_id(raw) -> str | None:
+    if raw is None:
+        return None
+    uid = str(raw).strip()
+    if not _USER_ID_RE.match(uid):
+        return None
+    return uid
+
+
+def _account_path(user_id: str) -> Path:
+    return ACCOUNTS_DIR / f"{user_id}.json"
+
+
+def _list_account_ids() -> list[str]:
+    ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
+    ids = []
+    for p in ACCOUNTS_DIR.glob("*.json"):
+        if _normalize_user_id(p.stem):
+            ids.append(p.stem)
+    return ids
 
 
 # Chart candle size + settlement window length (seconds) per TF.
@@ -919,7 +943,7 @@ def load_push_subs() -> None:
 
 
 def _normalize_demo_account(raw: dict | None) -> dict | None:
-    """Single-user BeatLine demo account (survives tunnel URL changes)."""
+    """BeatLine demo account payload (per-user)."""
     if not isinstance(raw, dict):
         return None
     history = raw.get("history")
@@ -964,16 +988,26 @@ def _normalize_demo_account(raw: dict | None) -> dict | None:
     }
 
 
-def load_demo_account() -> dict | None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    if not DEMO_ACCOUNT_FILE.is_file():
+def _read_account_file(path: Path) -> dict | None:
+    if not path.is_file():
         return None
     try:
-        with _demo_lock:
-            raw = json.loads(DEMO_ACCOUNT_FILE.read_text())
+        raw = json.loads(path.read_text())
         return _normalize_demo_account(raw if isinstance(raw, dict) else None)
     except Exception:
         return None
+
+
+def load_demo_account(user_id: str | None = None) -> dict | None:
+    """Load one user's demo account. Prefer per-user files under accounts/."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
+    uid = _normalize_user_id(user_id)
+    with _demo_lock:
+        if uid:
+            return _read_account_file(_account_path(uid))
+        # Legacy path (no user header): shared file.
+        return _read_account_file(DEMO_ACCOUNT_FILE)
 
 
 def _trade_history_id(h: dict) -> str:
@@ -1009,15 +1043,67 @@ def merge_trade_histories(*lists: list) -> list[dict]:
     return merged[:DEMO_HISTORY_LIMIT]
 
 
-def save_demo_account(raw: dict) -> dict | None:
+def save_demo_account(raw: dict, user_id: str | None = None) -> dict | None:
     normalized = _normalize_demo_account(raw)
     if not normalized:
         return None
     if not normalized.get("updatedAt"):
         normalized["updatedAt"] = int(time.time() * 1000)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
+    uid = _normalize_user_id(user_id)
     with _demo_lock:
-        prev_hist: list = []
+        if uid:
+            path = _account_path(uid)
+            prev_hist: list = []
+            if path.is_file():
+                try:
+                    prev = json.loads(path.read_text())
+                    if isinstance(prev, dict) and isinstance(prev.get("history"), list):
+                        prev_hist = [h for h in prev["history"] if isinstance(h, dict)]
+                except Exception:
+                    prev_hist = []
+            elif not _list_account_ids() and DEMO_ACCOUNT_FILE.is_file():
+                # First private-account save can absorb the old shared ledger
+                # only when this client is uploading a real book (not a fresh
+                # empty friend phone).
+                incoming_probe = normalized.get("history") or []
+                looks_fresh = (
+                    not incoming_probe
+                    and not normalized.get("position")
+                    and abs(float(normalized.get("realizedPl") or 0)) < 0.01
+                    and abs(
+                        float(normalized.get("balance") or 0)
+                        - float(normalized.get("start") or 1000)
+                    )
+                    < 0.01
+                )
+                if not looks_fresh:
+                    try:
+                        prev = json.loads(DEMO_ACCOUNT_FILE.read_text())
+                        if isinstance(prev, dict) and isinstance(
+                            prev.get("history"), list
+                        ):
+                            prev_hist = [
+                                h for h in prev["history"] if isinstance(h, dict)
+                            ]
+                            print(
+                                f"[kalshi-btc-target] absorbed legacy ledger into user {uid}"
+                            )
+                    except Exception:
+                        prev_hist = []
+            incoming = normalized.get("history") or []
+            if not incoming and prev_hist:
+                normalized["history"] = prev_hist[:DEMO_HISTORY_LIMIT]
+            else:
+                normalized["history"] = merge_trade_histories(incoming, prev_hist)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(normalized, indent=2))
+            tmp.replace(path)
+            return normalized
+
+        # Legacy shared file for old clients without a user id.
+        prev_hist = []
         if DEMO_ACCOUNT_FILE.is_file():
             try:
                 prev = json.loads(DEMO_ACCOUNT_FILE.read_text())
@@ -1026,7 +1112,6 @@ def save_demo_account(raw: dict) -> dict | None:
             except Exception:
                 prev_hist = []
         incoming = normalized.get("history") or []
-        # Append-only: empty/short client payloads must never wipe the ledger.
         if not incoming and prev_hist:
             normalized["history"] = prev_hist[:DEMO_HISTORY_LIMIT]
         else:
@@ -1495,12 +1580,28 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path in ("/api/demo-account", "/api/account"):
+            user_id = _normalize_user_id(
+                body.get("userId")
+                or body.get("user_id")
+                or self.headers.get("X-BeatLine-User")
+            )
             state = body.get("state") if isinstance(body.get("state"), dict) else body
-            saved = save_demo_account(state)
+            if isinstance(state, dict) and not user_id:
+                user_id = _normalize_user_id(state.get("userId") or state.get("user_id"))
+            if not user_id:
+                self._send_json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "userId required — each phone needs its own private account",
+                    },
+                )
+                return
+            saved = save_demo_account(state, user_id=user_id)
             if not saved:
                 self._send_json(400, {"ok": False, "error": "invalid demo account"})
                 return
-            self._send_json(200, {"ok": True, "state": saved})
+            self._send_json(200, {"ok": True, "state": saved, "userId": user_id})
             return
 
         self._send_json(404, {"ok": False, "error": "not found"})
@@ -1574,27 +1675,46 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path in ("/api/demo-account", "/api/account"):
-            state = load_demo_account()
+            user_id = _normalize_user_id(
+                (qs.get("userId") or qs.get("user_id") or [None])[0]
+                or self.headers.get("X-BeatLine-User")
+            )
+            if not user_id:
+                self._send_json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "userId required — each phone needs its own private account",
+                        "has_state": False,
+                        "state": None,
+                    },
+                )
+                return
+            state = load_demo_account(user_id)
             self._send_json(
                 200,
                 {
                     "ok": True,
                     "state": state,
                     "has_state": state is not None,
+                    "userId": user_id,
                 },
             )
             return
 
         if path == "/api/health":
+            accounts = _list_account_ids()
             self._send_json(
                 200,
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.1.7",
+                    "version": "2.2.0",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
-                    "demo_account": DEMO_ACCOUNT_FILE.is_file(),
+                    "demo_account": DEMO_ACCOUNT_FILE.is_file() or len(accounts) > 0,
+                    "accounts": len(accounts),
+                    "multi_user": True,
                 },
             )
             return

@@ -9,10 +9,11 @@
   const CHIME_KEY = "kalshiChimeEnabled";
   const BG_ARMED_KEY = "kalshiBgAlertsArmed";
   const DEMO_KEY = "kalshiDemoState";
+  const USER_ID_KEY = "beatlineUserId";
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.37";
+  const APP_VERSION = "9.39";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -207,6 +208,12 @@
     accountExport: document.getElementById("account-export"),
     accountImport: document.getElementById("account-import"),
     accountImportFile: document.getElementById("account-import-file"),
+    accountUserId: document.getElementById("account-user-id"),
+    accountCopyId: document.getElementById("account-copy-id"),
+    accountCopyLink: document.getElementById("account-copy-link"),
+    accountRestoreId: document.getElementById("account-restore-id"),
+    accountRestoreBtn: document.getElementById("account-restore-btn"),
+    accountShareHint: document.getElementById("account-share-hint"),
     ephemeralBanner: document.getElementById("ephemeral-banner"),
     ephemeralExport: document.getElementById("ephemeral-export"),
     ephemeralDismiss: document.getElementById("ephemeral-dismiss"),
@@ -426,6 +433,144 @@
     );
   }
 
+  function newUserId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID().replace(/-/g, "");
+    }
+    const bytes = new Uint8Array(16);
+    if (window.crypto && window.crypto.getRandomValues) {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < bytes.length; i++) bytes[i] = (Math.random() * 256) | 0;
+    }
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  function getUserId() {
+    try {
+      let id = localStorage.getItem(USER_ID_KEY);
+      if (id && /^[A-Za-z0-9_-]{8,64}$/.test(id)) return id;
+      id = newUserId();
+      localStorage.setItem(USER_ID_KEY, id);
+      return id;
+    } catch {
+      return newUserId();
+    }
+  }
+
+  function setUserId(id) {
+    const uid = String(id || "").trim();
+    if (!/^[A-Za-z0-9_-]{8,64}$/.test(uid)) {
+      throw new Error("Invalid account ID");
+    }
+    localStorage.setItem(USER_ID_KEY, uid);
+    return uid;
+  }
+
+  function shortUserId(id) {
+    const uid = id || getUserId();
+    if (uid.length <= 12) return uid;
+    return `${uid.slice(0, 6)}…${uid.slice(-4)}`;
+  }
+
+  function accountHeaders(extra) {
+    return {
+      "X-BeatLine-User": getUserId(),
+      ...(extra || {}),
+    };
+  }
+
+  function syncAccountShareUi() {
+    if (el.accountUserId) el.accountUserId.textContent = shortUserId();
+    if (el.accountShareHint) {
+      el.accountShareHint.textContent =
+        "Friends open the same link and automatically get their own private balance & trade history — not yours.";
+    }
+  }
+
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // fall through
+    }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  function wireAccountShareUi() {
+    syncAccountShareUi();
+    if (el.accountCopyId) {
+      el.accountCopyId.addEventListener("click", async () => {
+        const ok = await copyText(getUserId());
+        setStatus(
+          ok ? "ok" : "warn",
+          ok
+            ? "Account ID copied — paste it on another phone to restore this book"
+            : "Could not copy — select the ID manually"
+        );
+      });
+    }
+    if (el.accountCopyLink) {
+      el.accountCopyLink.addEventListener("click", async () => {
+        const ok = await copyText(`${location.origin}/`);
+        setStatus(
+          ok ? "ok" : "warn",
+          ok
+            ? "App link copied — they get their own private account on first open"
+            : "Could not copy link"
+        );
+      });
+    }
+    if (el.accountRestoreBtn && el.accountRestoreId) {
+      el.accountRestoreBtn.addEventListener("click", async () => {
+        const raw = String(el.accountRestoreId.value || "").trim();
+        if (!raw) {
+          setStatus("warn", "Paste an account ID to restore");
+          return;
+        }
+        try {
+          setUserId(raw);
+        } catch (err) {
+          setStatus("warn", err.message || "Invalid account ID");
+          return;
+        }
+        try {
+          localStorage.removeItem(DEMO_KEY);
+          localStorage.removeItem(TRADE_HISTORY_KEY);
+        } catch {
+          // ignore
+        }
+        demo = loadDemoState();
+        syncAccountShareUi();
+        setStatus("loading", "Restoring private account…");
+        await hydrateDemoFromServer();
+        renderDemoUi();
+        renderTradeHistory();
+        applyPlUi();
+        setStatus(
+          "ok",
+          `Restored account ${shortUserId()} · ${money(demo.balance)}`
+        );
+      });
+    }
+  }
+
   function applyDemoState(next, { syncServer, replaceHistory } = {}) {
     if (!next || typeof next !== "object") return;
     // Permanent trade ledger: always union with what we already have unless
@@ -491,8 +636,11 @@
       demo.updatedAt = payload.updatedAt;
       await fetch("/api/demo-account", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state: payload }),
+        headers: {
+          "Content-Type": "application/json",
+          ...accountHeaders(),
+        },
+        body: JSON.stringify({ userId: getUserId(), state: payload }),
         cache: "no-store",
       });
     } catch {
@@ -546,7 +694,13 @@
       demo.history = mergeTradeHistory(demo.history, loadTradeHistory());
       persistTradeHistory(demo.history);
 
-      const res = await fetch("/api/demo-account", { cache: "no-store" });
+      const res = await fetch(
+        `/api/demo-account?userId=${encodeURIComponent(getUserId())}`,
+        {
+          cache: "no-store",
+          headers: accountHeaders(),
+        }
+      );
       const data = await res.json();
       const remote = data && data.state;
       if (remote && typeof remote === "object") {
@@ -690,8 +844,9 @@
 
   function exportAccountBackup() {
     const payload = {
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
+      userId: getUserId(),
       state: {
         on: !!demo.on,
         start: demo.start,
@@ -737,6 +892,14 @@
           )
         ) {
           return;
+        }
+        if (parsed && parsed.userId) {
+          try {
+            setUserId(parsed.userId);
+            syncAccountShareUi();
+          } catch {
+            // keep current user id
+          }
         }
         applyDemoState(
           {
@@ -6053,6 +6216,8 @@
       });
     }
     // Target first so Price-to-beat line exists when candles paint.
+    getUserId();
+    wireAccountShareUi();
     setupEphemeralBanner();
     hydrateDemoFromServer().finally(() => {
       refreshTarget()

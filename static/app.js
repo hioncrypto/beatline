@@ -4214,6 +4214,7 @@
         });
       }
     });
+    return true;
   }
 
   function maybeChimeNewFifteenTarget(beat, ticker, source, closeEt) {
@@ -5170,13 +5171,14 @@
       lastBestSideKey = key;
       flashBestSide();
     }
+    let didEdgeAlert = false;
     if (!edgeAlertsArmed) {
       edgeAlertsArmed = true;
       // Still fire once when alerts are on — opening onto a live BUY suggestion
       // used to arm quietly and skip the only alert for that edge.
       // Skip when already at max open risk (no add suggested).
       if (chimeOn && !atRiskCap) {
-        alertClearEdge(best);
+        didEdgeAlert = !!alertClearEdge(best);
       } else {
         const ask = Math.round(Number(best.askCents) || 0);
         const ticker = lastTicker || lastFifteenTicker || "";
@@ -5192,9 +5194,22 @@
           chimeOn,
         });
       }
+      maybeClickAddSuggest(best, {
+        sameAsOpen,
+        atRiskCap,
+        suggestStake,
+        afterTone: didEdgeAlert,
+      });
       return;
     }
-    if (!atRiskCap) alertClearEdge(best);
+    if (!atRiskCap) didEdgeAlert = !!alertClearEdge(best);
+    // Extra click for every new ADD ABOVE / ADD BELOW (keeps original alert tone).
+    maybeClickAddSuggest(best, {
+      sameAsOpen,
+      atRiskCap,
+      suggestStake,
+      afterTone: didEdgeAlert,
+    });
   }
 
   function fillRoiCard(priceEl, summaryEl, detailEl, askCents, stakeUsd) {

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.43";
+  const APP_VERSION = "9.44";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -308,13 +308,15 @@
   let lastClearEdgeAlertKey = null;
   let lastClearEdgeAlertAt = 0;
   let lastClearEdgeGoneAt = 0;
-  const EDGE_ALERT_COOLDOWN_MS = 180_000;
-  const EDGE_GONE_RESET_MS = 180_000;
+  const EDGE_ALERT_COOLDOWN_MS = 90_000;
+  const EDGE_GONE_RESET_MS = 45_000;
   let edgeAlertsArmed = false;
   // Hysteresis so Best Side doesn't flicker BUY ↔ wait and re-chime.
   let clearEdgeLatched = false;
   let clearEdgeLatchTicker = null;
   let lastChimeAt = 0;
+  /** Replay Best Side tone after the next tap if AudioContext was suspended. */
+  let pendingEdgeChime = false;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
   let chartHeightPx = loadChartHeightPx();
   let summaryPushPx = loadSummaryPushPx();
@@ -3433,7 +3435,9 @@
         // ignore
       }
     }
-    return ctx.state === "running" ? ctx : null;
+    // Return the context even if still suspended — callers still try to play;
+    // a later user gesture / pendingEdgeChime will finish the unlock.
+    return ctx;
   }
 
   function vibrateEdge() {
@@ -3826,8 +3830,9 @@
   function alertClearEdge(best) {
     if (!best || !best.side) return;
     if (!chimeOn) return;
-    // Already holding a position — no Best Side buy/add chimes (stops loops).
-    if (demo.position) return;
+    // Flat: always alert. Same-side open: still alert (add decision).
+    // Opposite open: skip — that used to spam BUY while already long the other way.
+    if (demo.position && demo.position.side !== best.side) return;
 
     const side = best.side;
     const ask = Math.round(Number(best.askCents) || 0);
@@ -3897,8 +3902,9 @@
     // notification when permission is granted — silent phones miss WebAudio.
     ensureAudioReady().then((ctx) => {
       if (visible) {
-        if (ctx) playEdgeChime(true);
+        playEdgeChime(true);
         vibrateEdge();
+        if (!ctx || ctx.state !== "running") pendingEdgeChime = true;
       }
       if (canNotify) {
         const ctrl =
@@ -6248,6 +6254,11 @@
     }
     const unlock = () => {
       ensureAudio();
+      if (pendingEdgeChime && chimeOn) {
+        pendingEdgeChime = false;
+        playEdgeChime(true);
+        vibrateEdge();
+      }
       ensurePortraitLock(true);
     };
     window.addEventListener("pointerdown", unlock, { passive: true });

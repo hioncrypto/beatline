@@ -1173,7 +1173,7 @@ def send_web_push(payload: dict) -> int:
                 data=body,
                 vapid_private_key=priv,
                 vapid_claims={"sub": VAPID_SUBJECT},
-                ttl=120,
+                ttl=3600,
             )
             sent += 1
         except Exception as exc:

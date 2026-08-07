@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.9-profit-chime";
+const SW_VERSION = "3.10-bg-alerts";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -268,11 +268,14 @@ async function checkClearEdge(forceNotify) {
     }
     return;
   }
+  // Visible BeatLine tab plays its own chime — do not arm here or we
+  // silence the next background push for this edge.
+  if (!forceNotify && (await hasVisibleClient())) return;
+
   const ask = Math.round(Number(data.ask_cents) || 0);
   const ticker = data.ticker || "";
   // Sticky per window+side (match page + push) so ask wobble doesn't re-ring.
   const sticky = `${ticker}:${data.side}`;
-  const key = sticky;
   const now = Date.now();
   const lastAt = Number(state.edgeAt) || 0;
   const prevKey = state.edgeKey || "";
@@ -280,25 +283,23 @@ async function checkClearEdge(forceNotify) {
   const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
   const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
   if (!forceNotify) {
+    // Same side: suppress ask wobble. Opposite side: always allow.
     if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) return;
-    if (!sameSide && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && prevKey) return;
   }
+  const payload = {
+    side: data.side,
+    askCents: ask,
+    pWin: data.p_win,
+    suggest_stake: data.suggest_stake,
+    beat: data.beat ?? data.price_to_beat,
+    ticker: data.ticker,
+  };
+  await showEdgeNotification(payload, { force: true });
+  // Arm only after a real notification so background pushes keep working.
   state.edgeKey = sticky;
   state.edgeAsk = ask;
   state.edgeAt = now;
   await writeState(state);
-  // Background poll found a clear edge — ring via system notification.
-  await showEdgeNotification(
-    {
-      side: data.side,
-      askCents: ask,
-      pWin: data.p_win,
-      suggest_stake: data.suggest_stake,
-      beat: data.beat ?? data.price_to_beat,
-      ticker: data.ticker,
-    },
-    { force: !(await hasVisibleClient()) }
-  );
 }
 
 let pollTimer = null;
@@ -392,24 +393,24 @@ self.addEventListener("message", (event) => {
           if (!msg.force) {
             if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS)
               return;
-            if (!sameSide && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && prevKey)
-              return;
           } else if (sameSide && !askImproved && now - lastAt < 15_000) {
             // Even forced notifies: suppress rapid duplicates from ask wobble.
             return;
           }
         }
+        await showEdgeNotification(msg, { force: !!msg.force });
         state.edgeKey = sticky;
         state.edgeAsk = ask;
         state.edgeAt = now;
         await writeState(state);
-        await showEdgeNotification(msg, { force: !!msg.force });
       })()
     );
   }
   if (msg.type === "edge-armed") {
-    // Page already handled this edge in-app — remember it so SW/push don't
+    // Page already chimed this edge in-app — remember it so SW/push don't
     // re-fire the same Best Side when the tab backgrounds.
+    // Only stamp edgeAt when the page says it actually sounded (chimed:true),
+    // otherwise a hide/arm race can silence the next background push.
     event.waitUntil(
       (async () => {
         const state = await readState();
@@ -417,7 +418,7 @@ self.addEventListener("message", (event) => {
           const ticker = msg.ticker || "";
           state.edgeKey = `${ticker}:${msg.side}`;
           state.edgeAsk = Math.round(Number(msg.askCents) || 0);
-          state.edgeAt = Date.now();
+          if (msg.chimed !== false) state.edgeAt = Date.now();
         } else if (msg.clear === false) {
           // keep edgeKey until cooldown; just touch timestamp
         }
@@ -460,13 +461,18 @@ self.addEventListener("push", (event) => {
         const ticker = payload.ticker || "";
         // Sticky per window+side — ask wobble must not re-notify.
         const sticky = `${ticker}:${side}`;
-        const key = sticky;
         const now = Date.now();
         const lastAt = Number(state.edgeAt) || 0;
         const prevKey = state.edgeKey || "";
         const prevAsk = Number(state.edgeAsk) || 0;
         const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
+
+        // If a BeatLine tab is visibly open, the page owns the chime.
+        // Do NOT arm here — arming without notifying blocked later pushes.
+        const visible = await hasVisibleClient();
+        if (visible) return;
+
         if (
           sameSide &&
           !askImproved &&
@@ -474,17 +480,8 @@ self.addEventListener("push", (event) => {
         ) {
           return;
         }
-        if (!sameSide && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS && prevKey) {
-          return;
-        }
-        state.edgeKey = sticky;
-        state.edgeAsk = ask;
-        state.edgeAt = now;
-        await writeState(state);
-        const visible = await hasVisibleClient();
-        // Web Push must surface when the app is backgrounded. Skip duplicate
-        // system tone only when a visible tab is already handling it.
-        if (visible) return;
+        // Opposite side always notifies — don't let Above silence Below.
+
         await showEdgeNotification(
           {
             side,
@@ -496,6 +493,10 @@ self.addEventListener("push", (event) => {
           },
           { force: true }
         );
+        state.edgeKey = sticky;
+        state.edgeAsk = ask;
+        state.edgeAt = now;
+        await writeState(state);
       })()
     );
     return;

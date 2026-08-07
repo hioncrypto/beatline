@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.56";
+  const APP_VERSION = "9.57";
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
   const APP_TZ = "America/Los_Angeles";
   /** Day-equity schema: v2 = Pacific calendar day (not Eastern). */
@@ -4347,7 +4347,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.9", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.10", { scope: "/" });
       await navigator.serviceWorker.ready;
       return reg;
     } catch (err) {
@@ -4725,6 +4725,7 @@
             askCents: ask || null,
             ticker: lastTicker || lastFifteenTicker || "",
             chimeOn,
+            chimed: true,
           });
         }
         return;
@@ -4755,15 +4756,9 @@
             // ignore
           }
         }
-      } else {
-        postToSW({
-          type: "edge-armed",
-          side,
-          askCents: ask || null,
-          ticker: lastTicker || lastFifteenTicker || "",
-          chimeOn,
-        });
       }
+      // If notifications aren't granted, do NOT arm the SW — that used to
+      // silence later background pushes without ever sounding.
     });
     return true;
   }
@@ -7188,18 +7183,12 @@
               beat: lastTarget,
               chimeOn,
             });
-          } else {
-            postToSW({
-              type: "edge-armed",
-              side: lastBestPick.side,
-              askCents: ask || null,
-              ticker,
-              chimeOn,
-            });
           }
+          // Do NOT edge-armed on every hide — that refreshed the SW cooldown
+          // and blocked the next background Web Push for ~90s.
         }
         // Poll for a NEW clear edge while backgrounded (SW + server push).
-        postToSW({ type: "check-now" });
+        postToSW({ type: "check-now", forceNotify: false });
       }
     });
 

@@ -4116,12 +4116,6 @@
     playAddSuggestClick({ afterTone: !!afterTone });
   }
 
-  /** Stable id for an open trade — profit tone rings once per this key. */
-  function positionProfitKey(pos) {
-    if (!pos) return null;
-    return `${pos.ticker || ""}:${pos.side || ""}:${pos.openedAt || 0}`;
-  }
-
   function scheduleProfitOsc(ctx) {
     scheduleOscTones(
       ctx,

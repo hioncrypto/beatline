@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.8-bg-chime";
+const SW_VERSION = "3.9-profit-chime";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -167,6 +167,33 @@ async function showEdgeNotification(payload, { force = false } = {}) {
       url: "/",
       ticker: payload && payload.ticker,
       kind: "clear_edge",
+      side: payload && payload.side,
+    },
+  });
+}
+
+async function showProfitNotification(payload, { force = false } = {}) {
+  // Foreground tab plays its own C–E–G — skip duplicate system tone.
+  if (!force && (await hasVisibleClient())) return;
+  const side = payload && payload.side === "below" ? "Below" : "Above";
+  const pl = payload && payload.pl != null ? Number(payload.pl) : null;
+  const plTxt =
+    pl != null && Number.isFinite(pl)
+      ? `${pl > 0 ? "+" : ""}$${Math.abs(pl).toFixed(2)}`
+      : "Open mark turned positive";
+  await self.registration.showNotification(`BeatLine · ${side} in profit`, {
+    body: plTxt,
+    icon: "/icons/icon-192.png?v=2.6",
+    badge: "/icons/icon-192.png?v=2.6",
+    vibrate: [40, 50, 40, 50, 120],
+    tag: "beatline-open-profit",
+    renotify: true,
+    requireInteraction: false,
+    silent: false,
+    data: {
+      url: "/",
+      ticker: payload && payload.ticker,
+      kind: "open_profit",
       side: payload && payload.side,
     },
   });
@@ -396,6 +423,15 @@ self.addEventListener("message", (event) => {
         }
         if (typeof msg.chimeOn === "boolean") state.chimeOn = msg.chimeOn;
         await writeState(state);
+      })()
+    );
+  }
+  if (msg.type === "profit-notify") {
+    event.waitUntil(
+      (async () => {
+        const state = await readState();
+        if (!state.chimeOn && !msg.force) return;
+        await showProfitNotification(msg, { force: !!msg.force });
       })()
     );
   }

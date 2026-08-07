@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.52";
+  const APP_VERSION = "9.53";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -347,6 +347,14 @@
   let lastChimeAt = 0;
   /** Replay Best Side tone after the next tap if AudioContext was suspended. */
   let pendingEdgeChime = false;
+  /** Position key currently tracked for profit tone. */
+  let profitTonePosKey = null;
+  /** True after the first mark observation for that position. */
+  let profitToneArmed = false;
+  /** True after the C–E–G has already fired for that position. */
+  let profitTonePlayed = false;
+  /** Last known open-mark sign for crossing into profit. */
+  let openPlWasPositive = false;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
   let chartHeightPx = loadChartHeightPx();
   let summaryPushPx = loadSummaryPushPx();
@@ -2787,6 +2795,7 @@
     const pos = demo.position;
     const mark = markOpenPosition(pos);
     renderOpenPlBar(pos, mark);
+    maybeAlertProfit(pos, mark);
     // Keep the chart clear: factor card lives in Options / bottom strip, not summary.
     if (el.demoLive) el.demoLive.hidden = true;
     return mark;
@@ -3769,9 +3778,11 @@
   let edgeChimeUrl = null;
   let targetChimeUrl = null;
   let clickChimeUrl = null;
+  let profitChimeUrl = null;
   let edgeAudioEl = null;
   let targetAudioEl = null;
   let clickAudioEl = null;
+  let profitAudioEl = null;
   let audioUnlocked = false;
   /** Last ADD ABOVE / ADD BELOW suggestion key that already clicked. */
   let lastAddSuggestClickKey = null;
@@ -3818,6 +3829,23 @@
       clickAudioEl.setAttribute("playsinline", "true");
     }
     return clickAudioEl;
+  }
+
+  /** C5–E5–G5 ascending reward for first mark into profit. */
+  function getProfitAudio() {
+    if (!profitChimeUrl) {
+      profitChimeUrl = buildChimeWavUrl([
+        { f: 523.25, d: 0.14 },
+        { f: 659.25, d: 0.14 },
+        { f: 783.99, d: 0.48 },
+      ]);
+    }
+    if (!profitAudioEl) {
+      profitAudioEl = new Audio(profitChimeUrl);
+      profitAudioEl.preload = "auto";
+      profitAudioEl.setAttribute("playsinline", "true");
+    }
+    return profitAudioEl;
   }
 
   /** Call from a user gesture so later alert tones are allowed. */
@@ -3871,6 +3899,27 @@
     } catch {
       // ignore
     }
+    try {
+      const pr = getProfitAudio();
+      const wasMuted = pr.muted;
+      pr.muted = true;
+      const p = pr.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => {
+          pr.pause();
+          pr.currentTime = 0;
+          pr.muted = wasMuted;
+        }).catch(() => {
+          pr.muted = wasMuted;
+        });
+      } else {
+        pr.pause();
+        pr.currentTime = 0;
+        pr.muted = wasMuted;
+      }
+    } catch {
+      // ignore
+    }
     audioUnlocked = true;
   }
 
@@ -3881,7 +3930,9 @@
           ? getEdgeAudio()
           : kind === "click"
             ? getClickAudio()
-            : getTargetAudio();
+            : kind === "profit"
+              ? getProfitAudio()
+              : getTargetAudio();
       a.muted = false;
       a.volume = 1;
       a.currentTime = 0;
@@ -4068,6 +4119,128 @@
     playAddSuggestClick({ afterTone: !!afterTone });
   }
 
+  /** Stable id for an open trade — profit tone rings once per this key. */
+  function positionProfitKey(pos) {
+    if (!pos) return null;
+    return `${pos.ticker || ""}:${pos.side || ""}:${pos.openedAt || 0}`;
+  }
+
+  /** C–E–G upward reward when open mark first flips positive. */
+  async function playProfitChime(force) {
+    if (!chimeOn && !force) return false;
+    if (document.visibilityState !== "visible") return false;
+    lastChimeAt = Date.now();
+    let ok = await playHtmlChime("profit");
+    if (!ok) {
+      const ctx = await ensureAudioReady();
+      if (ctx && ctx.state === "running") {
+        scheduleOscTones(
+          ctx,
+          [
+            { f: 523.25, t: 0.0, d: 0.14 },
+            { f: 659.25, t: 0.13, d: 0.14 },
+            { f: 783.99, t: 0.26, d: 0.55 },
+          ],
+          "sine",
+          0.38
+        );
+        ok = true;
+      }
+    }
+    if (ok && navigator.vibrate) {
+      try {
+        navigator.vibrate([40, 50, 40, 50, 120]);
+      } catch {
+        // ignore
+      }
+    }
+    return ok;
+  }
+
+  function alertProfit(pos, mark) {
+    if (!chimeOn) return;
+    const sideLabel = pos && pos.side === "below" ? "Below" : "Above";
+    const plTxt =
+      mark && mark.unrealized != null ? formatPl(mark.unrealized) : "in profit";
+    const visible =
+      document.visibilityState === "visible" && !document.hidden;
+    const canNotify =
+      "Notification" in window && Notification.permission === "granted";
+    const payload = {
+      side: pos && pos.side,
+      pl: mark && mark.unrealized,
+      ticker: (pos && pos.ticker) || lastTicker || lastFifteenTicker || "",
+      chimeOn,
+    };
+
+    ensureAudioReady().then(async (ctx) => {
+      if (visible) {
+        const played = await playProfitChime(true);
+        if (!played || !ctx || ctx.state !== "running") {
+          if (canNotify) {
+            postToSW({ type: "profit-notify", force: true, ...payload });
+          }
+        }
+        return;
+      }
+      // Background / locked — system notification is the audible cue.
+      if (canNotify) {
+        postToSW({ type: "profit-notify", force: true, ...payload });
+      } else {
+        try {
+          new Notification(`BeatLine · ${sideLabel} in profit`, {
+            body: plTxt,
+            tag: "beatline-open-profit",
+            renotify: true,
+            silent: false,
+          });
+        } catch {
+          // ignore
+        }
+      }
+    });
+  }
+
+  /**
+   * Ring once the first time an open trade's mark goes positive.
+   * Does not re-fire if P/L dips then recovers on the same trade.
+   * First observation only arms the baseline (no chime on reopen).
+   */
+  function maybeAlertProfit(pos, mark) {
+    if (!pos) {
+      profitTonePosKey = null;
+      profitToneArmed = false;
+      profitTonePlayed = false;
+      openPlWasPositive = false;
+      return;
+    }
+    if (
+      !mark ||
+      mark.unrealized == null ||
+      !Number.isFinite(mark.unrealized)
+    ) {
+      return;
+    }
+    const key = positionProfitKey(pos);
+    if (key !== profitTonePosKey) {
+      profitTonePosKey = key;
+      profitToneArmed = false;
+      profitTonePlayed = false;
+      openPlWasPositive = false;
+    }
+    const inProfit = mark.unrealized > 0;
+    if (!profitToneArmed) {
+      profitToneArmed = true;
+      openPlWasPositive = inProfit;
+      return;
+    }
+    const crossed = inProfit && !openPlWasPositive;
+    openPlWasPositive = inProfit;
+    if (!crossed || profitTonePlayed) return;
+    profitTonePlayed = true;
+    alertProfit(pos, mark);
+  }
+
   function urlBase64ToUint8Array(base64String) {
     const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
     const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -4080,7 +4253,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.8", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.9", { scope: "/" });
       await navigator.serviceWorker.ready;
       return reg;
     } catch (err) {

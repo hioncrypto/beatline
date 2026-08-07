@@ -1464,9 +1464,17 @@ def push_watcher_loop() -> None:
                     and _last_edge_ask is not None
                     and (_last_edge_ask - ask) >= 5
                 )
-                should_push = cooled and (
-                    sticky != _last_edge_key or ask_improved
-                )
+                # New window/side: always push. Same side: only on ask improve
+                # (or after full cooldown if key somehow stuck).
+                if sticky != _last_edge_key:
+                    should_push = True
+                elif ask_improved:
+                    should_push = True
+                else:
+                    should_push = False
+                if should_push and sticky == _last_edge_key and not cooled:
+                    # Same sticky re-push needs a short gap against ask chatter.
+                    should_push = (now - _last_edge_at) >= 20.0
                 if should_push:
                     n = send_web_push(
                         {

@@ -998,6 +998,11 @@ h1 {
   border: 1px solid var(--border);
   background: rgba(8, 14, 11, 0.55);
   overflow: hidden;
+  /* Critical: let Lightweight Charts own pinch/drag — Options sheet scroll
+     was eating the gesture so zoom felt broken. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .pl-chart[hidden],

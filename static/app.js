@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.49";
+  const APP_VERSION = "9.50";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -1253,8 +1253,8 @@
     }
     const mid = (range.from + range.to) / 2;
     let half = ((range.to - range.from) / 2) * factor;
-    // Keep a usable window: at least ~4 bars, at most a bit past full history.
-    half = Math.max(2, Math.min(half, Math.max(barCount / 2 + 2, 4)));
+    // Keep a usable window: at least ~3 bars, at most a bit past full history.
+    half = Math.max(1.5, Math.min(half, Math.max(barCount / 2 + 4, 6)));
     const next = {
       from: mid - half,
       to: mid + half,
@@ -1273,24 +1273,96 @@
     }
   }
 
-  /** Keep Options sheet scroll from eating pinch / drag on the P/L chart. */
+  /**
+   * High-gain pinch on the P/L chart. Built-in LWC pinch is too slow for
+   * flipping through the whole trade history with a small finger move.
+   */
   function wirePlChartTouchGuards() {
     if (!el.plChart || el.plChart.dataset.touchGuarded === "1") return;
     el.plChart.dataset.touchGuarded = "1";
-    const onTouch = (ev) => {
-      // Two-finger pinch must not scroll the Options sheet.
-      if (ev.touches && ev.touches.length >= 2) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        return;
-      }
-      // One-finger pans the chart — don't let the sheet steal the gesture.
-      if (ev.type === "touchmove" && ev.touches && ev.touches.length === 1) {
-        ev.stopPropagation();
+    let pinchStartDist = null;
+    let pinchStartRange = null;
+
+    const touchDist = (a, b) => {
+      const dx = a.clientX - b.clientX;
+      const dy = a.clientY - b.clientY;
+      return Math.hypot(dx, dy);
+    };
+
+    el.plChart.addEventListener(
+      "touchstart",
+      (ev) => {
+        if (ev.touches && ev.touches.length >= 2) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          pinchStartDist = touchDist(ev.touches[0], ev.touches[1]);
+          try {
+            pinchStartRange =
+              plChart && plChart.timeScale().getVisibleLogicalRange();
+          } catch {
+            pinchStartRange = null;
+          }
+          return;
+        }
+        pinchStartDist = null;
+        pinchStartRange = null;
+      },
+      { passive: false }
+    );
+
+    el.plChart.addEventListener(
+      "touchmove",
+      (ev) => {
+        if (ev.touches && ev.touches.length >= 2) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          if (
+            !plChart ||
+            pinchStartDist == null ||
+            pinchStartDist < 8 ||
+            !pinchStartRange
+          ) {
+            return;
+          }
+          const d = touchDist(ev.touches[0], ev.touches[1]);
+          if (d < 8) return;
+          // Amplify heavily: a short pinch covers most of the history.
+          const raw = pinchStartDist / d;
+          const amplified = Math.pow(raw, 2.8);
+          const mid = (pinchStartRange.from + pinchStartRange.to) / 2;
+          const barCount = Math.max(1, plLastBarCount);
+          let half =
+            ((pinchStartRange.to - pinchStartRange.from) / 2) * amplified;
+          half = Math.max(1.5, Math.min(half, Math.max(barCount / 2 + 4, 6)));
+          plRestoringRange = true;
+          try {
+            plChart.timeScale().setVisibleLogicalRange({
+              from: mid - half,
+              to: mid + half,
+            });
+          } catch {
+            // ignore
+          }
+          return;
+        }
+        // One-finger pans the chart — don't let the Options sheet steal it.
+        if (ev.touches && ev.touches.length === 1) {
+          ev.stopPropagation();
+        }
+      },
+      { passive: false }
+    );
+
+    const endPinch = () => {
+      if (pinchStartDist != null) {
+        pinchStartDist = null;
+        pinchStartRange = null;
+        plRestoringRange = false;
+        capturePlVisibleRange();
       }
     };
-    el.plChart.addEventListener("touchstart", onTouch, { passive: false });
-    el.plChart.addEventListener("touchmove", onTouch, { passive: false });
+    el.plChart.addEventListener("touchend", endPinch);
+    el.plChart.addEventListener("touchcancel", endPinch);
   }
 
   function applyTradeHistoryUi() {
@@ -1388,7 +1460,9 @@
         axisPressedMouseMove: { time: true, price: false },
         axisDoubleClickReset: true,
         mouseWheel: true,
-        pinch: true,
+        // Custom high-gain pinch in wirePlChartTouchGuards — stock LWC pinch
+        // needs a huge finger move to cover the full trade history.
+        pinch: false,
       },
       width: el.plChart.clientWidth || 300,
       height: el.plChart.clientHeight || plUi.height || 180,
@@ -6536,10 +6610,10 @@
       });
     }
     if (el.plChartZoomIn) {
-      el.plChartZoomIn.addEventListener("click", () => nudgePlZoom(0.65));
+      el.plChartZoomIn.addEventListener("click", () => nudgePlZoom(0.38));
     }
     if (el.plChartZoomOut) {
-      el.plChartZoomOut.addEventListener("click", () => nudgePlZoom(1.55));
+      el.plChartZoomOut.addEventListener("click", () => nudgePlZoom(2.8));
     }
     if (el.tradeHistoryToggle) {
       el.tradeHistoryToggle.addEventListener("click", () => {

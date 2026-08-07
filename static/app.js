@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.47";
+  const APP_VERSION = "9.48";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -31,17 +31,39 @@
   function loadPlUi() {
     try {
       const raw = localStorage.getItem(PL_UI_KEY);
-      if (!raw) return { optionsOpen: false };
+      if (!raw) return { optionsOpen: true, range: null, height: 180 };
       const parsed = JSON.parse(raw);
-      return { optionsOpen: !!parsed.optionsOpen };
+      const range =
+        parsed.range &&
+        Number.isFinite(Number(parsed.range.from)) &&
+        Number.isFinite(Number(parsed.range.to))
+          ? { from: Number(parsed.range.from), to: Number(parsed.range.to) }
+          : null;
+      const height = Number(parsed.height);
+      return {
+        // Default expanded so the chart is easy to find; remember either way.
+        optionsOpen: parsed.optionsOpen == null ? true : !!parsed.optionsOpen,
+        range,
+        height:
+          Number.isFinite(height) && height >= 120 && height <= 420
+            ? Math.round(height)
+            : 180,
+      };
     } catch {
-      return { optionsOpen: false };
+      return { optionsOpen: true, range: null, height: 180 };
     }
   }
 
   function savePlUi() {
     try {
-      localStorage.setItem(PL_UI_KEY, JSON.stringify({ optionsOpen: !!plUi.optionsOpen }));
+      localStorage.setItem(
+        PL_UI_KEY,
+        JSON.stringify({
+          optionsOpen: !!plUi.optionsOpen,
+          range: plUi.range || null,
+          height: plUi.height || 180,
+        })
+      );
     } catch {
       // ignore quota
     }
@@ -206,6 +228,9 @@
     plChartToggle: document.getElementById("pl-chart-toggle"),
     plChartBody: document.getElementById("pl-chart-body"),
     plChartToggleMeta: document.getElementById("pl-chart-toggle-meta"),
+    plChartGrow: document.getElementById("pl-chart-grow"),
+    plChartShrink: document.getElementById("pl-chart-shrink"),
+    plChartFit: document.getElementById("pl-chart-fit"),
     accountExport: document.getElementById("account-export"),
     accountImport: document.getElementById("account-import"),
     accountImportFile: document.getElementById("account-import-file"),
@@ -282,6 +307,9 @@
   let plSeries = null;
   let plChartFitted = false;
   let plUi = loadPlUi();
+  let plRangeSaveTimer = null;
+  let plRestoringRange = false;
+  let plLastBarCount = 0;
   let tradeHistoryUi = loadTradeHistoryUi();
   let targetSeries = null;
   let targetLine = null;
@@ -1079,6 +1107,80 @@
     return !!(optionsOpen && plUi && plUi.optionsOpen);
   }
 
+  function applyPlChartHeight() {
+    if (!el.plChart) return;
+    const h = plUi.height || 180;
+    el.plChart.style.height = `${h}px`;
+  }
+
+  function capturePlVisibleRange() {
+    if (!plChart || plRestoringRange) return;
+    try {
+      const range = plChart.timeScale().getVisibleLogicalRange();
+      if (
+        range &&
+        Number.isFinite(range.from) &&
+        Number.isFinite(range.to) &&
+        range.to > range.from
+      ) {
+        plUi.range = { from: range.from, to: range.to };
+        if (plRangeSaveTimer) clearTimeout(plRangeSaveTimer);
+        plRangeSaveTimer = setTimeout(() => savePlUi(), 200);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  function restorePlVisibleRange(barCount) {
+    if (!plChart) return false;
+    const saved = plUi.range;
+    if (
+      !saved ||
+      !Number.isFinite(saved.from) ||
+      !Number.isFinite(saved.to) ||
+      saved.to <= saved.from
+    ) {
+      return false;
+    }
+    // Clamp into current data so a shorter history still shows something.
+    const maxTo = Math.max(barCount - 0.5, 0.5);
+    const from = Math.max(-0.5, Math.min(saved.from, maxTo - 1));
+    const to = Math.max(from + 1, Math.min(saved.to, maxTo + 4));
+    plRestoringRange = true;
+    try {
+      plChart.timeScale().setVisibleLogicalRange({ from, to });
+      plChartFitted = true;
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setTimeout(() => {
+        plRestoringRange = false;
+      }, 50);
+    }
+  }
+
+  function fitPlChartFull(barCount) {
+    if (!plChart) return;
+    try {
+      plChart.timeScale().fitContent();
+      plChart.timeScale().setVisibleLogicalRange({
+        from: -0.5,
+        to: Math.max(barCount - 0.5, 0.5),
+      });
+      plChartFitted = true;
+      capturePlVisibleRange();
+    } catch {
+      try {
+        plChart.timeScale().fitContent();
+        plChartFitted = true;
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   function applyPlUi() {
     if (el.plChartSection) {
       el.plChartSection.classList.toggle("is-open", !!plUi.optionsOpen);
@@ -1092,6 +1194,7 @@
     if (el.plChartBody) {
       el.plChartBody.hidden = !plUi.optionsOpen;
     }
+    applyPlChartHeight();
     updatePlToggleMeta();
     if (isPlChartVisible()) {
       requestAnimationFrame(() => {
@@ -1102,11 +1205,30 @@
   }
 
   function setPlOptionsOpen(open) {
+    // Save zoom place before collapsing so expand restores it.
+    if (!open) capturePlVisibleRange();
     plUi.optionsOpen = !!open;
     savePlUi();
     applyPlUi();
     document.body.classList.remove("summary-collapsed");
-    try { localStorage.removeItem("beatlineSummaryCollapsed"); } catch {}
+    try {
+      localStorage.removeItem("beatlineSummaryCollapsed");
+    } catch {}
+  }
+
+  function nudgePlChartHeight(delta) {
+    const next = Math.round(
+      Math.min(420, Math.max(120, (plUi.height || 180) + delta))
+    );
+    if (next === plUi.height) return;
+    plUi.height = next;
+    savePlUi();
+    applyPlChartHeight();
+    requestAnimationFrame(() => {
+      resizePlChart();
+      // Keep the same logical window after a height change.
+      if (plLastBarCount > 0) restorePlVisibleRange(plLastBarCount);
+    });
   }
 
   function applyTradeHistoryUi() {
@@ -1164,6 +1286,7 @@
   function ensurePlChart() {
     if (plChart || !el.plChart || !window.LightweightCharts) return;
     const { createChart } = window.LightweightCharts;
+    applyPlChartHeight();
     plChart = createChart(el.plChart, {
       layout: {
         background: { color: "#0d1612" },
@@ -1194,7 +1317,7 @@
       handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
       handleScale: { mouseWheel: true, pinch: true },
       width: el.plChart.clientWidth || 300,
-      height: el.plChart.clientHeight || 160,
+      height: el.plChart.clientHeight || plUi.height || 180,
     });
     plSeries = plChart.addCandlestickSeries({
       upColor: "#1ac96b",
@@ -1204,12 +1327,20 @@
       wickDownColor: "#d45454",
       priceFormat: { type: "price", precision: 2, minMove: 0.01 },
     });
+    try {
+      plChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+        capturePlVisibleRange();
+      });
+    } catch {
+      // ignore
+    }
   }
 
   function resizePlChart() {
     if (!plChart || !el.plChart || !isPlChartVisible()) return;
+    applyPlChartHeight();
     const w = el.plChart.clientWidth;
-    const h = el.plChart.clientHeight || 160;
+    const h = el.plChart.clientHeight || plUi.height || 180;
     if (w > 0) plChart.applyOptions({ width: w, height: h });
   }
 
@@ -1248,23 +1379,22 @@
           // ignore
         }
       }
+      plLastBarCount = 0;
       return;
     }
 
     ensurePlChart();
     if (!plSeries || !plChart) return;
     resizePlChart();
-    // Pack bars so the full history fits; user can pinch/zoom into a day.
+    // Keep spacing stable when restoring a saved zoom place.
     const spacing = Math.max(
       2,
       Math.min(14, Math.floor(280 / Math.max(8, candles.length)))
     );
     try {
-      plChart.timeScale().applyOptions({
-        barSpacing: spacing,
-        minBarSpacing: 2,
-        rightOffset: 4,
-      });
+      const scaleOpts = { minBarSpacing: 2, rightOffset: 4 };
+      if (!plUi.range) scaleOpts.barSpacing = spacing;
+      plChart.timeScale().applyOptions(scaleOpts);
     } catch {
       // ignore
     }
@@ -1277,18 +1407,19 @@
         close: c.close,
       }))
     );
-    try {
-      plChart.timeScale().fitContent();
-      // Force the visible window to include every candle (today + past).
-      plChart.timeScale().setVisibleLogicalRange({
-        from: -0.5,
-        to: Math.max(candles.length - 0.5, 0.5),
-      });
-      plChartFitted = true;
-    } catch {
+    const barCount = candles.length;
+    const grew = barCount > plLastBarCount;
+    plLastBarCount = barCount;
+    // Hold the user's zoom/pan place across expand/collapse and redraws.
+    // Only auto-fit on first paint or when there was no saved place yet.
+    const restored = restorePlVisibleRange(barCount);
+    if (!restored) {
+      fitPlChartFull(barCount);
+    } else if (grew && plUi.range && plUi.range.to >= barCount - 2.5) {
+      // If they were parked near the live edge, keep them at the new tip.
       try {
-        plChart.timeScale().fitContent();
-        plChartFitted = true;
+        plChart.timeScale().scrollToRealTime();
+        capturePlVisibleRange();
       } catch {
         // ignore
       }
@@ -6313,6 +6444,20 @@
     if (el.plChartToggle) {
       el.plChartToggle.addEventListener("click", () => {
         setPlOptionsOpen(!plUi.optionsOpen);
+      });
+    }
+    if (el.plChartGrow) {
+      el.plChartGrow.addEventListener("click", () => nudgePlChartHeight(60));
+    }
+    if (el.plChartShrink) {
+      el.plChartShrink.addEventListener("click", () => nudgePlChartHeight(-60));
+    }
+    if (el.plChartFit) {
+      el.plChartFit.addEventListener("click", () => {
+        plUi.range = null;
+        savePlUi();
+        if (plLastBarCount > 0) fitPlChartFull(plLastBarCount);
+        else renderPlChart();
       });
     }
     if (el.tradeHistoryToggle) {

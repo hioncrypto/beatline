@@ -948,6 +948,34 @@ h1 {
   padding: 0 2px 8px;
 }
 
+.pl-chart-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.pl-chart-tool {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #101a15;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pl-chart-tool:active {
+  transform: scale(0.97);
+  color: var(--fg);
+  border-color: rgba(26, 201, 107, 0.4);
+}
+
 .pl-chart-hint {
   margin: 8px 0 0;
   font-size: 0.72rem;

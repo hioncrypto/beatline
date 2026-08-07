@@ -508,21 +508,25 @@ def parse_target(market: dict) -> float | None:
     return float(m.group(1).replace(",", ""))
 
 
-def format_et(ts_iso_or_unix) -> str | None:
+def format_pt(ts_iso_or_unix) -> str | None:
     try:
         if isinstance(ts_iso_or_unix, (int, float)):
             dt = datetime.fromtimestamp(ts_iso_or_unix, tz=timezone.utc)
         else:
             dt = datetime.fromisoformat(str(ts_iso_or_unix).replace("Z", "+00:00"))
-        dt = dt.astimezone(ZoneInfo("America/New_York"))
+        dt = dt.astimezone(ZoneInfo("America/Los_Angeles"))
         return (
-            dt.strftime("%I:%M%p ET")
+            dt.strftime("%I:%M%p PT")
             .lstrip("0")
             .replace("AM", "am")
             .replace("PM", "pm")
         )
     except Exception:
         return None
+
+
+# Back-compat alias — API field is still close_et but values are Pacific.
+format_et = format_pt
 
 
 def fetch_kalshi_markets(series: str) -> list:

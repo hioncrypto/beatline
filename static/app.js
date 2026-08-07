@@ -13,7 +13,9 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.54";
+  const APP_VERSION = "9.55";
+  /** Display + day-boundary timezone for the whole app (PST/PDT). */
+  const APP_TZ = "America/Los_Angeles";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -967,7 +969,8 @@
   function formatHistoryTime(ts) {
     if (!ts) return "";
     try {
-      return new Date(ts).toLocaleString([], {
+      return new Date(ts).toLocaleString("en-US", {
+        timeZone: APP_TZ,
         month: "short",
         day: "numeric",
         hour: "numeric",
@@ -1005,8 +1008,8 @@
     const first = Number(closed[0].at) || 0;
     const last = Number(closed[closed.length - 1].at) || 0;
     if (!first || !last) return null;
-    const a = etDateKey(first);
-    const b = etDateKey(last);
+    const a = appDateKey(first);
+    const b = appDateKey(last);
     if (!a || !b) return null;
     if (a === b) return a;
     return `${a} → ${b}`;
@@ -1089,14 +1092,27 @@
     if (!Number.isFinite(ts)) return "";
     const d = new Date(ts * 1000);
     // TickMarkType: Year=0, Month=1, DayOfMonth=2, Time=3, TimeWithSeconds=4
-    if (tickMarkType === 0) return String(d.getFullYear());
+    if (tickMarkType === 0) {
+      return d.toLocaleString("en-US", {
+        timeZone: APP_TZ,
+        year: "numeric",
+      });
+    }
     if (tickMarkType === 1) {
-      return d.toLocaleString(undefined, { month: "short" });
+      return d.toLocaleString("en-US", {
+        timeZone: APP_TZ,
+        month: "short",
+      });
     }
     if (tickMarkType <= 2) {
-      return d.toLocaleString(undefined, { month: "short", day: "numeric" });
+      return d.toLocaleString("en-US", {
+        timeZone: APP_TZ,
+        month: "short",
+        day: "numeric",
+      });
     }
-    return d.toLocaleString(undefined, {
+    return d.toLocaleString("en-US", {
+      timeZone: APP_TZ,
       month: "short",
       day: "numeric",
       hour: "numeric",
@@ -1928,10 +1944,10 @@
     return Math.round(cash * 100) / 100;
   }
 
-  function etDateKey(ms = Date.now()) {
+  function appDateKey(ms = Date.now()) {
     try {
       return new Intl.DateTimeFormat("en-CA", {
-        timeZone: "America/New_York",
+        timeZone: APP_TZ,
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
@@ -1969,10 +1985,10 @@
     }
   }
 
-  /** Snapshot equity on first open of each ET calendar day. */
+  /** Snapshot equity on first open of each Pacific calendar day. */
   function ensureDayEquity(currentEquity) {
     if (!Number.isFinite(currentEquity)) return null;
-    const today = etDateKey();
+    const today = appDateKey();
     let stored = loadDayEquity();
     if (!stored || stored.date !== today) {
       stored = {
@@ -2244,7 +2260,7 @@
       if (report.day) {
         el.strategyToday.textContent = `Today ${formatDayPct(report.day.pct)} · start ${money(
           report.day.start
-        )} → ${money(report.day.now)} (ET day)`;
+        )} → ${money(report.day.now)} (PT day)`;
         el.strategyToday.classList.toggle("is-up", report.day.pct > 0);
         el.strategyToday.classList.toggle("is-down", report.day.pct < 0);
       } else {
@@ -2969,7 +2985,7 @@
     // NEVER clear trade history — bankroll reset keeps the all-time ledger.
     demo.history = mergeTradeHistory(demo.history, loadTradeHistory());
     persistTradeHistory(demo.history);
-    saveDayEquity(etDateKey(), start);
+    saveDayEquity(appDateKey(), start);
     saveDemoState();
     renderDemoUi();
     renderTradeHistory();
@@ -4706,19 +4722,22 @@
   }
 
   function formatWindow(closeIso, closeEt) {
-    if (closeEt) return closeEt;
-    if (!closeIso) return "";
-    try {
-      return new Date(closeIso).toLocaleString("en-US", {
-        timeZone: "America/New_York",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-        timeZoneName: "short",
-      });
-    } catch {
-      return closeIso;
+    // Always render settle time in Pacific from the ISO close, so labels
+    // stay PST/PDT even if an older server still sends an ET string.
+    if (closeIso) {
+      try {
+        return new Date(closeIso).toLocaleString("en-US", {
+          timeZone: APP_TZ,
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+          timeZoneName: "short",
+        });
+      } catch {
+        // fall through
+      }
     }
+    return closeEt || "";
   }
 
   function bookText(bid, ask) {
@@ -6596,7 +6615,8 @@
 
   function tickClock() {
     if (el.clock) {
-      el.clock.textContent = new Date().toLocaleTimeString([], {
+      el.clock.textContent = new Date().toLocaleTimeString("en-US", {
+        timeZone: APP_TZ,
         hour: "numeric",
         minute: "2-digit",
         second: "2-digit",

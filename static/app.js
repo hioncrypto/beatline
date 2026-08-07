@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.53";
+  const APP_VERSION = "9.54";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -347,14 +347,9 @@
   let lastChimeAt = 0;
   /** Replay Best Side tone after the next tap if AudioContext was suspended. */
   let pendingEdgeChime = false;
-  /** Position key currently tracked for profit tone. */
-  let profitTonePosKey = null;
-  /** True after the first mark observation for that position. */
-  let profitToneArmed = false;
-  /** True after the C–E–G has already fired for that position. */
-  let profitTonePlayed = false;
-  /** Last known open-mark sign for crossing into profit. */
-  let openPlWasPositive = false;
+  /** Replay profit C–E–G after the next tap if audio was blocked. */
+  let pendingProfitChime = false;
+  let pendingProfitPayload = null;
   let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
   let chartHeightPx = loadChartHeightPx();
   let summaryPushPx = loadSummaryPushPx();
@@ -3126,6 +3121,7 @@
         followedSuggest: !!follow.followedSuggest,
         suggestSide: follow.suggestSide,
         entrySource: follow.entrySource,
+        profitChimed: false,
       };
     }
     if (follow.followedSuggest) markSuggestTaken(lastTicker, side);
@@ -3834,10 +3830,11 @@
   /** C5–E5–G5 ascending reward for first mark into profit. */
   function getProfitAudio() {
     if (!profitChimeUrl) {
+      // Clear ascending C–E–G with a longer ring on G.
       profitChimeUrl = buildChimeWavUrl([
-        { f: 523.25, d: 0.14 },
-        { f: 659.25, d: 0.14 },
-        { f: 783.99, d: 0.48 },
+        { f: 523.25, d: 0.16 },
+        { f: 659.25, d: 0.16 },
+        { f: 783.99, d: 0.55 },
       ]);
     }
     if (!profitAudioEl) {
@@ -4125,28 +4122,37 @@
     return `${pos.ticker || ""}:${pos.side || ""}:${pos.openedAt || 0}`;
   }
 
+  function scheduleProfitOsc(ctx) {
+    scheduleOscTones(
+      ctx,
+      [
+        { f: 523.25, t: 0.0, d: 0.16 },
+        { f: 659.25, t: 0.15, d: 0.16 },
+        { f: 783.99, t: 0.3, d: 0.6 },
+      ],
+      "sine",
+      0.48
+    );
+  }
+
   /** C–E–G upward reward when open mark first flips positive. */
   async function playProfitChime(force) {
     if (!chimeOn && !force) return false;
     if (document.visibilityState !== "visible") return false;
     lastChimeAt = Date.now();
-    let ok = await playHtmlChime("profit");
-    if (!ok) {
-      const ctx = await ensureAudioReady();
-      if (ctx && ctx.state === "running") {
-        scheduleOscTones(
-          ctx,
-          [
-            { f: 523.25, t: 0.0, d: 0.14 },
-            { f: 659.25, t: 0.13, d: 0.14 },
-            { f: 783.99, t: 0.26, d: 0.55 },
-          ],
-          "sine",
-          0.38
-        );
-        ok = true;
-      }
+    unlockAudioPlayback();
+    let ok = false;
+    // Prefer Web Audio when running — more reliable than a fresh HTMLAudio
+    // element that may not have been gesture-unlocked yet on iOS.
+    const ctx = await ensureAudioReady();
+    if (ctx && ctx.state === "running") {
+      scheduleProfitOsc(ctx);
+      ok = true;
     }
+    const htmlOk = await playHtmlChime("profit");
+    ok = ok || htmlOk;
+    if (!ok) pendingProfitChime = true;
+    else pendingProfitChime = false;
     if (ok && navigator.vibrate) {
       try {
         navigator.vibrate([40, 50, 40, 50, 120]);
@@ -4172,11 +4178,14 @@
       ticker: (pos && pos.ticker) || lastTicker || lastFifteenTicker || "",
       chimeOn,
     };
+    pendingProfitPayload = payload;
+    setStatus("ok", `In profit · ${sideLabel} ${plTxt}`);
 
     ensureAudioReady().then(async (ctx) => {
       if (visible) {
         const played = await playProfitChime(true);
-        if (!played || !ctx || ctx.state !== "running") {
+        if (!played) {
+          pendingProfitChime = true;
           if (canNotify) {
             postToSW({ type: "profit-notify", force: true, ...payload });
           }
@@ -4202,16 +4211,14 @@
   }
 
   /**
-   * Ring once the first time an open trade's mark goes positive.
-   * Does not re-fire if P/L dips then recovers on the same trade.
-   * First observation only arms the baseline (no chime on reopen).
+   * Ring once the first time an open trade's mark is positive.
+   * Persisted on the position so reopen / first-tick-already-green still works
+   * without re-ringing after a successful chime.
    */
   function maybeAlertProfit(pos, mark) {
     if (!pos) {
-      profitTonePosKey = null;
-      profitToneArmed = false;
-      profitTonePlayed = false;
-      openPlWasPositive = false;
+      pendingProfitChime = false;
+      pendingProfitPayload = null;
       return;
     }
     if (
@@ -4221,23 +4228,10 @@
     ) {
       return;
     }
-    const key = positionProfitKey(pos);
-    if (key !== profitTonePosKey) {
-      profitTonePosKey = key;
-      profitToneArmed = false;
-      profitTonePlayed = false;
-      openPlWasPositive = false;
-    }
-    const inProfit = mark.unrealized > 0;
-    if (!profitToneArmed) {
-      profitToneArmed = true;
-      openPlWasPositive = inProfit;
-      return;
-    }
-    const crossed = inProfit && !openPlWasPositive;
-    openPlWasPositive = inProfit;
-    if (!crossed || profitTonePlayed) return;
-    profitTonePlayed = true;
+    if (pos.profitChimed) return;
+    if (!(mark.unrealized > 0)) return;
+    pos.profitChimed = true;
+    saveDemoState();
     alertProfit(pos, mark);
   }
 
@@ -7023,6 +7017,10 @@
         pendingEdgeChime = false;
         playEdgeChime(true);
         vibrateEdge();
+      }
+      if (pendingProfitChime && chimeOn) {
+        pendingProfitChime = false;
+        playProfitChime(true);
       }
       ensurePortraitLock(true);
     };

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.51";
+  const APP_VERSION = "9.52";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -3310,10 +3310,14 @@
       el.buySlideThumb.style.transform = `translateX(${x}px)`;
     }
     if (el.buySlideFill) {
-      el.buySlideFill.style.width = `${Math.max(
-        0,
-        ((x + 48) / Math.max(1, (el.buySlide && el.buySlide.clientWidth) || 1)) * 100
-      )}%`;
+      // No resting halo around the thumb — fill only the track behind it
+      // once the user starts sliding.
+      const trackW = Math.max(1, (el.buySlide && el.buySlide.clientWidth) || 1);
+      const thumbW =
+        (el.buySlideThumb && el.buySlideThumb.offsetWidth) || 48;
+      const fillPx =
+        buySlideProgress <= 0.001 ? 0 : Math.min(trackW, x + thumbW * 0.5);
+      el.buySlideFill.style.width = `${(fillPx / trackW) * 100}%`;
     }
     if (el.buySlide) {
       el.buySlide.setAttribute("aria-valuenow", String(Math.round(buySlideProgress * 100)));

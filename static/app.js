@@ -1459,6 +1459,7 @@
 
     ensurePlChart();
     if (!plSeries || !plChart) return;
+    wirePlChartTouchGuards();
     resizePlChart();
     // Keep spacing stable when restoring a saved zoom place.
     const spacing = Math.max(

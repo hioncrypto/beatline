@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=9.50" />
+    <link rel="stylesheet" href="/styles.css?v=9.51" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=9.50" defer></script>
+    <script src="/app.js?v=9.51" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -390,6 +390,54 @@
           <div id="demo-pl" class="demo-pl">Session P/L $0.00</div>
         </div>
 
+        <section class="pl-chart-section" aria-label="Wins and P/L chart">
+          <button
+            type="button"
+            id="pl-chart-toggle"
+            class="pl-chart-toggle"
+            aria-expanded="false"
+            aria-controls="pl-chart-body"
+          >
+            <span>
+              <strong>Wins &amp; P/L chart</strong>
+              <em id="pl-chart-toggle-meta">Collapsed · from your trade log</em>
+            </span>
+            <span id="pl-chart-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
+          </button>
+          <div id="pl-chart-body" class="pl-chart-body" hidden>
+            <div id="pl-chart-caption" class="pl-chart-caption">
+              All-time trade log · green win · red loss · scroll/pinch for dates
+            </div>
+            <div class="pl-chart-tools" role="group" aria-label="Chart size and view">
+              <button type="button" id="pl-chart-zoom-out" class="pl-chart-tool" title="Zoom out — see more trades">
+                Zoom out
+              </button>
+              <button type="button" id="pl-chart-zoom-in" class="pl-chart-tool" title="Zoom in — fewer trades">
+                Zoom in
+              </button>
+              <button type="button" id="pl-chart-fit" class="pl-chart-tool" title="Show all trades">
+                Fit all
+              </button>
+              <button type="button" id="pl-chart-shrink" class="pl-chart-tool" title="Shorter chart">
+                Shorter
+              </button>
+              <button type="button" id="pl-chart-grow" class="pl-chart-tool" title="Taller chart">
+                Taller
+              </button>
+            </div>
+            <div id="pl-chart" class="pl-chart" aria-label="Trade history profit and loss chart"></div>
+            <div id="pl-chart-empty" class="pl-chart-empty">
+              Wins/losses will candle here after you close or settle trades.
+            </div>
+            <p class="pl-chart-hint">
+              Pinch with a small move (or tap Zoom in / Zoom out) to expand and
+              contract the trade history fast. Drag to pan. Fit all shows every
+              trade. Your zoom place is remembered when you collapse or reopen
+              Options.
+            </p>
+          </div>
+        </section>
+
         <div class="demo-start-row">
           <label for="demo-start">Starting bankroll</label>
           <div class="demo-start-controls">
@@ -490,54 +538,6 @@
           <div id="strategy-today" class="strategy-today">Today —</div>
           <p class="strategy-hint">
             How to read: compare the Best Side bars to Your calls. Higher win rate and greener P/L on Best Side means the app’s edge is earning trust. Untagged older closes still count under All closes until new tagged fills build the split.
-          </p>
-        </div>
-      </section>
-
-      <section class="pl-chart-section" aria-label="Wins and P/L chart">
-        <button
-          type="button"
-          id="pl-chart-toggle"
-          class="pl-chart-toggle"
-          aria-expanded="false"
-          aria-controls="pl-chart-body"
-        >
-          <span>
-            <strong>Wins &amp; P/L chart</strong>
-            <em id="pl-chart-toggle-meta">Collapsed · from your trade log</em>
-          </span>
-          <span id="pl-chart-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
-        </button>
-        <div id="pl-chart-body" class="pl-chart-body" hidden>
-          <div id="pl-chart-caption" class="pl-chart-caption">
-            All-time trade log · green win · red loss · scroll/pinch for dates
-          </div>
-          <div class="pl-chart-tools" role="group" aria-label="Chart size and view">
-            <button type="button" id="pl-chart-zoom-out" class="pl-chart-tool" title="Zoom out — see more trades">
-              Zoom out
-            </button>
-            <button type="button" id="pl-chart-zoom-in" class="pl-chart-tool" title="Zoom in — fewer trades">
-              Zoom in
-            </button>
-            <button type="button" id="pl-chart-fit" class="pl-chart-tool" title="Show all trades">
-              Fit all
-            </button>
-            <button type="button" id="pl-chart-shrink" class="pl-chart-tool" title="Shorter chart">
-              Shorter
-            </button>
-            <button type="button" id="pl-chart-grow" class="pl-chart-tool" title="Taller chart">
-              Taller
-            </button>
-          </div>
-          <div id="pl-chart" class="pl-chart" aria-label="Trade history profit and loss chart"></div>
-          <div id="pl-chart-empty" class="pl-chart-empty">
-            Wins/losses will candle here after you close or settle trades.
-          </div>
-          <p class="pl-chart-hint">
-            Pinch with a small move (or tap Zoom in / Zoom out) to expand and
-            contract the trade history fast. Drag to pan. Fit all shows every
-            trade. Your zoom place is remembered when you collapse or reopen
-            Options.
           </p>
         </div>
       </section>

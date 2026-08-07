@@ -13,9 +13,11 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.55";
+  const APP_VERSION = "9.56";
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
   const APP_TZ = "America/Los_Angeles";
+  /** Day-equity schema: v2 = Pacific calendar day (not Eastern). */
+  const DAY_EQUITY_VERSION = 2;
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -1946,6 +1948,20 @@
 
   function appDateKey(ms = Date.now()) {
     try {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: APP_TZ,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(new Date(ms));
+      const y = parts.find((p) => p.type === "year")?.value;
+      const m = parts.find((p) => p.type === "month")?.value;
+      const d = parts.find((p) => p.type === "day")?.value;
+      if (y && m && d) return `${y}-${m}-${d}`;
+    } catch {
+      // fall through
+    }
+    try {
       return new Intl.DateTimeFormat("en-CA", {
         timeZone: APP_TZ,
         year: "numeric",
@@ -1957,6 +1973,48 @@
     }
   }
 
+  /** UTC ms of Pacific local midnight for the app-day containing `ms`. */
+  function startOfAppDayMs(ms = Date.now()) {
+    const key = appDateKey(ms);
+    let lo = ms - 48 * 3600 * 1000;
+    let hi = ms + 1;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (appDateKey(mid) < key) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  /**
+   * Best-effort equity at Pacific midnight today:
+   * current equity minus today's closed P/L minus open mark.
+   * 15m books rarely span midnight, so this undoes a false ET 9pm rollover.
+   */
+  function estimateAppDayStartEquity(currentEquity) {
+    if (!Number.isFinite(currentEquity)) return null;
+    const since = startOfAppDayMs();
+    let closedPl = 0;
+    const hist = mergeTradeHistory(
+      Array.isArray(demo.history) ? demo.history : [],
+      loadTradeHistory()
+    );
+    for (const t of hist) {
+      if (!t || typeof t !== "object") continue;
+      if (t.kind !== "settle" && t.kind !== "close") continue;
+      if (!Number.isFinite(Number(t.at)) || Number(t.at) < since) continue;
+      if (Number.isFinite(Number(t.pl))) closedPl += Number(t.pl);
+    }
+    let openPl = 0;
+    const pos = demo.position;
+    if (pos) {
+      const mark = markOpenPosition(pos);
+      if (mark && Number.isFinite(mark.unrealized)) openPl = mark.unrealized;
+    }
+    const start = Math.round((currentEquity - closedPl - openPl) * 100) / 100;
+    return start > 0 ? start : Math.round(currentEquity * 100) / 100;
+  }
+
   function loadDayEquity() {
     try {
       const raw = localStorage.getItem(DAY_EQUITY_KEY);
@@ -1965,19 +2023,26 @@
       if (!parsed || !parsed.date || !Number.isFinite(Number(parsed.equity))) {
         return null;
       }
-      return { date: String(parsed.date), equity: Number(parsed.equity) };
+      return {
+        date: String(parsed.date),
+        equity: Number(parsed.equity),
+        tz: parsed.tz ? String(parsed.tz) : null,
+        v: Number(parsed.v) || 1,
+      };
     } catch {
       return null;
     }
   }
 
-  function saveDayEquity(date, equity) {
+  function saveDayEquity(date, equity, extra = {}) {
     try {
       localStorage.setItem(
         DAY_EQUITY_KEY,
         JSON.stringify({
           date,
           equity: Math.round(Number(equity) * 100) / 100,
+          tz: extra.tz || APP_TZ,
+          v: extra.v != null ? extra.v : DAY_EQUITY_VERSION,
         })
       );
     } catch {
@@ -1990,12 +2055,37 @@
     if (!Number.isFinite(currentEquity)) return null;
     const today = appDateKey();
     let stored = loadDayEquity();
-    if (!stored || stored.date !== today) {
+    const isCurrentSchema =
+      stored &&
+      stored.tz === APP_TZ &&
+      stored.v >= DAY_EQUITY_VERSION &&
+      stored.date === today;
+
+    if (isCurrentSchema) return stored;
+
+    // Heal once from Eastern-midnight snapshots / pre-PT schema so Day %
+    // tracks Pacific midnight — not 9pm PT (Eastern midnight).
+    if (!stored || stored.tz !== APP_TZ || stored.v < DAY_EQUITY_VERSION) {
+      const start = estimateAppDayStartEquity(currentEquity);
+      stored = {
+        date: today,
+        equity: start,
+        tz: APP_TZ,
+        v: DAY_EQUITY_VERSION,
+      };
+      saveDayEquity(stored.date, stored.equity, { tz: stored.tz, v: stored.v });
+      return stored;
+    }
+
+    // True Pacific date rollover after midnight.
+    if (stored.date !== today) {
       stored = {
         date: today,
         equity: Math.round(currentEquity * 100) / 100,
+        tz: APP_TZ,
+        v: DAY_EQUITY_VERSION,
       };
-      saveDayEquity(stored.date, stored.equity);
+      saveDayEquity(stored.date, stored.equity, { tz: stored.tz, v: stored.v });
     }
     return stored;
   }
@@ -2985,7 +3075,7 @@
     // NEVER clear trade history — bankroll reset keeps the all-time ledger.
     demo.history = mergeTradeHistory(demo.history, loadTradeHistory());
     persistTradeHistory(demo.history);
-    saveDayEquity(appDateKey(), start);
+    saveDayEquity(appDateKey(), start, { tz: APP_TZ, v: DAY_EQUITY_VERSION });
     saveDemoState();
     renderDemoUi();
     renderTradeHistory();

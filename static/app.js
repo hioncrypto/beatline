@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.79";
+  const APP_VERSION = "9.80";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -266,6 +266,11 @@
     plCrosshairBalance: document.getElementById("pl-crosshair-balance"),
     plCrosshairBalanceAmt: document.getElementById("pl-crosshair-balance-amt"),
     plChartReadout: document.getElementById("pl-chart-readout"),
+    plChartReadoutMain: document.getElementById("pl-chart-readout-main"),
+    plChartReadoutBalance: document.getElementById("pl-chart-readout-balance"),
+    plChartReadoutBalanceAmt: document.getElementById(
+      "pl-chart-readout-balance-amt"
+    ),
     accountExport: document.getElementById("account-export"),
     accountImport: document.getElementById("account-import"),
     accountImportFile: document.getElementById("account-import-file"),
@@ -1662,10 +1667,17 @@
           : candle.kind
             ? ` · ${candle.kind}`
             : "";
-      const balBit = Number.isFinite(balBefore)
-        ? ` · balance ${money(balBefore)}`
-        : "";
-      el.plChartReadout.textContent = `${dateLabel} · ${plLabel}${balBit}${sideBit}${kindBit}`;
+      if (el.plChartReadoutMain) {
+        el.plChartReadoutMain.textContent = `${dateLabel} · ${plLabel}${sideBit}${kindBit}`;
+      } else {
+        el.plChartReadout.textContent = `${dateLabel} · ${plLabel}${sideBit}${kindBit}`;
+      }
+      if (el.plChartReadoutBalance) {
+        el.plChartReadoutBalance.hidden = !Number.isFinite(balBefore);
+      }
+      if (el.plChartReadoutBalanceAmt && Number.isFinite(balBefore)) {
+        el.plChartReadoutBalanceAmt.textContent = money(balBefore);
+      }
       el.plChartReadout.classList.toggle("is-up", !!candle.won);
       el.plChartReadout.classList.toggle("is-down", !candle.won);
     }
@@ -1897,11 +1909,14 @@
       clearPressTimer();
       const wasPan = panMoved;
       const heldMs = pressStartedAt ? Date.now() - pressStartedAt : 0;
+      const tapX = pressStartX;
+      const tapY = pressStartY;
       const quickTap =
         !wasPan &&
         !activatedThisPress &&
         heldMs > 0 &&
         heldMs < TAP_MS;
+      const hadInspect = inspectAlreadyOn;
       pinchStartDist = null;
       pinchStartRange = null;
       panStartX = null;
@@ -1915,9 +1930,13 @@
         plRestoringRange = false;
         capturePlVisibleRange();
         clearPlInspect();
-      } else if (quickTap && inspectAlreadyOn) {
+      } else if (quickTap && hadInspect) {
         // Quick tap removes an open crosshair.
         clearPlInspect();
+      } else if (quickTap && !hadInspect && tapX != null && tapY != null) {
+        // Quick tap also brings the crosshair up (no hard press needed).
+        beginInspectAt(tapX, tapY);
+        plInspecting = true;
       } else if (activatedThisPress) {
         // Keep the last readout/crosshair until tap-off or pan.
         plInspecting = true;

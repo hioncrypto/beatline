@@ -1176,7 +1176,7 @@ h1 {
 
 .pl-chart-readout {
   margin: 6px 0 0;
-  padding: 6px 8px;
+  padding: 7px 9px;
   border-radius: 8px;
   border: 1px solid rgba(244, 255, 248, 0.18);
   background: rgba(12, 22, 18, 0.92);
@@ -1191,12 +1191,41 @@ h1 {
   display: none !important;
 }
 
-.pl-chart-readout.is-up {
+.pl-chart-readout-main {
+  color: inherit;
+}
+
+.pl-chart-readout.is-up .pl-chart-readout-main {
   color: #7dffb3;
 }
 
-.pl-chart-readout.is-down {
+.pl-chart-readout.is-down .pl-chart-readout-main {
   color: #ff9b9b;
+}
+
+.pl-chart-readout-balance {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  color: #ffffff;
+}
+
+.pl-chart-readout-balance[hidden] {
+  display: none !important;
+}
+
+.pl-chart-readout-balance #pl-chart-readout-balance-amt {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.pl-chart-readout-balance-note {
+  font-size: 0.58rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
 }
 
 .pl-chart[hidden],

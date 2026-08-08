@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.78";
+  const APP_VERSION = "9.79";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -1636,15 +1636,19 @@
       // Little label on the trade: gain or loss first.
       el.plCrosshairPrice.textContent = hasPl
         ? plLabel
-        : `Equity ${money(candle.close)}`;
+        : Number.isFinite(candle.open)
+          ? `Balance ${money(candle.open)}`
+          : "—";
       el.plCrosshairPrice.classList.toggle("is-up", !!candle.won);
       el.plCrosshairPrice.classList.toggle("is-down", !candle.won);
     }
+    // Balance before this candle's gain/loss is applied (candle open).
+    const balBefore = Number(candle.open);
     if (el.plCrosshairBalance) {
-      el.plCrosshairBalance.hidden = !Number.isFinite(candle.close);
+      el.plCrosshairBalance.hidden = !Number.isFinite(balBefore);
     }
-    if (el.plCrosshairBalanceAmt && Number.isFinite(candle.close)) {
-      el.plCrosshairBalanceAmt.textContent = money(candle.close);
+    if (el.plCrosshairBalanceAmt && Number.isFinite(balBefore)) {
+      el.plCrosshairBalanceAmt.textContent = money(balBefore);
     }
 
     if (el.plChartReadout) {
@@ -1658,9 +1662,10 @@
           : candle.kind
             ? ` · ${candle.kind}`
             : "";
-      el.plChartReadout.textContent = `${dateLabel} · ${plLabel} · equity ${money(
-        candle.close
-      )}${sideBit}${kindBit}`;
+      const balBit = Number.isFinite(balBefore)
+        ? ` · balance ${money(balBefore)}`
+        : "";
+      el.plChartReadout.textContent = `${dateLabel} · ${plLabel}${balBit}${sideBit}${kindBit}`;
       el.plChartReadout.classList.toggle("is-up", !!candle.won);
       el.plChartReadout.classList.toggle("is-down", !candle.won);
     }

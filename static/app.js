@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.80";
+  const APP_VERSION = "9.81";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -265,11 +265,15 @@
     plCrosshairPrice: document.getElementById("pl-crosshair-price"),
     plCrosshairBalance: document.getElementById("pl-crosshair-balance"),
     plCrosshairBalanceAmt: document.getElementById("pl-crosshair-balance-amt"),
+    plCrosshairBalanceNote: document.getElementById("pl-crosshair-balance-note"),
     plChartReadout: document.getElementById("pl-chart-readout"),
     plChartReadoutMain: document.getElementById("pl-chart-readout-main"),
     plChartReadoutBalance: document.getElementById("pl-chart-readout-balance"),
     plChartReadoutBalanceAmt: document.getElementById(
       "pl-chart-readout-balance-amt"
+    ),
+    plChartReadoutBalanceNote: document.getElementById(
+      "pl-chart-readout-balance-note"
     ),
     accountExport: document.getElementById("account-export"),
     accountImport: document.getElementById("account-import"),
@@ -1647,13 +1651,25 @@
       el.plCrosshairPrice.classList.toggle("is-up", !!candle.won);
       el.plCrosshairPrice.classList.toggle("is-down", !candle.won);
     }
-    // Balance before this candle's gain/loss is applied (candle open).
+    // White box: total account after this candle (prev balance + gain/loss).
     const balBefore = Number(candle.open);
+    const balAfter = Number(candle.close);
+    const mergeNote =
+      Number.isFinite(balBefore) && hasPl
+        ? `(${money(balBefore)} ${pl >= 0 ? "+" : "−"} ${money(
+            Math.abs(pl)
+          )})`
+        : Number.isFinite(balBefore)
+          ? `(from ${money(balBefore)})`
+          : "(account at the time)";
     if (el.plCrosshairBalance) {
-      el.plCrosshairBalance.hidden = !Number.isFinite(balBefore);
+      el.plCrosshairBalance.hidden = !Number.isFinite(balAfter);
     }
-    if (el.plCrosshairBalanceAmt && Number.isFinite(balBefore)) {
-      el.plCrosshairBalanceAmt.textContent = money(balBefore);
+    if (el.plCrosshairBalanceAmt && Number.isFinite(balAfter)) {
+      el.plCrosshairBalanceAmt.textContent = money(balAfter);
+    }
+    if (el.plCrosshairBalanceNote) {
+      el.plCrosshairBalanceNote.textContent = mergeNote;
     }
 
     if (el.plChartReadout) {
@@ -1673,10 +1689,13 @@
         el.plChartReadout.textContent = `${dateLabel} · ${plLabel}${sideBit}${kindBit}`;
       }
       if (el.plChartReadoutBalance) {
-        el.plChartReadoutBalance.hidden = !Number.isFinite(balBefore);
+        el.plChartReadoutBalance.hidden = !Number.isFinite(balAfter);
       }
-      if (el.plChartReadoutBalanceAmt && Number.isFinite(balBefore)) {
-        el.plChartReadoutBalanceAmt.textContent = money(balBefore);
+      if (el.plChartReadoutBalanceAmt && Number.isFinite(balAfter)) {
+        el.plChartReadoutBalanceAmt.textContent = money(balAfter);
+      }
+      if (el.plChartReadoutBalanceNote) {
+        el.plChartReadoutBalanceNote.textContent = mergeNote;
       }
       el.plChartReadout.classList.toggle("is-up", !!candle.won);
       el.plChartReadout.classList.toggle("is-down", !candle.won);

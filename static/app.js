@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.74";
+  const APP_VERSION = "9.75";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -1582,16 +1582,10 @@
     if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
 
     let time = null;
-    let price = null;
     try {
       time = plChart.timeScale().coordinateToTime(x);
     } catch {
       time = null;
-    }
-    try {
-      price = plSeries.coordinateToPrice(y);
-    } catch {
-      price = null;
     }
 
     const timeSec =
@@ -1601,75 +1595,70 @@
           ? Number(time.timestamp)
           : NaN;
     const candle = nearestPlCandle(timeSec);
-    const showPrice =
-      candle && Number.isFinite(candle.close)
-        ? candle.close
-        : Number.isFinite(price)
-          ? price
-          : null;
-    const showTime = candle ? candle.time : timeSec;
+    if (!candle) return null;
 
-    // Snap crosshair to candle close when possible so amount matches the trade.
+    // Snap both axes to the trade candle so only one clean crosshair shows.
+    let lineX = x;
     let lineY = y;
-    if (candle && Number.isFinite(candle.close)) {
-      try {
-        const cy = plSeries.priceToCoordinate(candle.close);
-        if (cy != null && Number.isFinite(cy)) lineY = cy;
-      } catch {
-        // keep finger y
-      }
+    try {
+      const cx = plChart.timeScale().timeToCoordinate(candle.time);
+      if (cx != null && Number.isFinite(cx)) lineX = cx;
+    } catch {
+      // keep finger x
     }
+    try {
+      const cy = plSeries.priceToCoordinate(candle.close);
+      if (cy != null && Number.isFinite(cy)) lineY = cy;
+    } catch {
+      // keep finger y
+    }
+
+    const pl = Number(candle.pl);
+    const hasPl = Number.isFinite(pl);
+    const plLabel = hasPl
+      ? `${pl >= 0 ? "Gain" : "Loss"} ${formatPl(pl)}`
+      : money(candle.close);
+    const dateLabel = formatPlCrosshairTime(candle.time);
 
     if (el.plCrosshair) {
       el.plCrosshair.hidden = false;
-      el.plCrosshair.style.setProperty("--pl-x", `${Math.round(x)}px`);
+      el.plCrosshair.style.setProperty("--pl-x", `${Math.round(lineX)}px`);
       el.plCrosshair.style.setProperty("--pl-y", `${Math.round(lineY)}px`);
+      el.plCrosshair.classList.toggle("is-up", !!candle.won);
+      el.plCrosshair.classList.toggle("is-down", !candle.won);
     }
     if (el.plCrosshairDate) {
-      el.plCrosshairDate.textContent = Number.isFinite(showTime)
-        ? formatPlCrosshairTime(showTime)
-        : "—";
+      el.plCrosshairDate.textContent = dateLabel;
     }
     if (el.plCrosshairPrice) {
-      el.plCrosshairPrice.textContent =
-        showPrice != null ? money(showPrice) : "—";
+      // Little label on the trade: gain or loss first.
+      el.plCrosshairPrice.textContent = hasPl
+        ? plLabel
+        : `Equity ${money(candle.close)}`;
+      el.plCrosshairPrice.classList.toggle("is-up", !!candle.won);
+      el.plCrosshairPrice.classList.toggle("is-down", !candle.won);
     }
 
     if (el.plChartReadout) {
       el.plChartReadout.hidden = false;
-      if (candle) {
-        const plBit =
-          candle.pl != null && Number.isFinite(candle.pl)
-            ? ` · trade ${formatPl(candle.pl)}`
+      const sideBit = candle.side
+        ? ` · ${candle.side === "above" ? "Above" : "Below"}`
+        : "";
+      const kindBit =
+        candle.kind === "open"
+          ? " · open mark"
+          : candle.kind
+            ? ` · ${candle.kind}`
             : "";
-        const sideBit = candle.side
-          ? ` · ${candle.side === "above" ? "Above" : "Below"}`
-          : "";
-        el.plChartReadout.textContent = `${formatPlCrosshairTime(
-          candle.time
-        )} · equity ${money(candle.close)}${plBit}${sideBit}`;
-        el.plChartReadout.classList.toggle("is-up", !!candle.won);
-        el.plChartReadout.classList.toggle("is-down", !candle.won);
-      } else if (Number.isFinite(showTime) && showPrice != null) {
-        el.plChartReadout.textContent = `${formatPlCrosshairTime(
-          showTime
-        )} · ${money(showPrice)}`;
-        el.plChartReadout.classList.remove("is-up", "is-down");
-      } else {
-        el.plChartReadout.textContent = "Hold and drag to inspect";
-        el.plChartReadout.classList.remove("is-up", "is-down");
-      }
+      el.plChartReadout.textContent = `${dateLabel} · ${plLabel} · equity ${money(
+        candle.close
+      )}${sideBit}${kindBit}`;
+      el.plChartReadout.classList.toggle("is-up", !!candle.won);
+      el.plChartReadout.classList.toggle("is-down", !candle.won);
     }
 
-    try {
-      if (candle && Number.isFinite(candle.close)) {
-        plChart.setCrosshairPosition(candle.close, candle.time, plSeries);
-      } else if (Number.isFinite(showTime) && Number.isFinite(price)) {
-        plChart.setCrosshairPosition(price, showTime, plSeries);
-      }
-    } catch {
-      // ignore
-    }
+    // Do NOT also drive Lightweight Charts' built-in crosshair — that stacked
+    // a second set of lines on top of our overlay.
     return candle;
   }
 
@@ -1887,6 +1876,18 @@
     };
     el.plChart.addEventListener("touchend", endGesture, opts);
     el.plChart.addEventListener("touchcancel", endGesture, opts);
+
+    // Desktop: hover a candle to show gain/loss on the label.
+    el.plChart.addEventListener("mousemove", (ev) => {
+      if (ev.buttons) {
+        clearPlInspect();
+        return;
+      }
+      updatePlInspectAtClient(ev.clientX, ev.clientY);
+    });
+    el.plChart.addEventListener("mouseleave", () => {
+      if (!plInspecting) clearPlInspect();
+    });
   }
 
   function applyTradeHistoryUi() {
@@ -1943,9 +1944,7 @@
 
   function ensurePlChart() {
     if (plChart || !el.plChart || !window.LightweightCharts) return;
-    const { createChart, CrosshairMode, LineStyle } = window.LightweightCharts;
-    const dotted =
-      (LineStyle && (LineStyle.Dotted ?? LineStyle.Dashed)) || 1;
+    const { createChart, CrosshairMode } = window.LightweightCharts;
     applyPlChartHeight();
     wirePlChartTouchGuards();
     plChart = createChart(el.plChart, {
@@ -1959,24 +1958,11 @@
         vertLines: { color: "rgba(255,255,255,0.04)" },
         horzLines: { color: "rgba(255,255,255,0.05)" },
       },
+      // Built-in crosshair off — custom overlay owns the single dotted pair.
       crosshair: {
-        mode: (CrosshairMode && CrosshairMode.Normal) || 0,
-        vertLine: {
-          visible: true,
-          style: dotted,
-          width: 1,
-          color: "rgba(244, 255, 248, 0.7)",
-          labelVisible: true,
-          labelBackgroundColor: "#1a2b23",
-        },
-        horzLine: {
-          visible: true,
-          style: dotted,
-          width: 1,
-          color: "rgba(244, 255, 248, 0.7)",
-          labelVisible: true,
-          labelBackgroundColor: "#1a2b23",
-        },
+        mode: (CrosshairMode && CrosshairMode.Hidden) || 2,
+        vertLine: { visible: false, labelVisible: false },
+        horzLine: { visible: false, labelVisible: false },
       },
       rightPriceScale: {
         borderColor: "rgba(255,255,255,0.08)",

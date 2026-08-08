@@ -1061,52 +1061,108 @@ h1 {
 .pl-crosshair-v,
 .pl-crosshair-h {
   position: absolute;
-  background: transparent;
+  /* Wide dash + gap so the dotted crosshair reads clearly on candles. */
+  background-repeat: repeat;
 }
 
 .pl-crosshair-v {
   top: 0;
   bottom: 0;
   left: var(--pl-x, 50%);
-  width: 0;
-  border-left: 1px dotted rgba(244, 255, 248, 0.85);
-  transform: translateX(-0.5px);
+  width: 2px;
+  transform: translateX(-1px);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(244, 255, 248, 0.95) 0 5px,
+    transparent 5px 12px
+  );
+  background-color: transparent;
+  box-shadow: 0 0 0 1px rgba(12, 22, 18, 0.35);
 }
 
 .pl-crosshair-h {
   left: 0;
   right: 0;
   top: var(--pl-y, 50%);
-  height: 0;
-  border-top: 1px dotted rgba(244, 255, 248, 0.85);
-  transform: translateY(-0.5px);
+  height: 2px;
+  transform: translateY(-1px);
+  background-image: repeating-linear-gradient(
+    to right,
+    rgba(244, 255, 248, 0.95) 0 5px,
+    transparent 5px 12px
+  );
+  background-color: transparent;
+  box-shadow: 0 0 0 1px rgba(12, 22, 18, 0.35);
+}
+
+.pl-crosshair.is-up .pl-crosshair-v,
+.pl-crosshair.is-up .pl-crosshair-h {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    #7dffb3 0 5px,
+    transparent 5px 12px
+  );
+}
+
+.pl-crosshair.is-up .pl-crosshair-h {
+  background-image: repeating-linear-gradient(
+    to right,
+    #7dffb3 0 5px,
+    transparent 5px 12px
+  );
+}
+
+.pl-crosshair.is-down .pl-crosshair-v {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    #ff9b9b 0 5px,
+    transparent 5px 12px
+  );
+}
+
+.pl-crosshair.is-down .pl-crosshair-h {
+  background-image: repeating-linear-gradient(
+    to right,
+    #ff9b9b 0 5px,
+    transparent 5px 12px
+  );
 }
 
 .pl-crosshair-tag {
   position: absolute;
   z-index: 5;
-  padding: 2px 6px;
-  border-radius: 4px;
+  padding: 3px 8px;
+  border-radius: 5px;
   background: #f4fff8;
   color: #0c1612;
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   font-weight: 700;
   line-height: 1.2;
   white-space: nowrap;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
 .pl-crosshair-date {
   left: var(--pl-x, 50%);
-  bottom: 4px;
+  bottom: 6px;
   transform: translateX(-50%);
 }
 
 .pl-crosshair-price {
   top: var(--pl-y, 50%);
-  right: 4px;
+  right: 6px;
   transform: translateY(-50%);
+}
+
+.pl-crosshair-price.is-up {
+  background: #1ac96b;
+  color: #04140c;
+}
+
+.pl-crosshair-price.is-down {
+  background: #d45454;
+  color: #fff5f5;
 }
 
 .pl-chart-readout {

@@ -139,6 +139,7 @@
     chartWrap: document.getElementById("chart-wrap"),
     chartResizeTop: document.getElementById("chart-resize-top"),
     chartResizeBottom: document.getElementById("chart-resize-bottom"),
+    appShell: document.querySelector(".app-shell"),
     tradePanel: document.querySelector(".trade-panel"),
     tradeStack: document.querySelector(".trade-stack"),
     timeframe: document.getElementById("timeframe"),
@@ -5410,8 +5411,7 @@
     }
     // Locked tall chart makes .app-shell the page scroller.
     if (el.appShell && el.appShell.scrollTop > 2) return true;
-    const stack = document.querySelector(".trade-stack");
-    if (stack && stack.scrollTop > 2) return true;
+    if (el.tradeStack && el.tradeStack.scrollTop > 2) return true;
     return false;
   }
 

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.72";
+  const APP_VERSION = "9.73";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -1542,14 +1542,18 @@
   }
 
   /**
-   * High-gain pinch on the P/L chart. Built-in LWC pinch is too slow for
-   * flipping through the whole trade history with a small finger move.
+   * One-finger pan + pinch on the whole P/L chart surface.
+   * Options sheet scroll must not steal the drag — always preventDefault
+   * for one-finger moves on the chart so left/right sliding works edge-to-edge.
    */
   function wirePlChartTouchGuards() {
     if (!el.plChart || el.plChart.dataset.touchGuarded === "1") return;
     el.plChart.dataset.touchGuarded = "1";
     let pinchStartDist = null;
     let pinchStartRange = null;
+    let panStartX = null;
+    let panStartRange = null;
+    let panMoved = false;
 
     const touchDist = (a, b) => {
       const dx = a.clientX - b.clientX;
@@ -1557,25 +1561,71 @@
       return Math.hypot(dx, dy);
     };
 
+    const readRange = () => {
+      try {
+        return plChart && plChart.timeScale().getVisibleLogicalRange();
+      } catch {
+        return null;
+      }
+    };
+
+    const applyRange = (from, to) => {
+      if (!plChart || !Number.isFinite(from) || !Number.isFinite(to) || to <= from)
+        return;
+      plRestoringRange = true;
+      try {
+        plChart.timeScale().setVisibleLogicalRange({ from, to });
+      } catch {
+        // ignore
+      }
+    };
+
+    const ensurePannableRange = (range) => {
+      if (!range) return null;
+      const barCount = Math.max(1, plLastBarCount);
+      const span = range.to - range.from;
+      // Fully fit → nothing to slide. Auto-zoom to recent window first.
+      if (span >= barCount - 0.5) {
+        const visible = Math.min(16, Math.max(6, barCount));
+        const to = barCount - 0.5;
+        const from = Math.max(-0.5, to - visible);
+        applyRange(from, to);
+        return { from, to };
+      }
+      return range;
+    };
+
+    const opts = { passive: false, capture: true };
+
     el.plChart.addEventListener(
       "touchstart",
       (ev) => {
         if (ev.touches && ev.touches.length >= 2) {
           ev.preventDefault();
           ev.stopPropagation();
+          panStartX = null;
+          panStartRange = null;
+          panMoved = false;
           pinchStartDist = touchDist(ev.touches[0], ev.touches[1]);
-          try {
-            pinchStartRange =
-              plChart && plChart.timeScale().getVisibleLogicalRange();
-          } catch {
-            pinchStartRange = null;
-          }
+          pinchStartRange = readRange();
           return;
         }
         pinchStartDist = null;
         pinchStartRange = null;
+        if (ev.touches && ev.touches.length === 1) {
+          // Claim the gesture on the entire chart surface immediately.
+          ev.preventDefault();
+          ev.stopPropagation();
+          panStartX = ev.touches[0].clientX;
+          panStartRange = ensurePannableRange(readRange());
+          panMoved = false;
+        } else {
+          panStartX = null;
+          panStartRange = null;
+          panMoved = false;
+        }
       },
-      { passive: false }
+      opts
     );
 
     el.plChart.addEventListener(
@@ -1594,7 +1644,6 @@
           }
           const d = touchDist(ev.touches[0], ev.touches[1]);
           if (d < 8) return;
-          // Amplify heavily: a short pinch covers most of the history.
           const raw = pinchStartDist / d;
           const amplified = Math.pow(raw, 2.8);
           const mid = (pinchStartRange.from + pinchStartRange.to) / 2;
@@ -1602,35 +1651,48 @@
           let half =
             ((pinchStartRange.to - pinchStartRange.from) / 2) * amplified;
           half = Math.max(1.5, Math.min(half, Math.max(barCount / 2 + 4, 6)));
-          plRestoringRange = true;
-          try {
-            plChart.timeScale().setVisibleLogicalRange({
-              from: mid - half,
-              to: mid + half,
-            });
-          } catch {
-            // ignore
-          }
+          applyRange(mid - half, mid + half);
           return;
         }
-        // One-finger pans the chart — don't let the Options sheet steal it.
-        if (ev.touches && ev.touches.length === 1) {
+
+        if (
+          ev.touches &&
+          ev.touches.length === 1 &&
+          panStartX != null &&
+          panStartRange
+        ) {
+          ev.preventDefault();
           ev.stopPropagation();
+          if (!plChart) return;
+          const x = ev.touches[0].clientX;
+          const dx = x - panStartX;
+          if (Math.abs(dx) < 1) return;
+          panMoved = true;
+          const width = Math.max(1, el.plChart.clientWidth || 1);
+          const span = panStartRange.to - panStartRange.from;
+          // Finger right → older trades (scroll history leftward on screen).
+          const shift = -(dx / width) * span;
+          applyRange(panStartRange.from + shift, panStartRange.to + shift);
         }
       },
-      { passive: false }
+      opts
     );
 
-    const endPinch = () => {
-      if (pinchStartDist != null) {
-        pinchStartDist = null;
-        pinchStartRange = null;
+    const endGesture = () => {
+      const wasActive =
+        pinchStartDist != null || panMoved || panStartRange != null;
+      pinchStartDist = null;
+      pinchStartRange = null;
+      panStartX = null;
+      panStartRange = null;
+      panMoved = false;
+      if (wasActive) {
         plRestoringRange = false;
         capturePlVisibleRange();
       }
     };
-    el.plChart.addEventListener("touchend", endPinch);
-    el.plChart.addEventListener("touchcancel", endPinch);
+    el.plChart.addEventListener("touchend", endGesture, opts);
+    el.plChart.addEventListener("touchcancel", endGesture, opts);
   }
 
   function applyTradeHistoryUi() {

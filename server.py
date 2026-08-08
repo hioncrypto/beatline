@@ -115,6 +115,12 @@ _last_edge_gone_at: float = 0.0
 _last_edge_ask: int | None = None
 _clear_edge_latched: bool = False
 _clear_edge_latch_ticker: str | None = None
+# Require the same clear edge on consecutive polls before Web Push — stops
+# one-tick flashes that notify the phone while the in-app Best Side still
+# shows "wait / no clear edge".
+_edge_confirm_key: str | None = None
+_edge_confirm_count: int = 0
+EDGE_CONFIRM_POLLS = 2
 _vapid_app_server_key: str | None = None
 _vapid_private_path: str | None = None
 TARGET_TTL = 0.75
@@ -1490,6 +1496,7 @@ def push_watcher_loop() -> None:
     """Poll Kalshi and push to phones even when the PWA is backgrounded."""
     global _last_push_ticker, _last_edge_key, _last_edge_at, _last_edge_gone_at
     global _last_edge_ask, _clear_edge_latched, _clear_edge_latch_ticker
+    global _edge_confirm_key, _edge_confirm_count
     print("[kalshi-btc-target] background push watcher started")
     while True:
         try:
@@ -1524,6 +1531,8 @@ def push_watcher_loop() -> None:
                 _last_edge_ask = None
                 _clear_edge_latched = False
                 _clear_edge_latch_ticker = ticker
+                _edge_confirm_key = None
+                _edge_confirm_count = 0
             if ticker:
                 _last_push_ticker = ticker
 
@@ -1546,6 +1555,14 @@ def push_watcher_loop() -> None:
                 _clear_edge_latched = True
                 _clear_edge_latch_ticker = ticker
                 sticky = f"{ticker}:{edge['side']}"
+                if sticky == _edge_confirm_key:
+                    _edge_confirm_count += 1
+                else:
+                    _edge_confirm_key = sticky
+                    _edge_confirm_count = 1
+                # Hold one extra poll so fleeting ticks don't notify without a
+                # matching in-app Suggested buy.
+                confirmed = _edge_confirm_count >= EDGE_CONFIRM_POLLS
                 ask = int(edge["ask_cents"])
                 cooled = now - _last_edge_at >= EDGE_PUSH_COOLDOWN_SEC
                 ask_improved = (
@@ -1555,7 +1572,9 @@ def push_watcher_loop() -> None:
                 )
                 # New window/side: always push. Same side: only on ask improve
                 # (or after full cooldown if key somehow stuck).
-                if sticky != _last_edge_key:
+                if not confirmed:
+                    should_push = False
+                elif sticky != _last_edge_key:
                     should_push = True
                 elif ask_improved:
                     should_push = True
@@ -1588,6 +1607,8 @@ def push_watcher_loop() -> None:
                 _last_edge_gone_at = 0.0
             else:
                 _clear_edge_latched = False
+                _edge_confirm_key = None
+                _edge_confirm_count = 0
                 # Only forget the edge after it has been gone for a while —
                 # prevents push loops when the score flickers around threshold.
                 if _last_edge_key is not None:
@@ -1821,7 +1842,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.3.0",
+                    "version": "2.3.1",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

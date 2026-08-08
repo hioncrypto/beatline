@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.67";
+  const APP_VERSION = "9.68";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -357,6 +357,14 @@
   let lastBestSideKey = null;
   let bestSideFlashTimer = null;
   let lastBestPick = null; // { side } | null when clear edge
+  /**
+   * Edge from a background notification — keep Suggested buy on screen so
+   * opening the alert doesn't land on "No clear edge / wait" while the
+   * phone just said Best buy.
+   */
+  let heldAlertEdge = null; // { side, askCents, pWin, suggestStake, ticker, beat, at }
+  const HELD_ALERT_MS = 3 * 60 * 1000;
+  const HELD_ALERT_KEY = "beatlineHeldAlertEdge";
   // Do NOT restore a prior edge key on boot — that blocked Best Side alerts
   // after reopen when a suggestion was already on screen.
   let lastClearEdgeAlertKey = null;
@@ -4513,8 +4521,19 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.10", { scope: "/" });
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.11", {
+        scope: "/",
+      });
       await navigator.serviceWorker.ready;
+      swReg = reg;
+      if (!ensureServiceWorker._msgBound) {
+        ensureServiceWorker._msgBound = true;
+        navigator.serviceWorker.addEventListener("message", (ev) => {
+          const msg = ev && ev.data;
+          if (!msg || msg.type !== "apply-edge-alert") return;
+          holdAlertEdgeFromNotify(msg);
+        });
+      }
       return reg;
     } catch (err) {
       console.warn("SW register failed", err);
@@ -4526,6 +4545,165 @@
     const ctrl = navigator.serviceWorker && navigator.serviceWorker.controller;
     if (ctrl) ctrl.postMessage(msg);
     else if (swReg && swReg.active) swReg.active.postMessage(msg);
+  }
+
+  function readHeldAlertEdge() {
+    if (heldAlertEdge && heldAlertEdge.side) return heldAlertEdge;
+    try {
+      const raw = sessionStorage.getItem(HELD_ALERT_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.side) return null;
+      heldAlertEdge = parsed;
+      return heldAlertEdge;
+    } catch {
+      return null;
+    }
+  }
+
+  function clearHeldAlertEdge() {
+    heldAlertEdge = null;
+    try {
+      sessionStorage.removeItem(HELD_ALERT_KEY);
+    } catch {
+      // ignore
+    }
+  }
+
+  function holdAlertEdgeFromNotify(payload) {
+    if (!payload || !payload.side) return;
+    const side = payload.side === "below" ? "below" : "above";
+    const ask = Math.round(
+      Number(payload.askCents != null ? payload.askCents : payload.ask_cents) ||
+        0
+    );
+    const stakeRaw =
+      payload.suggestStake != null
+        ? payload.suggestStake
+        : payload.suggest_stake;
+    const stake =
+      stakeRaw != null && Number.isFinite(Number(stakeRaw))
+        ? Math.round(Number(stakeRaw))
+        : null;
+    const pWinRaw = payload.pWin != null ? payload.pWin : payload.p_win;
+    const pWin =
+      pWinRaw != null && Number.isFinite(Number(pWinRaw))
+        ? Number(pWinRaw)
+        : null;
+    heldAlertEdge = {
+      side,
+      askCents: ask || null,
+      pWin,
+      suggestStake: stake,
+      ticker: payload.ticker || "",
+      beat: payload.beat ?? payload.price_to_beat ?? null,
+      at: Date.now(),
+    };
+    try {
+      sessionStorage.setItem(HELD_ALERT_KEY, JSON.stringify(heldAlertEdge));
+    } catch {
+      // ignore
+    }
+    // Paint immediately so opening a notification shows Suggested buy.
+    try {
+      updateBestSide();
+    } catch {
+      // ignore — may run before odds are ready
+    }
+  }
+
+  function heldAlertStillValid() {
+    const held = readHeldAlertEdge();
+    if (!held || !held.side) return null;
+    if (Date.now() - (Number(held.at) || 0) > HELD_ALERT_MS) {
+      clearHeldAlertEdge();
+      return null;
+    }
+    if (held.ticker && lastTicker && held.ticker !== lastTicker) {
+      clearHeldAlertEdge();
+      return null;
+    }
+    return held;
+  }
+
+  function paintHeldAlertEdge(held) {
+    if (!held || !held.side || !el.bestSide) return false;
+    const side = held.side;
+    const ask =
+      held.askCents != null
+        ? held.askCents
+        : side === "above"
+          ? lastRoiAsks.above
+          : lastRoiAsks.below;
+    const pWin =
+      held.pWin != null && Number.isFinite(held.pWin) ? held.pWin : 0.55;
+    const scored = {
+      side,
+      askCents: ask,
+      pWin,
+      ev: Math.max(0.02, pWin - (Number(ask) || 50) / 100),
+      score: 0.08,
+      roiIfWin: null,
+      contracts: null,
+      total: null,
+      profitIfWin: null,
+    };
+    const suggestion =
+      held.suggestStake != null
+        ? {
+            stake: held.suggestStake,
+            pWin,
+            atRiskCap: false,
+            lowProb: false,
+            contracts: 0,
+            total: held.suggestStake,
+            profitIfWin: 0,
+            roiIfWin: null,
+            bankPct: null,
+            streak: 0,
+            note: "from alert",
+          }
+        : suggestStakeForEdge(scored);
+    const suggestStake =
+      suggestion && suggestion.stake >= BUY_AMOUNT_MIN ? suggestion.stake : null;
+    lastBestPick = {
+      side,
+      askCents: ask,
+      pWin,
+      suggestedStake: suggestStake,
+      suggestion,
+      fromAlert: true,
+    };
+    el.bestSide.hidden = false;
+    syncBestSideLayout();
+    el.bestSide.classList.toggle("is-below", side === "below");
+    el.bestSide.classList.toggle("is-none", false);
+    el.bestSide.classList.toggle("is-above", side === "above");
+    if (el.bestSideLabel) {
+      el.bestSideLabel.textContent =
+        side === "above" ? "BUY ABOVE" : "BUY BELOW";
+    }
+    if (el.bestSideAmount) {
+      el.bestSideAmount.textContent =
+        suggestStake != null
+          ? `From alert · tap to buy $${suggestStake}`
+          : "From alert · open buy sheet";
+    }
+    if (el.bestSideMeta) {
+      const conf = Math.round(pWin * 100);
+      const askTxt = ask != null ? `ask ${ask}¢` : "ask —";
+      el.bestSideMeta.textContent = `${conf}% model · ${askTxt} · alert hold · live may have moved`;
+    }
+    renderBestSideSuggest(side, suggestion, { waiting: false, fromAlert: true });
+    setRoiCardBest(side);
+    setDockBestDetail(
+      suggestStake != null
+        ? `${side === "above" ? "Above" : "Below"} $${suggestStake}`
+        : `${side === "above" ? "Above" : "Below"}`,
+      side
+    );
+    lastBestSideKey = `alert:${side}`;
+    return true;
   }
 
   function setPushBadge(on) {
@@ -5593,9 +5771,11 @@
         ? "Suggested buy"
         : adding
           ? "Suggested add"
-          : waiting
-            ? "Best lean"
-            : "Suggested buy";
+          : opts.fromAlert
+            ? "From alert"
+            : waiting
+              ? "Best lean"
+              : "Suggested buy";
     }
     if (el.bestSideSuggestAmount) {
       if (waiting || s.lowProb) {
@@ -5734,6 +5914,19 @@
       best.score > 0.04 &&
       best.pWin >= 0.52 &&
       !(secs > 12 * 60 && Math.abs(best.ev) < 0.03);
+
+    if (clear) {
+      // Live clear edge wins — drop any stale notification hold.
+      clearHeldAlertEdge();
+    } else {
+      // Notification said Best buy but live tape already cooled — still show
+      // that Suggested buy briefly so the alert and UI match.
+      const held = heldAlertStillValid();
+      if (held && paintHeldAlertEdge(held)) {
+        if (!edgeAlertsArmed) edgeAlertsArmed = true;
+        return;
+      }
+    }
 
     el.bestSide.hidden = false;
     syncBestSideLayout();
@@ -7333,6 +7526,9 @@
         unlockAudioPlayback();
         ensurePortraitLock(true);
         startRolloverBurst();
+        // If we opened from a Best-buy notification, keep that suggestion up.
+        const held = heldAlertStillValid();
+        if (held) paintHeldAlertEdge(held);
         // Re-enter quietly: keep the current edge armed so refresh doesn't
         // replay every Best Side tone that stacked while we were away.
         if (lastBestPick && lastBestPick.side) {

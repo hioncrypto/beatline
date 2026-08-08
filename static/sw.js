@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.10-bg-alerts";
+const SW_VERSION = "3.11-alert-ui-sync";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -111,6 +111,38 @@ async function showTargetNotification(payload, { force = false } = {}) {
   });
 }
 
+async function broadcastEdgeAlert(payload) {
+  const msg = {
+    type: "apply-edge-alert",
+    side: payload && payload.side,
+    askCents:
+      payload && (payload.askCents != null ? payload.askCents : payload.ask_cents),
+    pWin: payload && (payload.pWin != null ? payload.pWin : payload.p_win),
+    suggestStake:
+      payload &&
+      (payload.suggestStake != null
+        ? payload.suggestStake
+        : payload.suggest_stake),
+    beat: payload && (payload.beat ?? payload.price_to_beat ?? payload.target),
+    ticker: payload && payload.ticker,
+  };
+  try {
+    const all = await clients.matchAll({
+      type: "window",
+      includeUncontrolled: true,
+    });
+    for (const client of all) {
+      try {
+        client.postMessage(msg);
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 async function showEdgeNotification(payload, { force = false } = {}) {
   // When BeatLine is open and visible, the page plays its own edge chime —
   // skip a duplicate system banner. Background / locked: this notification
@@ -154,6 +186,16 @@ async function showEdgeNotification(payload, { force = false } = {}) {
   const body = bits.length
     ? bits.join(" · ")
     : "Clear Best Side edge — open BeatLine";
+  const edgeData = {
+    url: "/",
+    ticker: payload && payload.ticker,
+    kind: "clear_edge",
+    side: payload && payload.side,
+    askCents: ask,
+    pWin: payload && (payload.pWin ?? payload.p_win),
+    suggestStake: stake,
+    beat: payload && (payload.beat ?? payload.price_to_beat ?? payload.target),
+  };
   await self.registration.showNotification(title, {
     body,
     icon: "/icons/icon-192.png?v=2.6",
@@ -163,13 +205,11 @@ async function showEdgeNotification(payload, { force = false } = {}) {
     renotify: true,
     requireInteraction: true,
     silent: false,
-    data: {
-      url: "/",
-      ticker: payload && payload.ticker,
-      kind: "clear_edge",
-      side: payload && payload.side,
-    },
+    data: edgeData,
   });
+  // Tell any open BeatLine windows to paint this Suggested buy so the
+  // notification and in-app Best Side stay in sync.
+  await broadcastEdgeAlert(edgeData);
 }
 
 async function showProfitNotification(payload, { force = false } = {}) {
@@ -517,13 +557,24 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || "/";
+  const data = (event.notification && event.notification.data) || {};
+  const url = data.url || "/";
   event.waitUntil(
     (async () => {
-      const all = await clients.matchAll({ type: "window", includeUncontrolled: true });
+      const all = await clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
       for (const client of all) {
         if ("focus" in client) {
           await client.focus();
+          if (data.kind === "clear_edge") {
+            try {
+              client.postMessage({ type: "apply-edge-alert", ...data });
+            } catch {
+              // ignore
+            }
+          }
           if ("navigate" in client) {
             try {
               await client.navigate(url);

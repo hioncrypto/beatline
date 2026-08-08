@@ -6691,6 +6691,7 @@
       }
     }
     targetLine = null;
+    syncToBeatChip(null, false);
   }
 
   function clearTargetSeries() {

@@ -1061,70 +1061,34 @@ h1 {
 .pl-crosshair-v,
 .pl-crosshair-h {
   position: absolute;
-  /* Wide dash + gap so the dotted crosshair reads clearly on candles. */
+  /* White dashes at half the prior size (2.5 on / 3.5 gap). */
   background-repeat: repeat;
+  background-color: transparent;
 }
 
 .pl-crosshair-v {
   top: 0;
   bottom: 0;
   left: var(--pl-x, 50%);
-  width: 2px;
-  transform: translateX(-1px);
+  width: 1px;
+  transform: translateX(-0.5px);
   background-image: repeating-linear-gradient(
     to bottom,
-    rgba(244, 255, 248, 0.95) 0 5px,
-    transparent 5px 12px
+    #ffffff 0 2.5px,
+    transparent 2.5px 6px
   );
-  background-color: transparent;
-  box-shadow: 0 0 0 1px rgba(12, 22, 18, 0.35);
 }
 
 .pl-crosshair-h {
   left: 0;
   right: 0;
   top: var(--pl-y, 50%);
-  height: 2px;
-  transform: translateY(-1px);
+  height: 1px;
+  transform: translateY(-0.5px);
   background-image: repeating-linear-gradient(
     to right,
-    rgba(244, 255, 248, 0.95) 0 5px,
-    transparent 5px 12px
-  );
-  background-color: transparent;
-  box-shadow: 0 0 0 1px rgba(12, 22, 18, 0.35);
-}
-
-.pl-crosshair.is-up .pl-crosshair-v,
-.pl-crosshair.is-up .pl-crosshair-h {
-  background-image: repeating-linear-gradient(
-    to bottom,
-    #7dffb3 0 5px,
-    transparent 5px 12px
-  );
-}
-
-.pl-crosshair.is-up .pl-crosshair-h {
-  background-image: repeating-linear-gradient(
-    to right,
-    #7dffb3 0 5px,
-    transparent 5px 12px
-  );
-}
-
-.pl-crosshair.is-down .pl-crosshair-v {
-  background-image: repeating-linear-gradient(
-    to bottom,
-    #ff9b9b 0 5px,
-    transparent 5px 12px
-  );
-}
-
-.pl-crosshair.is-down .pl-crosshair-h {
-  background-image: repeating-linear-gradient(
-    to right,
-    #ff9b9b 0 5px,
-    transparent 5px 12px
+    #ffffff 0 2.5px,
+    transparent 2.5px 6px
   );
 }
 

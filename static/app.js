@@ -5826,9 +5826,15 @@
       });
       if (el.bestSideMeta) {
         const lead = spot - beat;
+        const tapeNote =
+          TREND_BIAS_ENABLED && trend.bias === "down"
+            ? " · tape ↓"
+            : TREND_BIAS_ENABLED && trend.bias === "up"
+              ? " · tape ↑"
+              : "";
         el.bestSideMeta.textContent = `Live ${
           lead >= 0 ? "+" : ""
-        }$${lead.toFixed(0)} · wait for better ask`;
+        }$${lead.toFixed(0)}${tapeNote} · wait for better ask`;
       }
       setRoiCardBest(null);
       setDockBestDetail("Wait", null);

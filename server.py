@@ -1307,31 +1307,31 @@ def score_clear_edge(
     best = scored[0]
     if data.get("thin_book"):
         best = {**best, "score": best["score"] - 0.08}
-    # Enter vs stay hysteresis (same idea as client) — stops push spam when
-    # EV flickers around the clear threshold.
+    # Pickier clear edge (keep in sync with client).
+    # Enter ~48%+ favorite; stay only slightly softer so weak BUYs drop off.
     ask_c = float(best["ask_cents"])
     if ask_c <= 15:
-        cheap_enter = best["p_win"] >= 0.5 and best["ev"] >= 0.08
-        cheap_stay = best["p_win"] >= 0.45 and best["ev"] >= 0.05
+        cheap_enter = best["p_win"] >= 0.52 and best["ev"] >= 0.08
+        cheap_stay = best["p_win"] >= 0.48 and best["ev"] >= 0.06
     elif ask_c <= 25:
-        cheap_enter = best["p_win"] >= 0.42 and best["ev"] >= 0.05
-        cheap_stay = best["p_win"] >= 0.38 and best["ev"] >= 0.03
+        cheap_enter = best["p_win"] >= 0.48 and best["ev"] >= 0.05
+        cheap_stay = best["p_win"] >= 0.44 and best["ev"] >= 0.04
     else:
         cheap_enter = True
         cheap_stay = True
     enter_clear = (
         best["ev"] >= 0.03
         and best["score"] > 0.05
-        and best["p_win"] >= 0.30
+        and best["p_win"] >= 0.48
         and cheap_enter
         and not (secs > 12 * 60 and best["ev"] < 0.05)
     )
     stay_clear = (
-        best["ev"] >= 0.015
-        and best["score"] > 0.02
-        and best["p_win"] >= 0.28
+        best["ev"] >= 0.025
+        and best["score"] > 0.035
+        and best["p_win"] >= 0.42
         and cheap_stay
-        and not (secs > 12 * 60 and best["ev"] < 0.025)
+        and not (secs > 12 * 60 and best["ev"] < 0.04)
     )
     clear = stay_clear if latched else enter_clear
     if not clear:

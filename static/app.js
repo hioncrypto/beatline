@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.61";
+  const APP_VERSION = "9.62";
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
   const APP_TZ = "America/Los_Angeles";
   /** Day-equity schema: v2 = Pacific calendar day (not Eastern). */
@@ -5663,9 +5663,9 @@
     let best = scored[0];
     // Haircut noisy/thin books and early-window coin flips with tiny edge.
     if (lastThinBook) best = { ...best, score: best.score - 0.08 };
-    // EV-first clear edge with hysteresis (keep in sync with server).
-    // Enter bar is stricter; once latched, a softer stay bar prevents
-    // BUY ↔ wait flicker that re-armed alerts every minute.
+    // Pickier clear edge (keep in sync with server).
+    // Enter needs a real model favorite (~48%+). Stay is only slightly
+    // softer so weak edges drop off instead of hanging as BUY.
     if (lastTicker !== clearEdgeLatchTicker) {
       clearEdgeLatchTicker = lastTicker;
       clearEdgeLatched = false;
@@ -5674,25 +5674,25 @@
     const cheapEnter =
       askC > 25 ||
       (askC > 15
-        ? best.pWin >= 0.42 && best.ev >= 0.05
-        : best.pWin >= 0.5 && best.ev >= 0.08);
+        ? best.pWin >= 0.48 && best.ev >= 0.05
+        : best.pWin >= 0.52 && best.ev >= 0.08);
     const cheapStay =
       askC > 25 ||
       (askC > 15
-        ? best.pWin >= 0.38 && best.ev >= 0.03
-        : best.pWin >= 0.45 && best.ev >= 0.05);
+        ? best.pWin >= 0.44 && best.ev >= 0.04
+        : best.pWin >= 0.48 && best.ev >= 0.06);
     const enterClear =
       best.ev >= 0.03 &&
       best.score > 0.05 &&
-      best.pWin >= 0.3 &&
+      best.pWin >= 0.48 &&
       cheapEnter &&
       !(secs > 12 * 60 && best.ev < 0.05);
     const stayClear =
-      best.ev >= 0.015 &&
-      best.score > 0.02 &&
-      best.pWin >= 0.28 &&
+      best.ev >= 0.025 &&
+      best.score > 0.035 &&
+      best.pWin >= 0.42 &&
       cheapStay &&
-      !(secs > 12 * 60 && best.ev < 0.025);
+      !(secs > 12 * 60 && best.ev < 0.04);
     const clear = clearEdgeLatched ? stayClear : enterClear;
     clearEdgeLatched = !!clear;
 

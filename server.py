@@ -1232,6 +1232,44 @@ def _kalshi_taker_fee(contracts: int, price: float) -> float:
     return math.ceil(raw * 100 - 1e-9) / 100.0
 
 
+# Bigger-picture BTC tape bias for Best Side push (mirrors client).
+# Revert point before this feature: git commit f46cc02 (v9.62).
+# Set False to undo without a full rollback.
+TREND_BIAS_ENABLED = True
+
+
+def _short_term_trend() -> dict:
+    """BTC tape over ~5–10m from 1m candles (mirrors client shortTermTrend)."""
+    if not TREND_BIAS_ENABLED:
+        return {"bias": "flat", "strength": 0.0, "move5": 0.0, "move10": 0.0}
+    try:
+        payload = fetch_candles(60, 20)
+        candles = payload.get("candles") or []
+    except Exception:
+        candles = []
+    if len(candles) < 4:
+        return {"bias": "flat", "strength": 0.0, "move5": 0.0, "move10": 0.0}
+    last = float(candles[-1]["close"])
+    n5 = min(5, len(candles) - 1)
+    n10 = min(10, len(candles) - 1)
+    move5 = last - float(candles[-1 - n5]["close"])
+    move10 = last - float(candles[-1 - n10]["close"])
+    down = max(-move5 / 80.0, -move10 / 140.0, 0.0)
+    up = max(move5 / 80.0, move10 / 140.0, 0.0)
+    strength = 0.0
+    if down > up and down >= 0.35:
+        strength = -min(1.0, down)
+    elif up > down and up >= 0.35:
+        strength = min(1.0, up)
+    bias = "down" if strength <= -0.35 else "up" if strength >= 0.35 else "flat"
+    return {
+        "bias": bias,
+        "strength": strength,
+        "move5": move5,
+        "move10": move10,
+    }
+
+
 def score_clear_edge(
     data: dict, spot: float | None, *, latched: bool = False
 ) -> dict | None:
@@ -1282,6 +1320,7 @@ def score_clear_edge(
     if model is None:
         return None
 
+    trend = _short_term_trend()
     scored = []
     for side, ask in (("above", above_ask), ("below", below_ask)):
         if ask is None:
@@ -1292,13 +1331,24 @@ def score_clear_edge(
         p_win = model if side == "above" else 1.0 - model
         ev = p_win * 1.0 - cost_per
         risk = max(0.04, 1.0 - p_win)
+        score = ev / risk
+        if TREND_BIAS_ENABLED:
+            mag = abs(float(trend["strength"]))
+            if trend["bias"] == "down" and side == "above":
+                score -= 0.10 + 0.18 * mag
+            elif trend["bias"] == "up" and side == "below":
+                score -= 0.10 + 0.18 * mag
+            elif trend["bias"] == "down" and side == "below":
+                score += 0.08 * mag
+            elif trend["bias"] == "up" and side == "above":
+                score += 0.08 * mag
         scored.append(
             {
                 "side": side,
                 "ask_cents": ask,
                 "p_win": p_win,
                 "ev": ev,
-                "score": ev / risk,
+                "score": score,
             }
         )
     if not scored:
@@ -1333,7 +1383,25 @@ def score_clear_edge(
         and cheap_stay
         and not (secs > 12 * 60 and best["ev"] < 0.04)
     )
-    clear = stay_clear if latched else enter_clear
+    fighting = TREND_BIAS_ENABLED and (
+        (trend["bias"] == "down" and best["side"] == "above")
+        or (trend["bias"] == "up" and best["side"] == "below")
+    )
+    mag = abs(float(trend["strength"]))
+    if fighting and mag >= 0.7:
+        enter_clear = False
+    elif fighting and mag >= 0.45:
+        enter_clear = (
+            enter_clear
+            and best["ev"] >= 0.10
+            and best["p_win"] >= 0.62
+            and best["score"] > 0.12
+        )
+    clear = (
+        (stay_clear and (not fighting or mag < 0.7))
+        if latched
+        else enter_clear
+    )
     if not clear:
         return None
     # Nominal $ size for push copy (phone uses its own bankroll in-app).
@@ -1361,6 +1429,7 @@ def score_clear_edge(
         elif ask <= 20:
             suggest = max(5, int(suggest * 0.55))
     best["suggest_stake"] = suggest
+    best["trend"] = trend["bias"]
     return best
 
 
@@ -1732,7 +1801,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.2.0",
+                    "version": "2.2.1",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file() or len(accounts) > 0,

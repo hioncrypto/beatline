@@ -13,22 +13,21 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.66";
+  const APP_VERSION = "9.67";
   /**
-   * Best Side profile — named so you can find it later in Options / code.
+   * Best Side profile — catchy name for the August 5 winning setup.
    *
-   * "aug5-favorites" = August 5 morning rules (through v9.33): clear-edge only
-   * when the model is a favorite (≥52% pWin). That selective gate is what you
-   * traded the strong first day on, before evening v9.34–9.37 loosened alerts
-   * (those changes were made to chase more chimes — not because you asked to
-   * change the strategy).
+   * "green-spike" / Green Spike = August 5 morning rules (through v9.33):
+   * clear-edge only when the model is a favorite (≥52% pWin). That selective
+   * gate made the steep green climb on the Wins & P/L chart, before evening
+   * v9.34–9.37 loosened alerts.
    *
-   * Do not edit the thresholds below casually; change BEST_SIDE_PROFILE instead
-   * when introducing a new named profile.
+   * Say "switch to Green Spike" later to mean this exact profile.
+   * Do not edit thresholds casually — change BEST_SIDE_PROFILE for a new name.
    */
-  const BEST_SIDE_PROFILE = "aug5-favorites";
-  const BEST_SIDE_PROFILE_LABEL = "Aug 5 favorites (≥52%)";
-  /** Tape bias stays off under aug5-favorites (window-vs-beat only). */
+  const BEST_SIDE_PROFILE = "green-spike";
+  const BEST_SIDE_PROFILE_LABEL = "Green Spike";
+  /** Tape bias stays off under Green Spike (window-vs-beat only). */
   const TREND_BIAS_ENABLED = false;
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
   const APP_TZ = "America/Los_Angeles";
@@ -5249,7 +5248,7 @@
   }
 
   /**
-   * Suggest $ for a clear Best Side — aug5-favorites sizing (August 5 / v9.33):
+   * Suggest $ for a clear Best Side — Green Spike sizing (Aug 5 / v9.33):
    * fractional Kelly ~22–40%, bank risk ~2.5–12%. No drawdown/streak shrink.
    */
   function suggestStakeForEdge(best) {
@@ -5718,7 +5717,7 @@
     }
 
     scored.sort((x, y) => y.score - x.score);
-    // aug5-favorites: no tape lean — pure window-vs-beat scoring.
+    // Green Spike: no tape lean — pure window-vs-beat scoring.
     if (TREND_BIAS_ENABLED) {
       const trend = shortTermTrend();
       scored = applyTrendToScores(scored, trend);
@@ -5727,7 +5726,7 @@
     let best = scored[0];
     // Haircut noisy/thin books and early-window coin flips with tiny edge.
     if (lastThinBook) best = { ...best, score: best.score - 0.08 };
-    // Profile: aug5-favorites (August 5 morning / v9.33).
+    // Profile: Green Spike (August 5 morning / v9.33).
     // Simple favorites-only clear edge — no sticky latch, no cheap underdogs.
     clearEdgeLatched = false;
     const clear =

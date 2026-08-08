@@ -1319,8 +1319,8 @@ def _kalshi_taker_fee(contracts: int, price: float) -> float:
     return math.ceil(raw * 100 - 1e-9) / 100.0
 
 
-# Bigger-picture BTC tape bias (off under aug5-favorites profile).
-# Revert / profile note: client BEST_SIDE_PROFILE = "aug5-favorites".
+# Bigger-picture BTC tape bias (off under Green Spike / green-spike).
+# Profile note: client BEST_SIDE_PROFILE = "green-spike".
 TREND_BIAS_ENABLED = False
 
 
@@ -1359,8 +1359,8 @@ def _short_term_trend() -> dict:
 def score_clear_edge(
     data: dict, spot: float | None, *, latched: bool = False
 ) -> dict | None:
-    """Mirror client Best Side clear-edge (profile: aug5-favorites)."""
-    _ = latched  # sticky latch unused under aug5-favorites
+    """Mirror client Best Side clear-edge (profile: Green Spike / green-spike)."""
+    _ = latched  # sticky latch unused under Green Spike
     if spot is None or not math.isfinite(float(spot)):
         return None
     beat = data.get("price_to_beat")
@@ -1431,7 +1431,7 @@ def score_clear_edge(
     best = scored[0]
     if data.get("thin_book"):
         best = {**best, "score": best["score"] - 0.08}
-    # Profile aug5-favorites: pWin ≥ 52% favorites only (August 5 / v9.33).
+    # Profile Green Spike: pWin ≥ 52% favorites only (August 5 / v9.33).
     clear = (
         best["ev"] > 0.01
         and best["score"] > 0.04
@@ -1449,7 +1449,7 @@ def score_clear_edge(
         kelly = edge_amt / max(0.01, 1.0 - cost)
         suggest = int(max(5, min(40, round(100 * kelly * 0.3))))
     best["suggest_stake"] = suggest
-    best["profile"] = "aug5-favorites"
+    best["profile"] = "green-spike"
     return best
 
 
@@ -1822,7 +1822,7 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": True,
                     "service": "kalshi-btc-target",
                     "version": "2.3.0",
-                    "best_side_profile": "aug5-favorites",
+                    "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file() or len(accounts) > 0,

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.58";
+  const APP_VERSION = "9.59";
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
   const APP_TZ = "America/Los_Angeles";
   /** Day-equity schema: v2 = Pacific calendar day (not Eastern). */
@@ -244,6 +244,7 @@
     accountUserId: document.getElementById("account-user-id"),
     accountCopyId: document.getElementById("account-copy-id"),
     accountCopyLink: document.getElementById("account-copy-link"),
+    accountCopyConfirm: document.getElementById("account-copy-confirm"),
     accountRestoreId: document.getElementById("account-restore-id"),
     accountRestoreBtn: document.getElementById("account-restore-btn"),
     accountShareHint: document.getElementById("account-share-hint"),
@@ -580,28 +581,66 @@
   }
 
   async function copyText(text) {
+    const value = String(text || "");
+    if (!value) return false;
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(value);
         return true;
       }
     } catch {
-      // fall through
+      // fall through — common on some Android/PWA builds
     }
     try {
       const ta = document.createElement("textarea");
-      ta.value = text;
+      ta.value = value;
       ta.setAttribute("readonly", "");
       ta.style.position = "fixed";
-      ta.style.left = "-9999px";
+      ta.style.top = "0";
+      ta.style.left = "0";
+      ta.style.width = "1px";
+      ta.style.height = "1px";
+      ta.style.opacity = "0";
       document.body.appendChild(ta);
+      ta.focus();
       ta.select();
+      ta.setSelectionRange(0, value.length);
       const ok = document.execCommand("copy");
       ta.remove();
-      return ok;
+      return !!ok;
     } catch {
       return false;
     }
+  }
+
+  function showCopyConfirm(ok, message, btn, okLabel) {
+    if (el.accountCopyConfirm) {
+      el.accountCopyConfirm.hidden = false;
+      el.accountCopyConfirm.textContent = message;
+      el.accountCopyConfirm.classList.toggle("is-ok", !!ok);
+      el.accountCopyConfirm.classList.toggle("is-warn", !ok);
+      clearTimeout(showCopyConfirm._timer);
+      showCopyConfirm._timer = setTimeout(() => {
+        if (!el.accountCopyConfirm) return;
+        el.accountCopyConfirm.hidden = true;
+        el.accountCopyConfirm.textContent = "";
+        el.accountCopyConfirm.classList.remove("is-ok", "is-warn");
+      }, 3200);
+    }
+    if (btn) {
+      if (!btn.dataset.idleLabel) {
+        btn.dataset.idleLabel = (btn.textContent || "").trim();
+      }
+      btn.textContent = ok ? okLabel || "Copied!" : "Copy failed";
+      btn.classList.toggle("is-copied", !!ok);
+      btn.classList.toggle("is-copy-failed", !ok);
+      clearTimeout(btn._copyFlashTimer);
+      btn._copyFlashTimer = setTimeout(() => {
+        btn.textContent = btn.dataset.idleLabel || btn.textContent;
+        btn.classList.remove("is-copied", "is-copy-failed");
+      }, 2200);
+    }
+    setStatus(ok ? "ok" : "warn", message);
   }
 
   function wireAccountShareUi() {
@@ -610,26 +649,36 @@
     if (el.accountCopyId) {
       el.accountCopyId.addEventListener("click", async () => {
         const ok = await copyText(getUserId());
-        setStatus(
-          ok ? "ok" : "warn",
+        showCopyConfirm(
+          ok,
           ok
             ? "Account ID copied — paste it on another phone to restore this book"
-            : "Could not copy — select the ID manually"
+            : "Could not copy — long-press the ID above and copy it",
+          el.accountCopyId,
+          "Copied ID!"
         );
       });
     }
     if (el.accountCopyLink) {
       el.accountCopyLink.addEventListener("click", async () => {
         if (isInvitee()) {
-          setStatus("warn", "Sharing is only available on the original invite");
+          showCopyConfirm(
+            false,
+            "Sharing is only available on the original invite",
+            el.accountCopyLink,
+            "Copied!"
+          );
           return;
         }
-        const ok = await copyText(shareAppLink());
-        setStatus(
-          ok ? "ok" : "warn",
+        const link = shareAppLink();
+        const ok = await copyText(link);
+        showCopyConfirm(
+          ok,
           ok
-            ? "Invite link copied — they get a private account and cannot reshare"
-            : "Could not copy link"
+            ? "Invite link copied — paste it in Texts/Messages to share"
+            : "Could not copy — try again or share the BeatLine URL manually",
+          el.accountCopyLink,
+          "Copied!"
         );
       });
     }

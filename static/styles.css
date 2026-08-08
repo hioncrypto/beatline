@@ -878,6 +878,31 @@ h1 {
   margin-bottom: 10px;
 }
 
+.account-copy-confirm {
+  margin: -2px 0 10px;
+  font-size: 0.86rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.account-copy-confirm.is-ok {
+  color: #7dffb3;
+}
+
+.account-copy-confirm.is-warn {
+  color: #ffd089;
+}
+
+.demo-btn.is-copied {
+  border-color: rgba(125, 255, 179, 0.55);
+  color: #04140c;
+  background: #1ac96b;
+}
+
+.demo-btn.is-copy-failed {
+  border-color: rgba(255, 208, 137, 0.55);
+}
+
 .account-restore-row {
   display: flex;
   gap: 8px;

@@ -302,10 +302,9 @@ async function checkClearEdge(forceNotify) {
     return;
   }
   if (!data || !data.clear || !data.side) {
-    // Edge gone — allow a later re-alert after cooldown window.
-    if (state.edgeKey && Date.now() - (Number(state.edgeAt) || 0) > 60000) {
-      // keep key until server/client cooldown; don't wipe instantly
-    }
+    state.pendingEdgeKey = null;
+    state.pendingEdgeCount = 0;
+    await writeState(state);
     return;
   }
   // Visible BeatLine tab plays its own chime — do not arm here or we
@@ -322,6 +321,20 @@ async function checkClearEdge(forceNotify) {
   const prevAsk = Number(state.edgeAsk) || 0;
   const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
   const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
+
+  // Require the same clear edge on two SW polls before notifying — matches
+  // server confirm and avoids phone alerts when the app still says wait.
+  if (!forceNotify) {
+    if (state.pendingEdgeKey === sticky) {
+      state.pendingEdgeCount = (Number(state.pendingEdgeCount) || 0) + 1;
+    } else {
+      state.pendingEdgeKey = sticky;
+      state.pendingEdgeCount = 1;
+    }
+    await writeState(state);
+    if (state.pendingEdgeCount < 2) return;
+  }
+
   if (!forceNotify) {
     // Same side: suppress ask wobble. Opposite side: always allow.
     if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) return;
@@ -339,6 +352,8 @@ async function checkClearEdge(forceNotify) {
   state.edgeKey = sticky;
   state.edgeAsk = ask;
   state.edgeAt = now;
+  state.pendingEdgeKey = null;
+  state.pendingEdgeCount = 0;
   await writeState(state);
 }
 

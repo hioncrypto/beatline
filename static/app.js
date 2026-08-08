@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.63";
+  const APP_VERSION = "9.64";
   /**
    * Bigger-picture BTC tape bias for Best Side.
    * ON  = prefer Below in a downtrend / Above in an uptrend (v9.63+).
@@ -6877,9 +6877,15 @@
         );
         el.targetValue.textContent = money(beatOk);
         const win = formatWindow(data.close_time, data.close_et);
-        el.targetMeta.textContent = win
-          ? `This window settles ${win}`
-          : "Kalshi 15-minute market";
+        if (data.beat_source === "brti") {
+          el.targetMeta.textContent = win
+            ? `BRTI open avg · settles ${win}`
+            : "BRTI open avg (Kalshi TBD)";
+        } else {
+          el.targetMeta.textContent = win
+            ? `This window settles ${win}`
+            : "Kalshi 15-minute market";
+        }
         applyTargetLine(beatOk, "TO BEAT");
         maybeChimeNewFifteenTarget(beatOk, data.ticker, data.source, data.close_et);
         if (el.spotValue && el.spotValue.dataset.last) {

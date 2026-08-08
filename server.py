@@ -308,6 +308,32 @@ def pick_current_market(markets: list) -> dict | None:
     return None
 
 
+def brti_open_beat(ticks: list[dict], open_ms: float | None) -> float | None:
+    """
+    Kalshi Price to beat = average of 60 BRTI 1s samples in the minute before open.
+
+    Kalshi often leaves yes_sub_title / floor_strike as TBD for minutes after the
+    window opens. Compute the same official index average so TO BEAT can show.
+    """
+    if open_ms is None or not ticks:
+        return None
+    now_ms = time.time() * 1000.0
+    # Don't invent a beat before the open minute has finished.
+    if now_ms < open_ms:
+        return None
+    window_start = open_ms - SETTLE_WINDOW_SEC * 1000.0
+    by_sec: dict[int, float] = {}
+    for t in ticks:
+        tm = float(t["time_ms"])
+        if window_start <= tm <= open_ms:
+            by_sec[int(tm // 1000)] = float(t["value"])
+    samples = list(by_sec.values())
+    # Need a near-full open minute; partial averages disagree with Kalshi.
+    if len(samples) < 50:
+        return None
+    return round(sum(samples) / len(samples), 2)
+
+
 def brti_settlement_snapshot(
     ticks: list[dict], close_ms: float | None, beat: float | None
 ) -> dict:
@@ -594,6 +620,7 @@ def fetch_kalshi_series_target(series: str) -> dict | None:
         }
 
     target = parse_target(market)
+    beat_source = "kalshi" if target is not None else None
     close_et = format_et(market.get("close_time"))
     odds = market_odds(market)
     close_ms = parse_close_ms(market.get("close_time"))
@@ -601,6 +628,18 @@ def fetch_kalshi_series_target(series: str) -> dict | None:
     now_ms = time.time() * 1000.0
     stale_previous = bool(close_ms is not None and close_ms <= now_ms)
     waiting_next = bool(open_ms is not None and open_ms > now_ms)
+
+    # Kalshi TBD after open → derive Price to beat from CF BRTI (same index).
+    ticks: list[dict] | None = None
+    if target is None and not waiting_next and open_ms is not None:
+        try:
+            ticks = fetch_brti_ticks()
+            provisional = brti_open_beat(ticks, open_ms)
+            if provisional is not None:
+                target = provisional
+                beat_source = "brti"
+        except Exception:
+            pass
 
     settle = {
         "settlement_mode": False,
@@ -612,10 +651,17 @@ def fetch_kalshi_series_target(series: str) -> dict | None:
         "settle_window_sec": SETTLE_WINDOW_SEC,
     }
     try:
-        ticks = fetch_brti_ticks()
+        if ticks is None:
+            ticks = fetch_brti_ticks()
         settle = brti_settlement_snapshot(ticks, close_ms, target)
     except Exception:
         pass
+
+    err = None
+    if target is None:
+        err = "Price to beat TBD (waiting for window open)"
+    elif beat_source == "brti":
+        err = None  # live beat from BRTI; Kalshi subtitle may still say TBD
 
     return {
         "ok": True,
@@ -623,6 +669,7 @@ def fetch_kalshi_series_target(series: str) -> dict | None:
         "series": series,
         "target": target,
         "price_to_beat": target,
+        "beat_source": beat_source,
         "ticker": market.get("ticker"),
         "event_ticker": market.get("event_ticker"),
         "kalshi_url": kalshi_market_url(market.get("ticker"), market.get("event_ticker")),
@@ -650,9 +697,7 @@ def fetch_kalshi_series_target(series: str) -> dict | None:
         "settlement_delta": settle.get("settlement_delta"),
         "settlement_side": settle.get("settlement_side"),
         "seconds_to_close": settle.get("seconds_to_close"),
-        "error": None
-        if target is not None
-        else "Price to beat TBD (waiting for window open)",
+        "error": err,
         "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 

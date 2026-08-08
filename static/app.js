@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.69";
+  const APP_VERSION = "9.70";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -153,7 +153,6 @@
     chart: document.getElementById("chart"),
     chartWrap: document.getElementById("chart-wrap"),
     toBeatChip: document.getElementById("to-beat-chip"),
-    toBeatChipPrice: document.getElementById("to-beat-chip-price"),
     chartResizeTop: document.getElementById("chart-resize-top"),
     chartResizeBottom: document.getElementById("chart-resize-bottom"),
     appShell: document.querySelector(".app-shell"),
@@ -6642,6 +6641,13 @@
       },
     });
     ensureChart.LineStyle = LineStyle;
+    try {
+      chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+        if (lastTarget != null) syncToBeatChip(lastTarget, true);
+      });
+    } catch {
+      // ignore
+    }
     resizeChart();
   }
 
@@ -6659,6 +6665,7 @@
     const h = Math.max(1, Math.floor(height || 1));
     if (w < 40 || h < 80) return;
     chart.applyOptions({ width: w, height: h });
+    if (lastTarget != null) syncToBeatChip(lastTarget, true);
   }
 
   /** Default viewport: ~8–10 recent candles (zoomed in), not full history. */
@@ -6792,11 +6799,23 @@
   function syncToBeatChip(price, visible) {
     if (!el.toBeatChip) return;
     const show = !!visible && price != null && Number.isFinite(Number(price));
-    el.toBeatChip.hidden = !show;
-    if (!show) return;
-    if (el.toBeatChipPrice) {
-      el.toBeatChipPrice.textContent = money(Number(price));
+    if (!show) {
+      el.toBeatChip.hidden = true;
+      return;
     }
+    // Sit on the right price axis, just above the white beat price tag.
+    let y = null;
+    try {
+      if (series) y = series.priceToCoordinate(Number(price));
+    } catch {
+      y = null;
+    }
+    if (y == null || !Number.isFinite(y)) {
+      el.toBeatChip.hidden = true;
+      return;
+    }
+    el.toBeatChip.hidden = false;
+    el.toBeatChip.style.top = `${Math.max(2, y)}px`;
   }
 
   function applyTargetLine(target, title) {
@@ -6821,8 +6840,8 @@
     const dash =
       (ensureChart.LineStyle && ensureChart.LineStyle.Dashed) || 2;
 
-    // Keep the dashed beat line + axis price, but move the "TO BEAT" chip
-    // off the mid-candle pane to the top of the chart (see #to-beat-chip).
+    // Keep the dashed beat line + axis price; "TO BEAT" chip sits above the
+    // right-axis price tag (see #to-beat-chip) so it never covers candles.
     if (series) {
       clearTargetLine();
       targetLine = series.createPriceLine({

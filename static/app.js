@@ -13,15 +13,22 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.65";
+  const APP_VERSION = "9.66";
   /**
-   * Bigger-picture BTC tape bias for Best Side.
-   * ON  = prefer Below in a downtrend / Above in an uptrend (v9.63+).
-   * OFF = window-vs-beat only (same as v9.62).
-   * Revert point before this feature: git commit f46cc02 (v9.62).
-   * Flip this flag to false (client + server TREND_BIAS_ENABLED) to undo
-   * without a full rollback — or reset hard to f46cc02.
+   * Best Side profile — named so you can find it later in Options / code.
+   *
+   * "aug5-favorites" = August 5 morning rules (through v9.33): clear-edge only
+   * when the model is a favorite (≥52% pWin). That selective gate is what you
+   * traded the strong first day on, before evening v9.34–9.37 loosened alerts
+   * (those changes were made to chase more chimes — not because you asked to
+   * change the strategy).
+   *
+   * Do not edit the thresholds below casually; change BEST_SIDE_PROFILE instead
+   * when introducing a new named profile.
    */
+  const BEST_SIDE_PROFILE = "aug5-favorites";
+  const BEST_SIDE_PROFILE_LABEL = "Aug 5 favorites (≥52%)";
+  /** Tape bias stays off under aug5-favorites (window-vs-beat only). */
   const TREND_BIAS_ENABLED = false;
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
   const APP_TZ = "America/Los_Angeles";
@@ -856,10 +863,40 @@
     }
   }
 
+  /** Recovered Aug 4–5 trades (seeded) so early W/L stay on history + charts. */
+  let seedTradeHistoryCache = null;
+
+  async function loadSeedTradeHistory() {
+    if (Array.isArray(seedTradeHistoryCache)) return seedTradeHistoryCache;
+    try {
+      const res = await fetch(
+        `/seed-trade-history.json?v=${encodeURIComponent(APP_VERSION)}`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) {
+        seedTradeHistoryCache = [];
+        return seedTradeHistoryCache;
+      }
+      const data = await res.json();
+      seedTradeHistoryCache = Array.isArray(data && data.history)
+        ? data.history.filter((h) => h && typeof h === "object")
+        : [];
+    } catch {
+      seedTradeHistoryCache = [];
+    }
+    return seedTradeHistoryCache;
+  }
+
   async function hydrateDemoFromServer() {
     try {
-      // Re-attach any ledger rows that lived only in the dedicated key.
-      demo.history = mergeTradeHistory(demo.history, loadTradeHistory());
+      // Re-attach any ledger rows that lived only in the dedicated key,
+      // plus recovered Aug 4–5 seed trades for Wins & P/L / strategy charts.
+      const seed = await loadSeedTradeHistory();
+      demo.history = mergeTradeHistory(
+        demo.history,
+        loadTradeHistory(),
+        seed
+      );
       persistTradeHistory(demo.history);
 
       const res = await fetch(
@@ -877,7 +914,11 @@
         const remoteAt = Number(remote.updatedAt) || 0;
         const localAt = Number(demo.updatedAt) || 0;
         const remoteHist = Array.isArray(remote.history) ? remote.history : [];
-        const localHist = mergeTradeHistory(demo.history, loadTradeHistory());
+        const localHist = mergeTradeHistory(
+          demo.history,
+          loadTradeHistory(),
+          seed
+        );
         // Empty / wiped server (Render restart) must NEVER beat a local ledger.
         const preferRemote =
           !remoteFresh &&
@@ -5208,76 +5249,16 @@
   }
 
   /**
-   * Suggest $ for a clear Best Side: fractional Kelly with drawdown guards.
-   * Cheap asks, loss streaks, and open-position exposure all shrink size so
-   * stacked Best Side adds can't recreate a multi-hundred-dollar dump.
+   * Suggest $ for a clear Best Side — aug5-favorites sizing (August 5 / v9.33):
+   * fractional Kelly ~22–40%, bank risk ~2.5–12%. No drawdown/streak shrink.
    */
-  function recentLossStreak() {
-    const closed = closedPlTrades();
-    let n = 0;
-    for (let i = closed.length - 1; i >= 0; i--) {
-      if (Number(closed[i].pl) < 0) n += 1;
-      else break;
-    }
-    return n;
-  }
-
-  function openPositionRiskUsd() {
-    if (!demo.position) return 0;
-    const t = Number(demo.position.total);
-    return Number.isFinite(t) && t > 0 ? t : 0;
-  }
-
-  function askStakeCap(askCents) {
-    const ask = Number(askCents);
-    if (!(ask > 0)) return 40;
-    // Hard $ caps: cheap contracts buy huge contract counts per dollar.
-    if (ask <= 12) return 15;
-    if (ask <= 20) return 25;
-    if (ask <= 30) return 40;
-    if (ask <= 45) return 55;
-    if (ask <= 65) return 70;
-    return 80;
-  }
-
   function suggestStakeForEdge(best) {
     if (!best || best.askCents == null) return null;
     const bank = sizingBankroll();
-    const askCents = Number(best.askCents);
-    const askCap = askStakeCap(askCents);
-    let hardCap = Math.max(
+    const hardCap = Math.max(
       BUY_AMOUNT_MIN,
-      Math.min(BUY_AMOUNT_MAX, askCap, Math.floor(bank) || BUY_AMOUNT_MIN)
+      Math.min(BUY_AMOUNT_MAX, Math.floor(bank) || BUY_AMOUNT_MIN)
     );
-
-    // Cap total risk in the open position (~8% of bank). Remaining room is
-    // what Best Side may still suggest as an add.
-    const maxPosUsd = Math.max(BUY_AMOUNT_MIN, bank * 0.08);
-    const openRisk = openPositionRiskUsd();
-    const sameSideOpen =
-      !!(demo.position && best.side && demo.position.side === best.side);
-    if (sameSideOpen) {
-      const room = Math.max(0, maxPosUsd - openRisk);
-      if (room < BUY_AMOUNT_MIN) {
-        return {
-          stake: 0,
-          atRiskCap: true,
-          contracts: 0,
-          total: 0,
-          profitIfWin: 0,
-          roiIfWin: best.roiIfWin,
-          bankPct: bank > 0 ? (openRisk / bank) * 100 : 0,
-          pWin: Math.max(0.01, Math.min(0.99, Number(best.pWin) || 0.5)),
-          lowProb: false,
-          note: "max risk",
-        };
-      }
-      hardCap = Math.max(
-        BUY_AMOUNT_MIN,
-        Math.min(hardCap, Math.floor(room) || BUY_AMOUNT_MIN)
-      );
-    }
-
     const unit = roiForStake(best.askCents, Math.min(10, hardCap));
     if (!unit || unit.empty || !(unit.contracts > 0)) return null;
     const costPer = unit.total / unit.contracts;
@@ -5301,38 +5282,19 @@
       };
     }
 
-    // Full Kelly for $1 payout contracts priced at costPer.
     const kellyFull = edge / (1 - costPer);
     const edgeStrength = Math.min(
       1,
       Math.max(0, (Number(best.score) - 0.04) / 0.18)
     );
-    // More conservative than before (~12–24% Kelly, ~2–6% bank).
-    let kellyShare = 0.12 + 0.12 * edgeStrength;
-    let maxBankPct = 0.02 + 0.04 * edgeStrength;
-
-    // Cheap / high-ROI asks: SHRINK size (model noise looks like huge edge).
-    if (askCents <= 12) maxBankPct *= 0.25;
-    else if (askCents <= 20) maxBankPct *= 0.4;
-    else if (askCents <= 30) maxBankPct *= 0.6;
-    else if (askCents <= 40) maxBankPct *= 0.8;
-    else if (askCents >= 70) maxBankPct *= 0.75;
-
-    if (pWin < 0.48) maxBankPct *= 0.5;
-    else if (pWin < 0.55) maxBankPct *= 0.75;
-
-    // After a losing streak, cut suggestions hard.
-    const streak = recentLossStreak();
-    if (streak >= 3) maxBankPct *= 0.25;
-    else if (streak >= 2) maxBankPct *= 0.4;
-    else if (streak >= 1) maxBankPct *= 0.65;
-
-    // Late in the window — less size (settlement noise / thin books).
-    const secs = secondsLeft();
-    if (secs != null && secs < 3 * 60) maxBankPct *= 0.55;
-    else if (secs != null && secs < 6 * 60) maxBankPct *= 0.75;
-
-    maxBankPct = Math.min(0.06, Math.max(0.01, maxBankPct));
+    const kellyShare = 0.22 + 0.18 * edgeStrength; // ~22–40% Kelly
+    let maxBankPct = 0.03 + 0.07 * edgeStrength;
+    const roi = Number(best.roiIfWin);
+    if (Number.isFinite(roi)) {
+      if (roi >= 120) maxBankPct *= 1.15;
+      else if (roi < 40) maxBankPct *= 0.7;
+    }
+    maxBankPct = Math.min(0.12, Math.max(0.025, maxBankPct));
 
     const kellyUsd = bank * kellyFull * kellyShare;
     const riskUsd = bank * maxBankPct;
@@ -5352,8 +5314,8 @@
       profitIfWin: sized && !sized.empty ? sized.profitIfWin : 0,
       roiIfWin: sized && !sized.empty ? sized.roiIfWin : unit.roiIfWin,
       bankPct: bank > 0 ? (stake / bank) * 100 : 0,
-      streak,
-      note: streak >= 2 ? "cooled after losses" : "¼-Kelly bal",
+      streak: 0,
+      note: "¼-Kelly bal",
     };
   }
 
@@ -5409,8 +5371,8 @@
       // offline — show what we have
     }
     el.appVersionLine.textContent = server
-      ? `App ${APP_VERSION} · server ${server}`
-      : `App ${APP_VERSION}`;
+      ? `App ${APP_VERSION} · ${BEST_SIDE_PROFILE_LABEL} · server ${server}`
+      : `App ${APP_VERSION} · ${BEST_SIDE_PROFILE_LABEL}`;
   }
 
   /**
@@ -5756,57 +5718,23 @@
     }
 
     scored.sort((x, y) => y.score - x.score);
-    const trend = shortTermTrend();
-    scored = applyTrendToScores(scored, trend);
-    scored.sort((x, y) => y.score - x.score);
+    // aug5-favorites: no tape lean — pure window-vs-beat scoring.
+    if (TREND_BIAS_ENABLED) {
+      const trend = shortTermTrend();
+      scored = applyTrendToScores(scored, trend);
+      scored.sort((x, y) => y.score - x.score);
+    }
     let best = scored[0];
     // Haircut noisy/thin books and early-window coin flips with tiny edge.
     if (lastThinBook) best = { ...best, score: best.score - 0.08 };
-    // Pickier clear edge (keep in sync with server).
-    // Enter needs a real model favorite (~48%+). Stay is only slightly
-    // softer so weak edges drop off instead of hanging as BUY.
-    if (lastTicker !== clearEdgeLatchTicker) {
-      clearEdgeLatchTicker = lastTicker;
-      clearEdgeLatched = false;
-    }
-    const askC = Number(best.askCents) || 0;
-    const cheapEnter =
-      askC > 25 ||
-      (askC > 15
-        ? best.pWin >= 0.48 && best.ev >= 0.05
-        : best.pWin >= 0.52 && best.ev >= 0.08);
-    const cheapStay =
-      askC > 25 ||
-      (askC > 15
-        ? best.pWin >= 0.44 && best.ev >= 0.04
-        : best.pWin >= 0.48 && best.ev >= 0.06);
-    let enterClear =
-      best.ev >= 0.03 &&
-      best.score > 0.05 &&
-      best.pWin >= 0.48 &&
-      cheapEnter &&
-      !(secs > 12 * 60 && best.ev < 0.05);
-    const stayClear =
-      best.ev >= 0.025 &&
-      best.score > 0.035 &&
-      best.pWin >= 0.42 &&
-      cheapStay &&
-      !(secs > 12 * 60 && best.ev < 0.04);
-    // Don't clear-edge against a strong short-term BTC tape.
-    const fightingTape =
-      TREND_BIAS_ENABLED &&
-      ((trend.bias === "down" && best.side === "above") ||
-        (trend.bias === "up" && best.side === "below"));
-    if (fightingTape && Math.abs(trend.strength) >= 0.7) {
-      enterClear = false;
-    } else if (fightingTape && Math.abs(trend.strength) >= 0.45) {
-      enterClear =
-        enterClear && best.ev >= 0.1 && best.pWin >= 0.62 && best.score > 0.12;
-    }
-    const clear = clearEdgeLatched
-      ? stayClear && (!fightingTape || Math.abs(trend.strength) < 0.7)
-      : enterClear;
-    clearEdgeLatched = !!clear;
+    // Profile: aug5-favorites (August 5 morning / v9.33).
+    // Simple favorites-only clear edge — no sticky latch, no cheap underdogs.
+    clearEdgeLatched = false;
+    const clear =
+      best.ev > 0.01 &&
+      best.score > 0.04 &&
+      best.pWin >= 0.52 &&
+      !(secs > 12 * 60 && Math.abs(best.ev) < 0.03);
 
     el.bestSide.hidden = false;
     syncBestSideLayout();
@@ -5826,15 +5754,9 @@
       });
       if (el.bestSideMeta) {
         const lead = spot - beat;
-        const tapeNote =
-          TREND_BIAS_ENABLED && trend.bias === "down"
-            ? " · tape ↓"
-            : TREND_BIAS_ENABLED && trend.bias === "up"
-              ? " · tape ↑"
-              : "";
         el.bestSideMeta.textContent = `Live ${
           lead >= 0 ? "+" : ""
-        }$${lead.toFixed(0)}${tapeNote} · wait for better ask`;
+        }$${lead.toFixed(0)} · wait for better ask`;
       }
       setRoiCardBest(null);
       setDockBestDetail("Wait", null);
@@ -5964,14 +5886,8 @@
           : "";
       const coolNote =
         suggestion && suggestion.streak >= 2 ? " · cooled" : "";
-      const tapeNote =
-        TREND_BIAS_ENABLED && trend.bias === "down"
-          ? " · tape ↓"
-          : TREND_BIAS_ENABLED && trend.bias === "up"
-            ? " · tape ↑"
-            : "";
       el.bestSideMeta.textContent =
-        `${conf}% model · ask ${best.askCents}¢ · ${roiTxt}${sizeNote}${coolNote}${tapeNote} · live ${
+        `${conf}% model · ask ${best.askCents}¢ · ${roiTxt}${sizeNote}${coolNote} · live ${
           lead >= 0 ? "+" : ""
         }$${lead.toFixed(0)} · ${m}:${String(s).padStart(2, "0")} left${openNote}`;
     }

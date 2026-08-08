@@ -30,6 +30,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 PUSH_SUBS_FILE = DATA_DIR / "push_subscriptions.json"
 DEMO_ACCOUNT_FILE = DATA_DIR / "demo_account.json"
 ACCOUNTS_DIR = DATA_DIR / "accounts"
+SEED_TRADE_HISTORY_FILE = STATIC_DIR / "seed-trade-history.json"
 VAPID_PRIVATE = DATA_DIR / "vapid_private.pem"
 VAPID_PUBLIC_RAW = DATA_DIR / "vapid_public_raw.txt"
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:kalshi-btc-target@localhost")
@@ -1047,6 +1048,35 @@ def _read_account_file(path: Path) -> dict | None:
         return None
 
 
+def load_seed_trade_history() -> list[dict]:
+    """Aug 4–5 recovered ledger — merge into every account for W/L charts."""
+    try:
+        if not SEED_TRADE_HISTORY_FILE.is_file():
+            return []
+        raw = json.loads(SEED_TRADE_HISTORY_FILE.read_text())
+        hist = raw.get("history") if isinstance(raw, dict) else None
+        if not isinstance(hist, list):
+            return []
+        return [h for h in hist if isinstance(h, dict)]
+    except Exception:
+        return []
+
+
+def with_seed_trade_history(state: dict | None) -> dict | None:
+    if not state or not isinstance(state, dict):
+        return state
+    seed = load_seed_trade_history()
+    if not seed:
+        return state
+    hist = state.get("history") if isinstance(state.get("history"), list) else []
+    merged = merge_trade_histories(hist, seed)
+    if len(merged) == len(hist):
+        return state
+    out = dict(state)
+    out["history"] = merged
+    return out
+
+
 def load_demo_account(user_id: str | None = None) -> dict | None:
     """Load one user's demo account. Prefer per-user files under accounts/."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1054,9 +1084,11 @@ def load_demo_account(user_id: str | None = None) -> dict | None:
     uid = _normalize_user_id(user_id)
     with _demo_lock:
         if uid:
-            return _read_account_file(_account_path(uid))
-        # Legacy path (no user header): shared file.
-        return _read_account_file(DEMO_ACCOUNT_FILE)
+            state = _read_account_file(_account_path(uid))
+        else:
+            # Legacy path (no user header): shared file.
+            state = _read_account_file(DEMO_ACCOUNT_FILE)
+    return with_seed_trade_history(state)
 
 
 def _trade_history_id(h: dict) -> str:
@@ -1142,10 +1174,15 @@ def save_demo_account(raw: dict, user_id: str | None = None) -> dict | None:
                     except Exception:
                         prev_hist = []
             incoming = normalized.get("history") or []
+            seed = load_seed_trade_history()
             if not incoming and prev_hist:
-                normalized["history"] = prev_hist[:DEMO_HISTORY_LIMIT]
+                normalized["history"] = merge_trade_histories(
+                    prev_hist, seed
+                )[:DEMO_HISTORY_LIMIT]
             else:
-                normalized["history"] = merge_trade_histories(incoming, prev_hist)
+                normalized["history"] = merge_trade_histories(
+                    incoming, prev_hist, seed
+                )[:DEMO_HISTORY_LIMIT]
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(normalized, indent=2))
             tmp.replace(path)
@@ -1161,10 +1198,15 @@ def save_demo_account(raw: dict, user_id: str | None = None) -> dict | None:
             except Exception:
                 prev_hist = []
         incoming = normalized.get("history") or []
+        seed = load_seed_trade_history()
         if not incoming and prev_hist:
-            normalized["history"] = prev_hist[:DEMO_HISTORY_LIMIT]
+            normalized["history"] = merge_trade_histories(
+                prev_hist, seed
+            )[:DEMO_HISTORY_LIMIT]
         else:
-            normalized["history"] = merge_trade_histories(incoming, prev_hist)
+            normalized["history"] = merge_trade_histories(
+                incoming, prev_hist, seed
+            )[:DEMO_HISTORY_LIMIT]
         tmp = DEMO_ACCOUNT_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(normalized, indent=2))
         tmp.replace(DEMO_ACCOUNT_FILE)
@@ -1277,9 +1319,8 @@ def _kalshi_taker_fee(contracts: int, price: float) -> float:
     return math.ceil(raw * 100 - 1e-9) / 100.0
 
 
-# Bigger-picture BTC tape bias for Best Side push (mirrors client).
-# Revert point before this feature: git commit f46cc02 (v9.62).
-# Set False to undo without a full rollback.
+# Bigger-picture BTC tape bias (off under aug5-favorites profile).
+# Revert / profile note: client BEST_SIDE_PROFILE = "aug5-favorites".
 TREND_BIAS_ENABLED = False
 
 
@@ -1318,7 +1359,8 @@ def _short_term_trend() -> dict:
 def score_clear_edge(
     data: dict, spot: float | None, *, latched: bool = False
 ) -> dict | None:
-    """Mirror client Best Side clear-edge thresholds for background push."""
+    """Mirror client Best Side clear-edge (profile: aug5-favorites)."""
+    _ = latched  # sticky latch unused under aug5-favorites
     if spot is None or not math.isfinite(float(spot)):
         return None
     beat = data.get("price_to_beat")
@@ -1338,7 +1380,6 @@ def score_clear_edge(
 
     above_ask = _usable_ask_cents(data.get("yes_ask_pct"))
     below_ask = _usable_ask_cents(data.get("no_ask_pct"))
-    # Prefer mid-based asks when extreme settlement quotes appear.
     yes = data.get("yes_pct")
     no = data.get("no_pct")
     if above_ask is None and yes is not None:
@@ -1365,7 +1406,6 @@ def score_clear_edge(
     if model is None:
         return None
 
-    trend = _short_term_trend()
     scored = []
     for side, ask in (("above", above_ask), ("below", below_ask)):
         if ask is None:
@@ -1376,24 +1416,13 @@ def score_clear_edge(
         p_win = model if side == "above" else 1.0 - model
         ev = p_win * 1.0 - cost_per
         risk = max(0.04, 1.0 - p_win)
-        score = ev / risk
-        if TREND_BIAS_ENABLED:
-            mag = abs(float(trend["strength"]))
-            if trend["bias"] == "down" and side == "above":
-                score -= 0.10 + 0.18 * mag
-            elif trend["bias"] == "up" and side == "below":
-                score -= 0.10 + 0.18 * mag
-            elif trend["bias"] == "down" and side == "below":
-                score += 0.08 * mag
-            elif trend["bias"] == "up" and side == "above":
-                score += 0.08 * mag
         scored.append(
             {
                 "side": side,
                 "ask_cents": ask,
                 "p_win": p_win,
                 "ev": ev,
-                "score": score,
+                "score": ev / risk,
             }
         )
     if not scored:
@@ -1402,79 +1431,25 @@ def score_clear_edge(
     best = scored[0]
     if data.get("thin_book"):
         best = {**best, "score": best["score"] - 0.08}
-    # Pickier clear edge (keep in sync with client).
-    # Enter ~48%+ favorite; stay only slightly softer so weak BUYs drop off.
-    ask_c = float(best["ask_cents"])
-    if ask_c <= 15:
-        cheap_enter = best["p_win"] >= 0.52 and best["ev"] >= 0.08
-        cheap_stay = best["p_win"] >= 0.48 and best["ev"] >= 0.06
-    elif ask_c <= 25:
-        cheap_enter = best["p_win"] >= 0.48 and best["ev"] >= 0.05
-        cheap_stay = best["p_win"] >= 0.44 and best["ev"] >= 0.04
-    else:
-        cheap_enter = True
-        cheap_stay = True
-    enter_clear = (
-        best["ev"] >= 0.03
-        and best["score"] > 0.05
-        and best["p_win"] >= 0.48
-        and cheap_enter
-        and not (secs > 12 * 60 and best["ev"] < 0.05)
-    )
-    stay_clear = (
-        best["ev"] >= 0.025
-        and best["score"] > 0.035
-        and best["p_win"] >= 0.42
-        and cheap_stay
-        and not (secs > 12 * 60 and best["ev"] < 0.04)
-    )
-    fighting = TREND_BIAS_ENABLED and (
-        (trend["bias"] == "down" and best["side"] == "above")
-        or (trend["bias"] == "up" and best["side"] == "below")
-    )
-    mag = abs(float(trend["strength"]))
-    if fighting and mag >= 0.7:
-        enter_clear = False
-    elif fighting and mag >= 0.45:
-        enter_clear = (
-            enter_clear
-            and best["ev"] >= 0.10
-            and best["p_win"] >= 0.62
-            and best["score"] > 0.12
-        )
+    # Profile aug5-favorites: pWin ≥ 52% favorites only (August 5 / v9.33).
     clear = (
-        (stay_clear and (not fighting or mag < 0.7))
-        if latched
-        else enter_clear
+        best["ev"] > 0.01
+        and best["score"] > 0.04
+        and best["p_win"] >= 0.52
+        and not (secs > 12 * 60 and abs(best["ev"]) < 0.03)
     )
     if not clear:
         return None
-    # Nominal $ size for push copy (phone uses its own bankroll in-app).
-    # Mirror client ask caps so push text doesn't advertise oversized buys.
     ask = float(best["ask_cents"])
     p_win = float(best["p_win"])
     cost = ask / 100.0
     edge_amt = p_win - cost
-    if ask <= 12:
-        ask_cap = 15
-    elif ask <= 20:
-        ask_cap = 25
-    elif ask <= 30:
-        ask_cap = 40
-    elif ask <= 45:
-        ask_cap = 55
-    else:
-        ask_cap = 40
-    suggest = 8
+    suggest = 10
     if edge_amt > 0 and cost < 1:
         kelly = edge_amt / max(0.01, 1.0 - cost)
-        suggest = int(max(5, min(ask_cap, round(100 * kelly * 0.18))))
-        if p_win < 0.48:
-            suggest = max(5, int(suggest * 0.5))
-        elif ask <= 20:
-            suggest = max(5, int(suggest * 0.55))
+        suggest = int(max(5, min(40, round(100 * kelly * 0.3))))
     best["suggest_stake"] = suggest
-    best["trend"] = trend["bias"]
+    best["profile"] = "aug5-favorites"
     return best
 
 
@@ -1846,7 +1821,8 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.2.1",
+                    "version": "2.3.0",
+                    "best_side_profile": "aug5-favorites",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file() or len(accounts) > 0,

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.77";
+  const APP_VERSION = "9.78";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -1671,17 +1671,18 @@
   }
 
   /**
-   * Fast one-finger pan + pinch, plus hard-press inspect crosshair.
-   * Hard-press (~0.4s) shows dotted date/amount lines; drag to scrub.
-   * Quick drag pans with high gain so history moves fast.
+   * Fast one-finger pan + pinch, plus light-press inspect crosshair.
+   * Short hold (~0.12s) shows dotted date/amount lines; drag to scrub.
+   * Quick tap dismisses an open crosshair. Quick drag pans with high gain.
    */
   function wirePlChartTouchGuards() {
     if (!el.plChart || el.plChart.dataset.touchGuarded === "1") return;
     el.plChart.dataset.touchGuarded = "1";
     const PAN_GAIN = 3.4;
     const PINCH_POWER = 3.6;
-    const LONG_PRESS_MS = 380;
+    const LONG_PRESS_MS = 120;
     const MOVE_CANCEL_PX = 10;
+    const TAP_MS = 280;
 
     let pinchStartDist = null;
     let pinchStartRange = null;
@@ -1691,7 +1692,13 @@
     let pressTimer = null;
     let pressStartX = null;
     let pressStartY = null;
+    let pressStartedAt = 0;
     let inspectMode = false;
+    let inspectAlreadyOn = false;
+    let activatedThisPress = false;
+
+    const crosshairVisible = () =>
+      !!(el.plCrosshair && !el.plCrosshair.hidden);
 
     const touchDist = (a, b) => {
       const dx = a.clientX - b.clientX;
@@ -1739,6 +1746,21 @@
       }
     };
 
+    const beginInspectAt = (x, y) => {
+      activatedThisPress = true;
+      inspectMode = true;
+      plInspecting = true;
+      panStartX = null;
+      panStartRange = null;
+      panMoved = false;
+      try {
+        if (navigator.vibrate) navigator.vibrate(8);
+      } catch {
+        // ignore
+      }
+      updatePlInspectAtClient(x, y);
+    };
+
     const opts = { passive: false, capture: true };
 
     el.plChart.addEventListener(
@@ -1749,7 +1771,9 @@
           ev.stopPropagation();
           clearPressTimer();
           inspectMode = false;
-          plInspecting = false;
+          activatedThisPress = false;
+          inspectAlreadyOn = false;
+          clearPlInspect();
           panStartX = null;
           panStartRange = null;
           panMoved = false;
@@ -1765,6 +1789,9 @@
           const t = ev.touches[0];
           pressStartX = t.clientX;
           pressStartY = t.clientY;
+          pressStartedAt = Date.now();
+          inspectAlreadyOn = crosshairVisible() || plInspecting;
+          activatedThisPress = false;
           panStartX = t.clientX;
           panStartRange = ensurePannableRange(readRange());
           panMoved = false;
@@ -1772,18 +1799,8 @@
           clearPressTimer();
           pressTimer = setTimeout(() => {
             pressTimer = null;
-            // Hard press → inspect crosshair (date + amount).
-            inspectMode = true;
-            plInspecting = true;
-            panStartX = null;
-            panStartRange = null;
-            panMoved = false;
-            try {
-              if (navigator.vibrate) navigator.vibrate(14);
-            } catch {
-              // ignore
-            }
-            updatePlInspectAtClient(pressStartX, pressStartY);
+            // Light press → inspect crosshair (date + amount).
+            beginInspectAt(pressStartX, pressStartY);
           }, LONG_PRESS_MS);
         } else {
           clearPressTimer();
@@ -1791,6 +1808,8 @@
           panStartRange = null;
           panMoved = false;
           inspectMode = false;
+          activatedThisPress = false;
+          inspectAlreadyOn = false;
         }
       },
       opts
@@ -1830,18 +1849,26 @@
         ev.stopPropagation();
         const t = ev.touches[0];
 
-        if (inspectMode || plInspecting) {
+        if (inspectMode || activatedThisPress) {
           updatePlInspectAtClient(t.clientX, t.clientY);
           return;
         }
 
-        // Cancel pending hard-press if the finger slides first.
+        const movedFromStart =
+          pressStartX != null
+            ? Math.hypot(t.clientX - pressStartX, t.clientY - pressStartY)
+            : 0;
+
+        // Crosshair already open: a slide scrubs it; a later quick tap clears.
+        if (inspectAlreadyOn && movedFromStart >= MOVE_CANCEL_PX) {
+          clearPressTimer();
+          beginInspectAt(t.clientX, t.clientY);
+          return;
+        }
+
+        // Cancel pending light-press if the finger slides first → pan.
         if (pressTimer != null && pressStartX != null) {
-          const moved = Math.hypot(
-            t.clientX - pressStartX,
-            t.clientY - pressStartY
-          );
-          if (moved >= MOVE_CANCEL_PX) {
+          if (movedFromStart >= MOVE_CANCEL_PX) {
             clearPressTimer();
           } else {
             return;
@@ -1864,7 +1891,12 @@
     const endGesture = () => {
       clearPressTimer();
       const wasPan = panMoved;
-      const wasInspect = inspectMode || plInspecting;
+      const heldMs = pressStartedAt ? Date.now() - pressStartedAt : 0;
+      const quickTap =
+        !wasPan &&
+        !activatedThisPress &&
+        heldMs > 0 &&
+        heldMs < TAP_MS;
       pinchStartDist = null;
       pinchStartRange = null;
       panStartX = null;
@@ -1872,20 +1904,26 @@
       panMoved = false;
       pressStartX = null;
       pressStartY = null;
+      pressStartedAt = 0;
       inspectMode = false;
       if (wasPan) {
         plRestoringRange = false;
         capturePlVisibleRange();
         clearPlInspect();
-      } else if (wasInspect) {
-        // Keep the last readout/crosshair until the next pan.
+      } else if (quickTap && inspectAlreadyOn) {
+        // Quick tap removes an open crosshair.
+        clearPlInspect();
+      } else if (activatedThisPress) {
+        // Keep the last readout/crosshair until tap-off or pan.
         plInspecting = true;
       }
+      activatedThisPress = false;
+      inspectAlreadyOn = false;
     };
     el.plChart.addEventListener("touchend", endGesture, opts);
     el.plChart.addEventListener("touchcancel", endGesture, opts);
 
-    // Desktop: hover a candle to show gain/loss on the label.
+    // Desktop: hover a candle to show gain/loss on the label; click toggles off.
     el.plChart.addEventListener("mousemove", (ev) => {
       if (ev.buttons) {
         clearPlInspect();
@@ -1895,6 +1933,12 @@
     });
     el.plChart.addEventListener("mouseleave", () => {
       if (!plInspecting) clearPlInspect();
+    });
+    el.plChart.addEventListener("click", (ev) => {
+      if (crosshairVisible() || plInspecting) {
+        ev.preventDefault();
+        clearPlInspect();
+      }
     });
   }
 

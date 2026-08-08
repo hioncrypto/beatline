@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.71";
+  const APP_VERSION = "9.72";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -257,6 +257,8 @@
     plChartFit: document.getElementById("pl-chart-fit"),
     plChartZoomIn: document.getElementById("pl-chart-zoom-in"),
     plChartZoomOut: document.getElementById("pl-chart-zoom-out"),
+    plChartPanLeft: document.getElementById("pl-chart-pan-left"),
+    plChartPanRight: document.getElementById("pl-chart-pan-right"),
     accountExport: document.getElementById("account-export"),
     accountImport: document.getElementById("account-import"),
     accountImportFile: document.getElementById("account-import-file"),
@@ -1379,6 +1381,76 @@
     }
   }
 
+  /** First paint: recent trades so left/right pan has room (Fit all for everything). */
+  function fitPlChartRecent(barCount) {
+    if (!plChart) return;
+    const n = Math.max(1, barCount);
+    const visible = Math.min(16, Math.max(6, n));
+    const to = n - 0.5;
+    const from = Math.max(-0.5, to - visible);
+    plRestoringRange = true;
+    try {
+      plChart.timeScale().setVisibleLogicalRange({ from, to });
+      plChartFitted = true;
+      plUi.range = { from, to };
+      savePlUi();
+    } catch {
+      fitPlChartFull(barCount);
+    } finally {
+      setTimeout(() => {
+        plRestoringRange = false;
+      }, 50);
+    }
+  }
+
+  /** Shift the visible trade window left (older) or right (newer). */
+  function nudgePlPan(direction) {
+    if (!plChart || !isPlChartVisible()) return;
+    let range = null;
+    try {
+      range = plChart.timeScale().getVisibleLogicalRange();
+    } catch {
+      range = null;
+    }
+    const barCount = Math.max(1, plLastBarCount);
+    if (
+      !range ||
+      !Number.isFinite(range.from) ||
+      !Number.isFinite(range.to) ||
+      range.to <= range.from
+    ) {
+      return;
+    }
+    const span = range.to - range.from;
+    // If fully fit, zoom in a bit first so a pan actually moves.
+    if (span >= barCount - 0.5) {
+      nudgePlZoom(0.55);
+      try {
+        range = plChart.timeScale().getVisibleLogicalRange();
+      } catch {
+        return;
+      }
+      if (!range) return;
+    }
+    const shift = (range.to - range.from) * 0.45 * (direction < 0 ? -1 : 1);
+    const next = {
+      from: range.from + shift,
+      to: range.to + shift,
+    };
+    plRestoringRange = true;
+    try {
+      plChart.timeScale().setVisibleLogicalRange(next);
+      plUi.range = { from: next.from, to: next.to };
+      savePlUi();
+    } catch {
+      // ignore
+    } finally {
+      setTimeout(() => {
+        plRestoringRange = false;
+      }, 50);
+    }
+  }
+
   function applyPlUi() {
     if (el.plChartSection) {
       el.plChartSection.classList.toggle("is-open", !!plUi.optionsOpen);
@@ -1649,7 +1721,9 @@
       handleScroll: {
         mouseWheel: true,
         pressedMouseMove: true,
-        horzTouchDrag: true,
+        // Custom one-finger pan in wirePlChartTouchGuards — Options sheet
+        // was stealing stock horzTouchDrag via default scroll.
+        horzTouchDrag: false,
         vertTouchDrag: false,
       },
       handleScale: {
@@ -1759,7 +1833,7 @@
     // Only auto-fit on first paint or when there was no saved place yet.
     const restored = restorePlVisibleRange(barCount);
     if (!restored) {
-      fitPlChartFull(barCount);
+      fitPlChartRecent(barCount);
     } else if (grew && plUi.range && plUi.range.to >= barCount - 2.5) {
       // If they were parked near the live edge, keep them at the new tip.
       try {
@@ -7316,6 +7390,12 @@
     }
     if (el.plChartZoomOut) {
       el.plChartZoomOut.addEventListener("click", () => nudgePlZoom(2.8));
+    }
+    if (el.plChartPanLeft) {
+      el.plChartPanLeft.addEventListener("click", () => nudgePlPan(-1));
+    }
+    if (el.plChartPanRight) {
+      el.plChartPanRight.addEventListener("click", () => nudgePlPan(1));
     }
     if (el.tradeHistoryToggle) {
       el.tradeHistoryToggle.addEventListener("click", () => {

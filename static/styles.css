@@ -2021,6 +2021,14 @@ h1 {
   min-height: 0;
 }
 
+.chart-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .tf-btns {
   margin: 0 0 4px;
 }
@@ -2750,6 +2758,55 @@ h1 {
   touch-action: none;
 }
 
+/* Sit TO BEAT at the top of the chart — not on the mid-candle price line. */
+.chart-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.to-beat-chip {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: calc(100% - 72px);
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(244, 255, 248, 0.28);
+  background: rgba(12, 22, 18, 0.88);
+  color: #f4fff8;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.to-beat-chip[hidden] {
+  display: none !important;
+}
+
+.to-beat-chip-label {
+  opacity: 0.85;
+  text-transform: uppercase;
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+}
+
+.to-beat-chip-price {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
 .foot {
   display: none;
 }
@@ -3114,7 +3171,8 @@ body.portrait-app .live-time {
   flex: 0 0 auto;
 }
 
-.app-shell > .chart-wrap > #chart,
+.app-shell > .chart-wrap > .chart-stage,
+.app-shell > .chart-wrap > .chart-stage > #chart,
 body.portrait-app #chart {
   flex: 1 1 auto !important;
   min-height: 80px !important;

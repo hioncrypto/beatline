@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.68";
+  const APP_VERSION = "9.69";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -152,6 +152,8 @@
   const el = {
     chart: document.getElementById("chart"),
     chartWrap: document.getElementById("chart-wrap"),
+    toBeatChip: document.getElementById("to-beat-chip"),
+    toBeatChipPrice: document.getElementById("to-beat-chip-price"),
     chartResizeTop: document.getElementById("chart-resize-top"),
     chartResizeBottom: document.getElementById("chart-resize-bottom"),
     appShell: document.querySelector(".app-shell"),
@@ -6786,6 +6788,16 @@
     }
   }
 
+  function syncToBeatChip(price, visible) {
+    if (!el.toBeatChip) return;
+    const show = !!visible && price != null && Number.isFinite(Number(price));
+    el.toBeatChip.hidden = !show;
+    if (!show) return;
+    if (el.toBeatChipPrice) {
+      el.toBeatChipPrice.textContent = money(Number(price));
+    }
+  }
+
   function applyTargetLine(target, title) {
     const price = target == null || target === "" ? NaN : Number(target);
     lastTarget = Number.isFinite(price) ? price : null;
@@ -6794,6 +6806,7 @@
 
     if (lastTarget == null) {
       clearTargetLine();
+      syncToBeatChip(null, false);
       if (targetSeries) {
         try {
           targetSeries.setData([]);
@@ -6804,11 +6817,11 @@
       return;
     }
 
-    const label = title || "TO BEAT";
     const dash =
       (ensureChart.LineStyle && ensureChart.LineStyle.Dashed) || 2;
 
-    // Single axis label via candle price line (avoid a second series label).
+    // Keep the dashed beat line + axis price, but move the "TO BEAT" chip
+    // off the mid-candle pane to the top of the chart (see #to-beat-chip).
     if (series) {
       clearTargetLine();
       targetLine = series.createPriceLine({
@@ -6817,9 +6830,10 @@
         lineWidth: 2,
         lineStyle: dash,
         axisLabelVisible: true,
-        title: label,
+        title: "",
       });
     }
+    syncToBeatChip(lastTarget, true);
 
     // Full-width dashed line — no last-value label (that caused the double TO BEAT).
     if (!targetSeries) {

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.60";
+  const APP_VERSION = "9.61";
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
   const APP_TZ = "America/Los_Angeles";
   /** Day-equity schema: v2 = Pacific calendar day (not Eastern). */
@@ -5354,19 +5354,21 @@
   }
 
   /**
-   * Pull-to-refresh. The shell is a fixed-height flex layout with no page
-   * scroll, so Chrome's native gesture never fires — track it ourselves.
+   * Pull-to-refresh. Requires a hard downward pull while every scroll
+   * parent is already at the top — normal up/down scrolling must not fire.
    */
-  const PULL_TRIGGER_PX = 72;
-  const PULL_MAX_PX = 110;
+  const PULL_ARM_PX = 56; // ignore small downward noise while scrolling
+  const PULL_TRIGGER_PX = 160; // hard pull before release will update
+  const PULL_MAX_PX = 220;
   let pullStartY = null;
+  let pullStartX = null;
   let pullActive = false;
   let pullDistance = 0;
   let pullRunning = false;
 
   function setPullIndicator(distance, ready) {
     if (!el.pullRefresh) return;
-    const shown = distance > 6;
+    const shown = distance > PULL_ARM_PX;
     el.pullRefresh.classList.toggle("is-visible", shown);
     el.pullRefresh.classList.toggle("is-ready", !!ready);
     const y = Math.min(distance, PULL_MAX_PX);
@@ -5377,12 +5379,13 @@
     if (el.pullRefreshLabel && !pullRunning) {
       el.pullRefreshLabel.textContent = ready
         ? "Release to update"
-        : "Pull to refresh";
+        : "Pull hard to refresh";
     }
   }
 
   function resetPullIndicator() {
     pullStartY = null;
+    pullStartX = null;
     pullActive = false;
     pullDistance = 0;
     if (!el.pullRefresh) return;
@@ -5390,16 +5393,38 @@
     el.pullRefresh.style.transform = "translate(-50%, -120%)";
   }
 
-  /** Only start the gesture where a downward drag isn't already meaningful. */
+  /** True when this node (and ancestors) are scrolled away from the top. */
+  function hasScrollRoomAbove(from) {
+    let node = from instanceof Element ? from : null;
+    while (node && node !== document.documentElement) {
+      try {
+        const style = window.getComputedStyle(node);
+        const oy = style.overflowY;
+        const canScroll =
+          oy === "auto" || oy === "scroll" || oy === "overlay" || node === el.appShell;
+        if (canScroll && node.scrollTop > 2) return true;
+      } catch {
+        // ignore
+      }
+      node = node.parentElement;
+    }
+    // Locked tall chart makes .app-shell the page scroller.
+    if (el.appShell && el.appShell.scrollTop > 2) return true;
+    const stack = document.querySelector(".trade-stack");
+    if (stack && stack.scrollTop > 2) return true;
+    return false;
+  }
+
+  /** Only start the gesture where a hard pull-down isn't already a scroll. */
   function pullAllowedFrom(target) {
     if (pullRunning || buySheetOpen || optionsOpen || tutorialOpen) return false;
-    if (!(target instanceof Element)) return true;
+    if (!(target instanceof Element)) return false;
     if (target.closest("#chart, .chart-wrap, .chart-resize, .buy-sheet, .options-sheet, .tutorial"))
       return false;
-    if (target.closest("input, button, a, .open-pl-bar")) return false;
-    // Respect scrollable panels that aren't already at the top.
-    const scroller = target.closest(".summary-panel, .trade-panel");
-    if (scroller && scroller.scrollTop > 2) return false;
+    if (target.closest("input, button, a, .open-pl-bar, .stake-slider-wrap"))
+      return false;
+    // Any scrollable panel mid-scroll → this is page scrolling, not refresh.
+    if (hasScrollRoomAbove(target)) return false;
     return true;
   }
 
@@ -5408,9 +5433,11 @@
     if (!t) return;
     if (!pullAllowedFrom(ev.target)) {
       pullStartY = null;
+      pullStartX = null;
       return;
     }
     pullStartY = t.clientY;
+    pullStartX = t.clientX;
     pullActive = false;
     pullDistance = 0;
   }
@@ -5419,14 +5446,30 @@
     if (pullStartY == null || pullRunning) return;
     const t = ev.touches && ev.touches[0];
     if (!t) return;
+    // If a scroller moved off the top mid-gesture, abort.
+    if (hasScrollRoomAbove(ev.target)) {
+      resetPullIndicator();
+      return;
+    }
     const dy = t.clientY - pullStartY;
-    if (dy <= 0) {
-      if (pullActive) resetPullIndicator();
+    const dx = Math.abs(t.clientX - (pullStartX || t.clientX));
+    // Sideways / diagonal pans are not a refresh pull.
+    if (dx > 28 && dx > dy * 0.7) {
+      resetPullIndicator();
+      return;
+    }
+    if (dy <= PULL_ARM_PX) {
+      if (pullActive) {
+        pullActive = false;
+        pullDistance = 0;
+        setPullIndicator(0, false);
+      }
       return;
     }
     pullActive = true;
     // Rubber-band so it never feels like a free-scrolling page.
-    pullDistance = dy < PULL_MAX_PX ? dy : PULL_MAX_PX + (dy - PULL_MAX_PX) * 0.15;
+    pullDistance =
+      dy < PULL_MAX_PX ? dy : PULL_MAX_PX + (dy - PULL_MAX_PX) * 0.15;
     setPullIndicator(pullDistance, pullDistance >= PULL_TRIGGER_PX);
   }
 

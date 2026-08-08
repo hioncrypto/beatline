@@ -1962,7 +1962,10 @@
       if (crosshairVisible() || plInspecting) {
         ev.preventDefault();
         clearPlInspect();
+        return;
       }
+      updatePlInspectAtClient(ev.clientX, ev.clientY);
+      plInspecting = true;
     });
   }
 

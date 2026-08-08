@@ -13,11 +13,12 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.57";
+  const APP_VERSION = "9.58";
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
   const APP_TZ = "America/Los_Angeles";
   /** Day-equity schema: v2 = Pacific calendar day (not Eastern). */
   const DAY_EQUITY_VERSION = 2;
+  const INVITEE_KEY = "beatlineInvitee";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -522,11 +523,59 @@
     };
   }
 
+  function isInvitee() {
+    try {
+      return localStorage.getItem(INVITEE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function setInvitee(on) {
+    try {
+      if (on) localStorage.setItem(INVITEE_KEY, "1");
+      else localStorage.removeItem(INVITEE_KEY);
+    } catch {
+      // ignore
+    }
+  }
+
+  /** Invite links mark the opener as non-sharer; strip the flag from the URL. */
+  function consumeInviteLink() {
+    try {
+      const url = new URL(location.href);
+      const flag =
+        url.searchParams.get("invite") ||
+        url.searchParams.get("shared") ||
+        url.searchParams.get("from");
+      if (flag === "1" || flag === "true" || flag === "share") {
+        setInvitee(true);
+        url.searchParams.delete("invite");
+        url.searchParams.delete("shared");
+        url.searchParams.delete("from");
+        const clean = `${url.pathname}${url.search}${url.hash}` || "/";
+        history.replaceState(null, "", clean);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  function shareAppLink() {
+    return `${location.origin}/?invite=1`;
+  }
+
   function syncAccountShareUi() {
     if (el.accountUserId) el.accountUserId.textContent = shortUserId();
+    const invitee = isInvitee();
+    if (el.accountCopyLink) {
+      el.accountCopyLink.hidden = invitee;
+      el.accountCopyLink.setAttribute("aria-hidden", invitee ? "true" : "false");
+    }
     if (el.accountShareHint) {
-      el.accountShareHint.textContent =
-        "Friends open the same link and automatically get their own private balance & trade history — not yours.";
+      el.accountShareHint.textContent = invitee
+        ? "This is your private balance & trade history on this phone."
+        : "Friends open your invite link and get their own private balance & trade history — not yours. They cannot reshare the app.";
     }
   }
 
@@ -556,6 +605,7 @@
   }
 
   function wireAccountShareUi() {
+    consumeInviteLink();
     syncAccountShareUi();
     if (el.accountCopyId) {
       el.accountCopyId.addEventListener("click", async () => {
@@ -570,11 +620,15 @@
     }
     if (el.accountCopyLink) {
       el.accountCopyLink.addEventListener("click", async () => {
-        const ok = await copyText(`${location.origin}/`);
+        if (isInvitee()) {
+          setStatus("warn", "Sharing is only available on the original invite");
+          return;
+        }
+        const ok = await copyText(shareAppLink());
         setStatus(
           ok ? "ok" : "warn",
           ok
-            ? "App link copied — they get their own private account on first open"
+            ? "Invite link copied — they get a private account and cannot reshare"
             : "Could not copy link"
         );
       });

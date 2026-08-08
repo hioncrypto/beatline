@@ -1020,6 +1020,11 @@ h1 {
   line-height: 1.35;
 }
 
+.pl-chart-stage {
+  position: relative;
+  width: 100%;
+}
+
 .pl-chart {
   height: 180px;
   width: 100%;
@@ -1027,7 +1032,7 @@ h1 {
   border: 1px solid var(--border);
   background: rgba(8, 14, 11, 0.55);
   overflow: hidden;
-  /* Entire surface is a one-finger pan target — Options sheet must not scroll it. */
+  /* Entire surface is a one-finger pan / hard-press inspect target. */
   touch-action: none;
   -webkit-user-select: none;
   user-select: none;
@@ -1038,6 +1043,95 @@ h1 {
 .pl-chart canvas,
 .pl-chart > div {
   touch-action: none !important;
+}
+
+.pl-crosshair {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.pl-crosshair[hidden] {
+  display: none !important;
+}
+
+.pl-crosshair-v,
+.pl-crosshair-h {
+  position: absolute;
+  background: transparent;
+}
+
+.pl-crosshair-v {
+  top: 0;
+  bottom: 0;
+  left: var(--pl-x, 50%);
+  width: 0;
+  border-left: 1px dotted rgba(244, 255, 248, 0.85);
+  transform: translateX(-0.5px);
+}
+
+.pl-crosshair-h {
+  left: 0;
+  right: 0;
+  top: var(--pl-y, 50%);
+  height: 0;
+  border-top: 1px dotted rgba(244, 255, 248, 0.85);
+  transform: translateY(-0.5px);
+}
+
+.pl-crosshair-tag {
+  position: absolute;
+  z-index: 5;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #f4fff8;
+  color: #0c1612;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-size: 0.66rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+}
+
+.pl-crosshair-date {
+  left: var(--pl-x, 50%);
+  bottom: 4px;
+  transform: translateX(-50%);
+}
+
+.pl-crosshair-price {
+  top: var(--pl-y, 50%);
+  right: 4px;
+  transform: translateY(-50%);
+}
+
+.pl-chart-readout {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(244, 255, 248, 0.18);
+  background: rgba(12, 22, 18, 0.92);
+  color: #d7ffe8;
+  font-size: 0.74rem;
+  font-weight: 600;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+
+.pl-chart-readout[hidden] {
+  display: none !important;
+}
+
+.pl-chart-readout.is-up {
+  color: #7dffb3;
+}
+
+.pl-chart-readout.is-down {
+  color: #ff9b9b;
 }
 
 .pl-chart[hidden],

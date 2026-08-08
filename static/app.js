@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.73";
+  const APP_VERSION = "9.74";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -259,6 +259,11 @@
     plChartZoomOut: document.getElementById("pl-chart-zoom-out"),
     plChartPanLeft: document.getElementById("pl-chart-pan-left"),
     plChartPanRight: document.getElementById("pl-chart-pan-right"),
+    plChartStage: document.getElementById("pl-chart-stage"),
+    plCrosshair: document.getElementById("pl-crosshair"),
+    plCrosshairDate: document.getElementById("pl-crosshair-date"),
+    plCrosshairPrice: document.getElementById("pl-crosshair-price"),
+    plChartReadout: document.getElementById("pl-chart-readout"),
     accountExport: document.getElementById("account-export"),
     accountImport: document.getElementById("account-import"),
     accountImportFile: document.getElementById("account-import-file"),
@@ -333,6 +338,8 @@
   let chart = null;
   let series = null;
   let plChart = null;
+  let plCandlesCache = [];
+  let plInspecting = false;
   let plSeries = null;
   let plChartFitted = false;
   let plUi = loadPlUi();
@@ -1432,7 +1439,7 @@
       }
       if (!range) return;
     }
-    const shift = (range.to - range.from) * 0.45 * (direction < 0 ? -1 : 1);
+    const shift = (range.to - range.from) * 0.85 * (direction < 0 ? -1 : 1);
     const next = {
       from: range.from + shift,
       to: range.to + shift,
@@ -1541,19 +1548,153 @@
     }
   }
 
+  function clearPlInspect() {
+    plInspecting = false;
+    if (el.plCrosshair) el.plCrosshair.hidden = true;
+    if (el.plChartReadout) el.plChartReadout.hidden = true;
+    try {
+      if (plChart) plChart.clearCrosshairPosition();
+    } catch {
+      // ignore
+    }
+  }
+
+  function nearestPlCandle(timeSec) {
+    const candles = plCandlesCache || [];
+    if (!candles.length || !Number.isFinite(timeSec)) return null;
+    let best = candles[0];
+    let bestDist = Math.abs(best.time - timeSec);
+    for (let i = 1; i < candles.length; i++) {
+      const d = Math.abs(candles[i].time - timeSec);
+      if (d < bestDist) {
+        best = candles[i];
+        bestDist = d;
+      }
+    }
+    return best;
+  }
+
+  function updatePlInspectAtClient(clientX, clientY) {
+    if (!plChart || !el.plChart || !plSeries) return null;
+    const rect = el.plChart.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return null;
+
+    let time = null;
+    let price = null;
+    try {
+      time = plChart.timeScale().coordinateToTime(x);
+    } catch {
+      time = null;
+    }
+    try {
+      price = plSeries.coordinateToPrice(y);
+    } catch {
+      price = null;
+    }
+
+    const timeSec =
+      typeof time === "number"
+        ? time
+        : time && Number.isFinite(Number(time.timestamp))
+          ? Number(time.timestamp)
+          : NaN;
+    const candle = nearestPlCandle(timeSec);
+    const showPrice =
+      candle && Number.isFinite(candle.close)
+        ? candle.close
+        : Number.isFinite(price)
+          ? price
+          : null;
+    const showTime = candle ? candle.time : timeSec;
+
+    // Snap crosshair to candle close when possible so amount matches the trade.
+    let lineY = y;
+    if (candle && Number.isFinite(candle.close)) {
+      try {
+        const cy = plSeries.priceToCoordinate(candle.close);
+        if (cy != null && Number.isFinite(cy)) lineY = cy;
+      } catch {
+        // keep finger y
+      }
+    }
+
+    if (el.plCrosshair) {
+      el.plCrosshair.hidden = false;
+      el.plCrosshair.style.setProperty("--pl-x", `${Math.round(x)}px`);
+      el.plCrosshair.style.setProperty("--pl-y", `${Math.round(lineY)}px`);
+    }
+    if (el.plCrosshairDate) {
+      el.plCrosshairDate.textContent = Number.isFinite(showTime)
+        ? formatPlCrosshairTime(showTime)
+        : "—";
+    }
+    if (el.plCrosshairPrice) {
+      el.plCrosshairPrice.textContent =
+        showPrice != null ? money(showPrice) : "—";
+    }
+
+    if (el.plChartReadout) {
+      el.plChartReadout.hidden = false;
+      if (candle) {
+        const plBit =
+          candle.pl != null && Number.isFinite(candle.pl)
+            ? ` · trade ${formatPl(candle.pl)}`
+            : "";
+        const sideBit = candle.side
+          ? ` · ${candle.side === "above" ? "Above" : "Below"}`
+          : "";
+        el.plChartReadout.textContent = `${formatPlCrosshairTime(
+          candle.time
+        )} · equity ${money(candle.close)}${plBit}${sideBit}`;
+        el.plChartReadout.classList.toggle("is-up", !!candle.won);
+        el.plChartReadout.classList.toggle("is-down", !candle.won);
+      } else if (Number.isFinite(showTime) && showPrice != null) {
+        el.plChartReadout.textContent = `${formatPlCrosshairTime(
+          showTime
+        )} · ${money(showPrice)}`;
+        el.plChartReadout.classList.remove("is-up", "is-down");
+      } else {
+        el.plChartReadout.textContent = "Hold and drag to inspect";
+        el.plChartReadout.classList.remove("is-up", "is-down");
+      }
+    }
+
+    try {
+      if (candle && Number.isFinite(candle.close)) {
+        plChart.setCrosshairPosition(candle.close, candle.time, plSeries);
+      } else if (Number.isFinite(showTime) && Number.isFinite(price)) {
+        plChart.setCrosshairPosition(price, showTime, plSeries);
+      }
+    } catch {
+      // ignore
+    }
+    return candle;
+  }
+
   /**
-   * One-finger pan + pinch on the whole P/L chart surface.
-   * Options sheet scroll must not steal the drag — always preventDefault
-   * for one-finger moves on the chart so left/right sliding works edge-to-edge.
+   * Fast one-finger pan + pinch, plus hard-press inspect crosshair.
+   * Hard-press (~0.4s) shows dotted date/amount lines; drag to scrub.
+   * Quick drag pans with high gain so history moves fast.
    */
   function wirePlChartTouchGuards() {
     if (!el.plChart || el.plChart.dataset.touchGuarded === "1") return;
     el.plChart.dataset.touchGuarded = "1";
+    const PAN_GAIN = 3.4;
+    const PINCH_POWER = 3.6;
+    const LONG_PRESS_MS = 380;
+    const MOVE_CANCEL_PX = 10;
+
     let pinchStartDist = null;
     let pinchStartRange = null;
     let panStartX = null;
     let panStartRange = null;
     let panMoved = false;
+    let pressTimer = null;
+    let pressStartX = null;
+    let pressStartY = null;
+    let inspectMode = false;
 
     const touchDist = (a, b) => {
       const dx = a.clientX - b.clientX;
@@ -1584,15 +1725,21 @@
       if (!range) return null;
       const barCount = Math.max(1, plLastBarCount);
       const span = range.to - range.from;
-      // Fully fit → nothing to slide. Auto-zoom to recent window first.
       if (span >= barCount - 0.5) {
-        const visible = Math.min(16, Math.max(6, barCount));
+        const visible = Math.min(14, Math.max(5, barCount));
         const to = barCount - 0.5;
         const from = Math.max(-0.5, to - visible);
         applyRange(from, to);
         return { from, to };
       }
       return range;
+    };
+
+    const clearPressTimer = () => {
+      if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
     };
 
     const opts = { passive: false, capture: true };
@@ -1603,6 +1750,9 @@
         if (ev.touches && ev.touches.length >= 2) {
           ev.preventDefault();
           ev.stopPropagation();
+          clearPressTimer();
+          inspectMode = false;
+          plInspecting = false;
           panStartX = null;
           panStartRange = null;
           panMoved = false;
@@ -1613,16 +1763,37 @@
         pinchStartDist = null;
         pinchStartRange = null;
         if (ev.touches && ev.touches.length === 1) {
-          // Claim the gesture on the entire chart surface immediately.
           ev.preventDefault();
           ev.stopPropagation();
-          panStartX = ev.touches[0].clientX;
+          const t = ev.touches[0];
+          pressStartX = t.clientX;
+          pressStartY = t.clientY;
+          panStartX = t.clientX;
           panStartRange = ensurePannableRange(readRange());
           panMoved = false;
+          inspectMode = false;
+          clearPressTimer();
+          pressTimer = setTimeout(() => {
+            pressTimer = null;
+            // Hard press → inspect crosshair (date + amount).
+            inspectMode = true;
+            plInspecting = true;
+            panStartX = null;
+            panStartRange = null;
+            panMoved = false;
+            try {
+              if (navigator.vibrate) navigator.vibrate(14);
+            } catch {
+              // ignore
+            }
+            updatePlInspectAtClient(pressStartX, pressStartY);
+          }, LONG_PRESS_MS);
         } else {
+          clearPressTimer();
           panStartX = null;
           panStartRange = null;
           panMoved = false;
+          inspectMode = false;
         }
       },
       opts
@@ -1634,6 +1805,8 @@
         if (ev.touches && ev.touches.length >= 2) {
           ev.preventDefault();
           ev.stopPropagation();
+          clearPressTimer();
+          inspectMode = false;
           if (
             !plChart ||
             pinchStartDist == null ||
@@ -1645,50 +1818,71 @@
           const d = touchDist(ev.touches[0], ev.touches[1]);
           if (d < 8) return;
           const raw = pinchStartDist / d;
-          const amplified = Math.pow(raw, 2.8);
+          const amplified = Math.pow(raw, PINCH_POWER);
           const mid = (pinchStartRange.from + pinchStartRange.to) / 2;
           const barCount = Math.max(1, plLastBarCount);
           let half =
             ((pinchStartRange.to - pinchStartRange.from) / 2) * amplified;
-          half = Math.max(1.5, Math.min(half, Math.max(barCount / 2 + 4, 6)));
+          half = Math.max(1.2, Math.min(half, Math.max(barCount / 2 + 4, 6)));
           applyRange(mid - half, mid + half);
           return;
         }
 
-        if (
-          ev.touches &&
-          ev.touches.length === 1 &&
-          panStartX != null &&
-          panStartRange
-        ) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          if (!plChart) return;
-          const x = ev.touches[0].clientX;
-          const dx = x - panStartX;
-          if (Math.abs(dx) < 1) return;
-          panMoved = true;
-          const width = Math.max(1, el.plChart.clientWidth || 1);
-          const span = panStartRange.to - panStartRange.from;
-          // Finger right → older trades (scroll history leftward on screen).
-          const shift = -(dx / width) * span;
-          applyRange(panStartRange.from + shift, panStartRange.to + shift);
+        if (!(ev.touches && ev.touches.length === 1)) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const t = ev.touches[0];
+
+        if (inspectMode || plInspecting) {
+          updatePlInspectAtClient(t.clientX, t.clientY);
+          return;
         }
+
+        // Cancel pending hard-press if the finger slides first.
+        if (pressTimer != null && pressStartX != null) {
+          const moved = Math.hypot(
+            t.clientX - pressStartX,
+            t.clientY - pressStartY
+          );
+          if (moved >= MOVE_CANCEL_PX) {
+            clearPressTimer();
+          } else {
+            return;
+          }
+        }
+
+        if (panStartX == null || !panStartRange || !plChart) return;
+        const dx = t.clientX - panStartX;
+        if (Math.abs(dx) < 1) return;
+        panMoved = true;
+        clearPlInspect();
+        const width = Math.max(1, el.plChart.clientWidth || 1);
+        const span = panStartRange.to - panStartRange.from;
+        const shift = -(dx / width) * span * PAN_GAIN;
+        applyRange(panStartRange.from + shift, panStartRange.to + shift);
       },
       opts
     );
 
     const endGesture = () => {
-      const wasActive =
-        pinchStartDist != null || panMoved || panStartRange != null;
+      clearPressTimer();
+      const wasPan = panMoved;
+      const wasInspect = inspectMode || plInspecting;
       pinchStartDist = null;
       pinchStartRange = null;
       panStartX = null;
       panStartRange = null;
       panMoved = false;
-      if (wasActive) {
+      pressStartX = null;
+      pressStartY = null;
+      inspectMode = false;
+      if (wasPan) {
         plRestoringRange = false;
         capturePlVisibleRange();
+        clearPlInspect();
+      } else if (wasInspect) {
+        // Keep the last readout/crosshair until the next pan.
+        plInspecting = true;
       }
     };
     el.plChart.addEventListener("touchend", endGesture, opts);
@@ -1749,7 +1943,9 @@
 
   function ensurePlChart() {
     if (plChart || !el.plChart || !window.LightweightCharts) return;
-    const { createChart } = window.LightweightCharts;
+    const { createChart, CrosshairMode, LineStyle } = window.LightweightCharts;
+    const dotted =
+      (LineStyle && (LineStyle.Dotted ?? LineStyle.Dashed)) || 1;
     applyPlChartHeight();
     wirePlChartTouchGuards();
     plChart = createChart(el.plChart, {
@@ -1762,6 +1958,25 @@
       grid: {
         vertLines: { color: "rgba(255,255,255,0.04)" },
         horzLines: { color: "rgba(255,255,255,0.05)" },
+      },
+      crosshair: {
+        mode: (CrosshairMode && CrosshairMode.Normal) || 0,
+        vertLine: {
+          visible: true,
+          style: dotted,
+          width: 1,
+          color: "rgba(244, 255, 248, 0.7)",
+          labelVisible: true,
+          labelBackgroundColor: "#1a2b23",
+        },
+        horzLine: {
+          visible: true,
+          style: dotted,
+          width: 1,
+          color: "rgba(244, 255, 248, 0.7)",
+          labelVisible: true,
+          labelBackgroundColor: "#1a2b23",
+        },
       },
       rightPriceScale: {
         borderColor: "rgba(255,255,255,0.08)",
@@ -1783,8 +1998,6 @@
       handleScroll: {
         mouseWheel: true,
         pressedMouseMove: true,
-        // Custom one-finger pan in wirePlChartTouchGuards — Options sheet
-        // was stealing stock horzTouchDrag via default scroll.
         horzTouchDrag: false,
         vertTouchDrag: false,
       },
@@ -1792,8 +2005,6 @@
         axisPressedMouseMove: { time: true, price: false },
         axisDoubleClickReset: true,
         mouseWheel: true,
-        // Custom high-gain pinch in wirePlChartTouchGuards — stock LWC pinch
-        // needs a huge finger move to cover the full trade history.
         pinch: false,
       },
       width: el.plChart.clientWidth || 300,
@@ -1830,6 +2041,7 @@
     if (!isPlChartVisible()) return;
 
     const { candles, start, closedCount, daySpan } = buildPlCandles();
+    plCandlesCache = candles;
     const hasBars = candles.length > 0;
 
     if (el.plChartEmpty) el.plChartEmpty.hidden = hasBars;
@@ -7448,10 +7660,10 @@
       });
     }
     if (el.plChartZoomIn) {
-      el.plChartZoomIn.addEventListener("click", () => nudgePlZoom(0.38));
+      el.plChartZoomIn.addEventListener("click", () => nudgePlZoom(0.28));
     }
     if (el.plChartZoomOut) {
-      el.plChartZoomOut.addEventListener("click", () => nudgePlZoom(2.8));
+      el.plChartZoomOut.addEventListener("click", () => nudgePlZoom(3.6));
     }
     if (el.plChartPanLeft) {
       el.plChartPanLeft.addEventListener("click", () => nudgePlPan(-1));

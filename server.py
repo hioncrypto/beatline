@@ -1526,15 +1526,26 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
+        # HEAD must advertise length but not write a body — chat apps often
+        # probe share links with HEAD and treat 501 as a dead URL.
+        if getattr(self, "_sending_head", False):
+            return
         self.wfile.write(body)
 
     def _send_json(self, code: int, obj: dict):
         self._send(code, json.dumps(obj).encode("utf-8"), "application/json; charset=utf-8")
 
+    def do_HEAD(self):
+        self._sending_head = True
+        try:
+            self.do_GET()
+        finally:
+            self._sending_head = False
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -1769,6 +1780,8 @@ class Handler(BaseHTTPRequestHandler):
         if rel == "sw.js":
             self.send_header("Service-Worker-Allowed", "/")
         self.end_headers()
+        if getattr(self, "_sending_head", False):
+            return
         self.wfile.write(data)
 
 

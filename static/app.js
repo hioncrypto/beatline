@@ -13,12 +13,14 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.59";
+  const APP_VERSION = "9.60";
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
   const APP_TZ = "America/Los_Angeles";
   /** Day-equity schema: v2 = Pacific calendar day (not Eastern). */
   const DAY_EQUITY_VERSION = 2;
   const INVITEE_KEY = "beatlineInvitee";
+  /** Always share this host — never a temp tunnel / preview origin. */
+  const STABLE_APP_ORIGIN = "https://beatline-1.onrender.com";
   const TUTORIAL_KEY = "beatlineTutorialSeen";
   const OPEN_PL_COLLAPSE_KEY = "beatlineOpenPlCollapsed";
   const CHART_HEIGHT_KEY = "beatlineChartHeightPx";
@@ -563,7 +565,15 @@
   }
 
   function shareAppLink() {
-    return `${location.origin}/?invite=1`;
+    // Never copy temp tunnels (loca.lt / cloudflare) — those die and look
+    // like "the BeatLine link doesn't work" to friends.
+    const host = (location.hostname || "").toLowerCase();
+    const local =
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host.endsWith(".local");
+    const origin = local ? location.origin : STABLE_APP_ORIGIN;
+    return `${origin}/?invite=1`;
   }
 
   function syncAccountShareUi() {
@@ -675,8 +685,8 @@
         showCopyConfirm(
           ok,
           ok
-            ? "Invite link copied — paste it in Texts/Messages to share"
-            : "Could not copy — try again or share the BeatLine URL manually",
+            ? `Invite link copied — paste this: ${STABLE_APP_ORIGIN.replace("https://", "")}`
+            : "Could not copy — send https://beatline-1.onrender.com/?invite=1 manually",
           el.accountCopyLink,
           "Copied!"
         );

@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=9.76" />
+    <link rel="stylesheet" href="/styles.css?v=9.77" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=9.76" defer></script>
+    <script src="/app.js?v=9.77" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -442,7 +442,13 @@
                 <div class="pl-crosshair-v"></div>
                 <div class="pl-crosshair-h"></div>
                 <div id="pl-crosshair-date" class="pl-crosshair-tag pl-crosshair-date">—</div>
-                <div id="pl-crosshair-price" class="pl-crosshair-tag pl-crosshair-price">—</div>
+                <div class="pl-crosshair-right">
+                  <div id="pl-crosshair-price" class="pl-crosshair-tag pl-crosshair-price">—</div>
+                  <div id="pl-crosshair-balance" class="pl-crosshair-tag pl-crosshair-balance" hidden>
+                    <span id="pl-crosshair-balance-amt" class="pl-crosshair-balance-amt">—</span>
+                    <span class="pl-crosshair-balance-note">(balance at the time)</span>
+                  </div>
+                </div>
               </div>
             </div>
             <div id="pl-chart-readout" class="pl-chart-readout" hidden>Hold to inspect</div>

@@ -1113,10 +1113,24 @@ h1 {
   transform: translateX(-50%);
 }
 
-.pl-crosshair-price {
+.pl-crosshair-right {
+  position: absolute;
   top: var(--pl-y, 50%);
   right: 6px;
-  transform: translateY(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  /* Keep the gain chip on the hairline; balance hangs just under it. */
+  transform: translateY(-11px);
+}
+
+.pl-crosshair-price {
+  position: relative;
+  top: auto;
+  right: auto;
+  transform: none;
 }
 
 .pl-crosshair-price.is-up {
@@ -1127,6 +1141,37 @@ h1 {
 .pl-crosshair-price.is-down {
   background: #d45454;
   color: #fff5f5;
+}
+
+.pl-crosshair-balance {
+  position: relative;
+  top: auto;
+  right: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  padding: 3px 7px 4px;
+  background: #ffffff;
+  color: #0c1612;
+  line-height: 1.15;
+}
+
+.pl-crosshair-balance[hidden] {
+  display: none !important;
+}
+
+.pl-crosshair-balance-amt {
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.pl-crosshair-balance-note {
+  font-size: 0.58rem;
+  font-weight: 500;
+  color: rgba(12, 22, 18, 0.62);
+  letter-spacing: 0.01em;
 }
 
 .pl-chart-readout {

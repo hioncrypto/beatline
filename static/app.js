@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.76";
+  const APP_VERSION = "9.77";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -263,6 +263,8 @@
     plCrosshair: document.getElementById("pl-crosshair"),
     plCrosshairDate: document.getElementById("pl-crosshair-date"),
     plCrosshairPrice: document.getElementById("pl-crosshair-price"),
+    plCrosshairBalance: document.getElementById("pl-crosshair-balance"),
+    plCrosshairBalanceAmt: document.getElementById("pl-crosshair-balance-amt"),
     plChartReadout: document.getElementById("pl-chart-readout"),
     accountExport: document.getElementById("account-export"),
     accountImport: document.getElementById("account-import"),
@@ -1637,6 +1639,12 @@
         : `Equity ${money(candle.close)}`;
       el.plCrosshairPrice.classList.toggle("is-up", !!candle.won);
       el.plCrosshairPrice.classList.toggle("is-down", !candle.won);
+    }
+    if (el.plCrosshairBalance) {
+      el.plCrosshairBalance.hidden = !Number.isFinite(candle.close);
+    }
+    if (el.plCrosshairBalanceAmt && Number.isFinite(candle.close)) {
+      el.plCrosshairBalanceAmt.textContent = money(candle.close);
     }
 
     if (el.plChartReadout) {

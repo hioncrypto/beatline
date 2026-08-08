@@ -1280,7 +1280,7 @@ def _kalshi_taker_fee(contracts: int, price: float) -> float:
 # Bigger-picture BTC tape bias for Best Side push (mirrors client).
 # Revert point before this feature: git commit f46cc02 (v9.62).
 # Set False to undo without a full rollback.
-TREND_BIAS_ENABLED = True
+TREND_BIAS_ENABLED = False
 
 
 def _short_term_trend() -> dict:

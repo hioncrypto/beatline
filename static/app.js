@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.64";
+  const APP_VERSION = "9.65";
   /**
    * Bigger-picture BTC tape bias for Best Side.
    * ON  = prefer Below in a downtrend / Above in an uptrend (v9.63+).
@@ -22,7 +22,7 @@
    * Flip this flag to false (client + server TREND_BIAS_ENABLED) to undo
    * without a full rollback — or reset hard to f46cc02.
    */
-  const TREND_BIAS_ENABLED = true;
+  const TREND_BIAS_ENABLED = false;
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
   const APP_TZ = "America/Los_Angeles";
   /** Day-equity schema: v2 = Pacific calendar day (not Eastern). */

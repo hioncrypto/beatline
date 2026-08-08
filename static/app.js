@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.70";
+  const APP_VERSION = "9.71";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4522,7 +4522,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.11", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.12", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -6130,6 +6130,9 @@
           askCents: ask || null,
           ticker,
           chimeOn,
+          // Quiet arm (alerts off / max risk) — do not start the SW cooldown
+          // or a later background push for this sticky gets suppressed.
+          chimed: false,
         });
       }
       maybeClickAddSuggest(best, {

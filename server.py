@@ -1362,10 +1362,20 @@ def _short_term_trend() -> dict:
     }
 
 
-def score_clear_edge(
+def _green_spike_suggest(ask: float, p_win: float) -> int:
+    cost = ask / 100.0
+    edge_amt = p_win - cost
+    suggest = 10
+    if edge_amt > 0 and cost < 1:
+        kelly = edge_amt / max(0.01, 1.0 - cost)
+        suggest = int(max(5, min(40, round(100 * kelly * 0.3))))
+    return suggest
+
+
+def evaluate_clear_edge(
     data: dict, spot: float | None, *, latched: bool = False
 ) -> dict | None:
-    """Mirror client Best Side clear-edge (profile: Green Spike / green-spike)."""
+    """Score Best Side and report clear/near-miss (Green Spike / green-spike)."""
     _ = latched  # sticky latch unused under Green Spike
     if spot is None or not math.isfinite(float(spot)):
         return None
@@ -1437,34 +1447,61 @@ def score_clear_edge(
     best = scored[0]
     if data.get("thin_book"):
         best = {**best, "score": best["score"] - 0.08}
+
     # Profile Green Spike: pWin ≥ 52% favorites only (August 5 / v9.33).
-    clear = (
-        best["ev"] > 0.01
-        and best["score"] > 0.04
-        and best["p_win"] >= 0.52
-        and not (secs > 12 * 60 and abs(best["ev"]) < 0.03)
-    )
-    if not clear:
-        return None
+    reject = None
+    if best["p_win"] < 0.52:
+        reject = "p_win"
+    elif best["ev"] <= 0.01:
+        reject = "ev"
+    elif best["score"] <= 0.04:
+        reject = "score"
+    elif secs > 12 * 60 and abs(best["ev"]) < 0.03:
+        reject = "early_window"
+    clear = reject is None
+
     ask = float(best["ask_cents"])
     p_win = float(best["p_win"])
-    cost = ask / 100.0
-    edge_amt = p_win - cost
-    suggest = 10
-    if edge_amt > 0 and cost < 1:
-        kelly = edge_amt / max(0.01, 1.0 - cost)
-        suggest = int(max(5, min(40, round(100 * kelly * 0.3))))
-    best["suggest_stake"] = suggest
-    best["profile"] = "green-spike"
-    return best
+    return {
+        "side": best["side"],
+        "ask_cents": best["ask_cents"],
+        "p_win": p_win,
+        "ev": best["ev"],
+        "score": best["score"],
+        "clear": clear,
+        "reject": reject,
+        "suggest_stake": _green_spike_suggest(ask, p_win),
+        "profile": "green-spike",
+        "secs_left": secs,
+        "spot": float(spot),
+        "beat": float(beat),
+    }
 
 
-def current_clear_edge() -> dict | None:
+def score_clear_edge(
+    data: dict, spot: float | None, *, latched: bool = False
+) -> dict | None:
+    """Mirror client Best Side clear-edge (profile: Green Spike / green-spike)."""
+    evaluated = evaluate_clear_edge(data, spot, latched=latched)
+    if not evaluated or not evaluated.get("clear"):
+        return None
+    return {
+        "side": evaluated["side"],
+        "ask_cents": evaluated["ask_cents"],
+        "p_win": evaluated["p_win"],
+        "ev": evaluated["ev"],
+        "score": evaluated["score"],
+        "suggest_stake": evaluated["suggest_stake"],
+        "profile": evaluated["profile"],
+    }
+
+
+def current_clear_edge() -> dict:
     """Live clear-edge snapshot for SW / clients (background tone path)."""
     try:
         data = fetch_target_payload("15m")
     except Exception:
-        return None
+        return {"ok": True, "clear": False, "reason": "target_error"}
     spot = None
     try:
         spot_payload = fetch_spot()
@@ -1472,24 +1509,43 @@ def current_clear_edge() -> dict | None:
             spot = spot_payload.get("price")
     except Exception:
         spot = None
-    edge = score_clear_edge(data, spot)
-    if not edge:
-        return None
     beat = data.get("price_to_beat")
     if beat is None:
         beat = data.get("target")
-    return {
+    evaluated = evaluate_clear_edge(data, spot)
+    if not evaluated:
+        return {
+            "ok": True,
+            "clear": False,
+            "reason": "unscorable",
+            "ticker": data.get("ticker"),
+            "beat": beat,
+            "price_to_beat": beat,
+            "spot": spot,
+            "profile": "green-spike",
+        }
+    base = {
         "ok": True,
-        "clear": True,
-        "side": edge["side"],
-        "ask_cents": edge["ask_cents"],
-        "p_win": edge["p_win"],
-        "suggest_stake": edge.get("suggest_stake"),
+        "clear": bool(evaluated["clear"]),
+        "side": evaluated["side"],
+        "ask_cents": evaluated["ask_cents"],
+        "p_win": evaluated["p_win"],
+        "ev": evaluated["ev"],
+        "score": evaluated["score"],
+        "suggest_stake": evaluated.get("suggest_stake"),
         "ticker": data.get("ticker"),
         "beat": beat,
         "price_to_beat": beat,
         "close_et": data.get("close_et"),
+        "secs_left": evaluated.get("secs_left"),
+        "spot": evaluated.get("spot"),
+        "profile": "green-spike",
     }
+    if evaluated["clear"]:
+        return base
+    base["reject"] = evaluated.get("reject")
+    base["reason"] = "no_clear_edge"
+    return base
 
 
 def push_watcher_loop() -> None:
@@ -1601,9 +1657,12 @@ def push_watcher_loop() -> None:
                         f"[kalshi-btc-target] clear edge {edge['side']} "
                         f"ask={edge['ask_cents']}¢ pushed={n}"
                     )
-                    _last_edge_key = sticky
-                    _last_edge_ask = ask
-                    _last_edge_at = now
+                    # Only consume the sticky after a real delivery. If VAPID
+                    # / subscribers fail (pushed=0), keep retrying next poll.
+                    if n > 0:
+                        _last_edge_key = sticky
+                        _last_edge_ask = ask
+                        _last_edge_at = now
                 _last_edge_gone_at = 0.0
             else:
                 _clear_edge_latched = False
@@ -1842,23 +1901,27 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.3.1",
+                    "version": "2.3.2",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file() or len(accounts) > 0,
                     "accounts": len(accounts),
                     "multi_user": True,
+                    "edge_watcher": {
+                        "last_key": _last_edge_key,
+                        "last_ask": _last_edge_ask,
+                        "last_at": _last_edge_at or None,
+                        "confirm_key": _edge_confirm_key,
+                        "confirm_count": _edge_confirm_count,
+                        "confirm_need": EDGE_CONFIRM_POLLS,
+                    },
                 },
             )
             return
 
         if path == "/api/clear-edge":
-            edge = current_clear_edge()
-            if not edge:
-                self._send_json(200, {"ok": True, "clear": False})
-            else:
-                self._send_json(200, edge)
+            self._send_json(200, current_clear_edge())
             return
 
         rel = "index.html" if path in ("", "/") else path.lstrip("/")

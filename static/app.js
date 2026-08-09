@@ -8559,9 +8559,10 @@
       navigator.serviceWorker.addEventListener("message", (event) => {
         const msg = event.data || {};
         if (msg.type === "play-edge-chime") {
-          // Legacy SW messages — ignore when hidden and always debounce.
+          // Legacy SW messages — ignore on open/resume quiet-sync and when hidden.
           if (!chimeOn) return;
           if (document.visibilityState !== "visible") return;
+          if (Date.now() < suppressEdgeChimeUntil) return;
           unlockAudioPlayback();
           playEdgeChime(true);
         }

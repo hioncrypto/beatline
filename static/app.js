@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.00";
+  const APP_VERSION = "10.01";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5277,7 +5277,11 @@
       suggestedStake: suggestStake,
     });
     el.bestSide.hidden = false;
-    syncBestSideLayout();
+    try {
+      setTimeout(reflowAfterOpenPlChange, 40);
+    } catch {
+      // ignore
+    }
     el.bestSide.classList.toggle("is-below", side === "below");
     el.bestSide.classList.toggle("is-none", false);
     el.bestSide.classList.toggle("is-above", side === "above");
@@ -6948,7 +6952,7 @@
     );
 
     const key = clear
-      ? `${best.side}:${suggestStake || tradeStake}:${best.contracts}:${
+      ? `${best.side}:${Math.round(Number(best.askCents) || 0)}:${
           openPos ? openPos.side : "flat"
         }`
       : "none";
@@ -7053,7 +7057,16 @@
     );
     el.roiPanel.hidden = !(okA || okB);
     if (el.stakeStrip) el.stakeStrip.hidden = !(okA || okB);
-    refreshBestSide();
+    try {
+      refreshBestSide();
+    } catch (err) {
+      console.warn("refreshBestSide failed", err);
+      try {
+        setStatus("warn", String(err && err.message ? err.message : err));
+      } catch {
+        // ignore
+      }
+    }
     renderDemoUi();
     syncBuyDock();
   }

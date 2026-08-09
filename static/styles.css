@@ -2642,31 +2642,33 @@ h1 {
 }
 
 .best-side.is-flash {
-  animation: best-side-box-pop 1.25s ease-out;
+  /* Do not transform the whole card — scale was covering the buy dock and
+     eating taps while a foreground alert flashed. */
+  animation: best-side-box-glow 1.25s ease-out;
   z-index: 2;
+  pointer-events: auto;
 }
 
 .best-side.is-flash .best-side-label {
   animation: best-side-pop 1.25s ease-out;
   transform-origin: center;
+  pointer-events: none;
 }
 
 .best-side.is-flash .best-side-amount {
   animation: best-side-amount-pop 1.25s ease-out;
   transform-origin: center;
+  pointer-events: none;
 }
 
-@keyframes best-side-box-pop {
+@keyframes best-side-box-glow {
   0% {
-    transform: scale(1);
     box-shadow: none;
   }
   16% {
-    transform: scale(1.05);
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.2);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.28);
   }
   100% {
-    transform: scale(1);
     box-shadow: none;
   }
 }

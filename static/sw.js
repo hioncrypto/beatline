@@ -1,9 +1,11 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.14-alert-burst-fix";
+const SW_VERSION = "3.15-alert-owner";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
 const STATE_KEY = "kalshiFifteenState";
+/** Persistent across SW script bumps — versioned caches wipe sticky memory. */
+const STATE_CACHE = "beatline-sw-state-v1";
 const STABLE_APP_URL = "https://beatline-1.onrender.com";
 const RENDER_DEPLOY_URL =
   "https://render.com/deploy?repo=https://github.com/hioncrypto/beatline";
@@ -19,7 +21,11 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => k !== SW_VERSION).map((k) => caches.delete(k)));
+      await Promise.all(
+        keys
+          .filter((k) => k !== SW_VERSION && k !== STATE_CACHE)
+          .map((k) => caches.delete(k))
+      );
       await self.clients.claim();
       startPollLoop();
     })()
@@ -29,41 +35,63 @@ self.addEventListener("activate", (event) => {
 // Never break page loads — always go to network for navigations.
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  if (req.method !== "GET") return;
-  event.respondWith(
-    fetch(req).catch(() => {
-      if (req.mode === "navigate") {
-        return new Response(
-          `<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
-<body style='font-family:system-ui,sans-serif;background:#0b1210;color:#e7f6ee;padding:24px;line-height:1.45'>
-<h1 style='margin:0 0 12px;font-size:1.4rem'>BeatLine offline</h1>
+  if (req.mode === "navigate") {
+    event.respondWith(
+      fetch(req).catch(async () => {
+        const cached = await caches.match("/");
+        if (cached) return cached;
+        // Tunnel hostnames die when Cloudflare restarts — send people to the
+        // stable Render URL instead of a blank offline error.
+        const host = self.location && self.location.hostname;
+        if (host && (host.includes("trycloudflare.com") || host.includes("ngrok"))) {
+          return new Response(
+            `<!doctype html><meta charset="utf-8" />
+<title>BeatLine — tunnel expired</title>
+<body style="font-family:system-ui;background:#0b1210;color:#e8f0ec;padding:2rem">
+<h1>Tunnel link expired</h1>
 <p>Open the live app:</p>
 <p><a style='color:#7dffb3' href='${STABLE_APP_URL}'>${STABLE_APP_URL}</a></p>
 <p>Or redeploy: <a style='color:#ffd089' href='${RENDER_DEPLOY_URL}'>Render</a></p>
 </body>`,
-          { headers: { "Content-Type": "text/html; charset=utf-8" } }
-        );
-      }
-      return Response.error();
-    })
-  );
+            { headers: { "Content-Type": "text/html; charset=utf-8" } }
+          );
+        }
+        return Response.error();
+      })
+    );
+    return;
+  }
 });
 
 async function readState() {
-  const cache = await caches.open(SW_VERSION);
+  const cache = await caches.open(STATE_CACHE);
   const res = await cache.match(STATE_KEY);
   if (!res) {
-    return { ticker: null, target: null, chimeOn: true, edgeKey: null, edgeAt: 0 };
+    return {
+      ticker: null,
+      target: null,
+      chimeOn: true,
+      edgeKey: null,
+      edgeAsk: 0,
+      edgeAt: 0,
+    };
   }
   try {
     return await res.json();
   } catch {
-    return { ticker: null, target: null, chimeOn: true, edgeKey: null, edgeAt: 0 };
+    return {
+      ticker: null,
+      target: null,
+      chimeOn: true,
+      edgeKey: null,
+      edgeAsk: 0,
+      edgeAt: 0,
+    };
   }
 }
 
 async function writeState(state) {
-  const cache = await caches.open(SW_VERSION);
+  const cache = await caches.open(STATE_CACHE);
   await cache.put(
     STATE_KEY,
     new Response(JSON.stringify(state), {
@@ -74,8 +102,7 @@ async function writeState(state) {
 
 /**
  * True only when a BeatLine window is actually focused (user looking at it).
- * Do NOT treat visibilityState alone — Android PWAs often keep "visible"
- * while backgrounded/locked, which previously dropped every Best-buy push.
+ * Used for optional FG dedupe — never as the sole reason to drop a push.
  */
 async function hasFocusedClient() {
   const all = await self.clients.matchAll({
@@ -94,6 +121,25 @@ async function hasFocusedClient() {
 
 async function hasVisibleClient() {
   return hasFocusedClient();
+}
+
+function sameEdgeSticky(prevKey, sticky) {
+  if (!prevKey || !sticky) return false;
+  if (prevKey === sticky) return true;
+  if (prevKey.startsWith(`${sticky}:`)) return true;
+  // Side-only match when ticker was missing on either side.
+  const prevSide = String(prevKey).split(":").pop();
+  const side = String(sticky).split(":").pop();
+  const prevTicker = String(prevKey).includes(":")
+    ? String(prevKey).slice(0, String(prevKey).lastIndexOf(":"))
+    : "";
+  const ticker = String(sticky).includes(":")
+    ? String(sticky).slice(0, String(sticky).lastIndexOf(":"))
+    : "";
+  if (prevSide && side && prevSide === side && (!prevTicker || !ticker)) {
+    return true;
+  }
+  return false;
 }
 
 async function showTargetNotification(payload, { force = false } = {}) {
@@ -152,11 +198,9 @@ async function broadcastEdgeAlert(payload) {
   }
 }
 
-async function showEdgeNotification(payload, { force = false } = {}) {
-  // Skip only when a focused page is actively owning the chime. Background /
-  // locked / unfocused Android clients must still get this notification —
-  // it IS the audible chime (silent:false + renotify).
-  if (!force && (await hasFocusedClient())) return;
+async function showEdgeNotification(payload) {
+  // Always show when called — callers own cooldown / ownership dedupe.
+  // Background / locked: this notification IS the audible chime.
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const ask =
     payload && payload.askCents != null
@@ -217,12 +261,11 @@ async function showEdgeNotification(payload, { force = false } = {}) {
     data: edgeData,
   });
   // Tell any open BeatLine windows to paint this Suggested buy so the
-  // notification and in-app Best Side stay in sync.
+  // notification and in-app Best Side stay in sync (quiet — no re-chime).
   await broadcastEdgeAlert(edgeData);
 }
 
 async function showProfitNotification(payload, { force = false } = {}) {
-  // Foreground tab plays its own C–E–G — skip duplicate system tone.
   if (!force && (await hasVisibleClient())) return;
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const pl = payload && payload.pl != null ? Number(payload.pl) : null;
@@ -288,11 +331,14 @@ async function checkTarget(forceNotify) {
     (data.source === "kalshi" || String(ticker).includes("KXBTC15M"));
 
   if (changed || forceNotify) {
-    await showTargetNotification({
-      beat,
-      ticker,
-      closeEt: data.close_et,
-    });
+    await showTargetNotification(
+      {
+        beat,
+        ticker,
+        closeEt: data.close_et,
+      },
+      { force: !!forceNotify }
+    );
   }
 
   state.ticker = ticker || state.ticker;
@@ -316,19 +362,15 @@ async function checkClearEdge(forceNotify) {
     await writeState(state);
     return;
   }
-  // Only skip the SW poll backup when the page is truly focused (and will
-  // own the in-app chime). Cooldown below still dedupes after a real ring.
-  if (!forceNotify && (await hasFocusedClient())) return;
 
   const ask = Math.round(Number(data.ask_cents) || 0);
   const ticker = data.ticker || "";
-  // Sticky per window+side (match page + push) so ask wobble doesn't re-ring.
   const sticky = `${ticker}:${data.side}`;
   const now = Date.now();
   const lastAt = Number(state.edgeAt) || 0;
   const prevKey = state.edgeKey || "";
   const prevAsk = Number(state.edgeAsk) || 0;
-  const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
+  const sameSide = sameEdgeSticky(prevKey, sticky);
   const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
 
   // Require the same clear edge on two SW polls before notifying — matches
@@ -345,9 +387,12 @@ async function checkClearEdge(forceNotify) {
   }
 
   if (!forceNotify) {
-    // Same side: suppress ask wobble. Opposite side: always allow.
-    if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) return;
+    // Same sticky recently sounded (BG notify or page chimed) — do not dump.
+    if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) {
+      return;
+    }
   }
+
   const payload = {
     side: data.side,
     askCents: ask,
@@ -356,16 +401,7 @@ async function checkClearEdge(forceNotify) {
     beat: data.beat ?? data.price_to_beat,
     ticker: data.ticker,
   };
-  await showEdgeNotification(payload, { force: false });
-  // Arm only after a real notification so background pushes keep working.
-  // If a focused page owned the chime, showEdgeNotification no-ops and we
-  // must NOT stamp edgeAt here (or we'd silence later background pushes).
-  if (await hasFocusedClient()) {
-    state.pendingEdgeKey = null;
-    state.pendingEdgeCount = 0;
-    await writeState(state);
-    return;
-  }
+  await showEdgeNotification(payload);
   state.edgeKey = sticky;
   state.edgeAsk = ask;
   state.edgeAt = now;
@@ -378,8 +414,6 @@ let pollTimer = null;
 let keepAliveTimer = null;
 
 async function keepServerAwake() {
-  // Best-effort: free Render sleeps after idle; a ping from the SW (when the
-  // browser lets it run) keeps the push watcher alive longer.
   try {
     await fetch(`${HEALTH_URL}?_=${Date.now()}`, { cache: "no-store" });
   } catch {
@@ -389,7 +423,6 @@ async function keepServerAwake() {
 
 function startPollLoop() {
   if (pollTimer) return;
-  // Keep checking even if the page is backgrounded (while SW is allowed to run).
   pollTimer = setInterval(() => {
     checkTarget(false);
     checkClearEdge(false);
@@ -484,18 +517,17 @@ self.addEventListener("message", (event) => {
         const lastAt = Number(state.edgeAt) || 0;
         const prevKey = state.edgeKey || "";
         const prevAsk = Number(state.edgeAsk) || 0;
-        const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
+        const sameSide = sameEdgeSticky(prevKey, sticky);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
         if (!msg.bypassDedupe) {
           if (!msg.force) {
             if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS)
               return;
           } else if (sameSide && !askImproved && now - lastAt < 15_000) {
-            // Even forced notifies: suppress rapid duplicates from ask wobble.
             return;
           }
         }
-        await showEdgeNotification(msg, { force: !!msg.force });
+        await showEdgeNotification(msg);
         state.edgeKey = sticky;
         state.edgeAsk = ask;
         state.edgeAt = now;
@@ -504,10 +536,9 @@ self.addEventListener("message", (event) => {
     );
   }
   if (msg.type === "edge-armed") {
-    // Page already chimed this edge in-app — remember it so SW/push don't
-    // re-fire the same Best Side when the tab backgrounds.
-    // Only stamp edgeAt when the page says it actually sounded (chimed:true),
-    // otherwise a hide/arm race can silence the next background push.
+    // Page already handled this sticky in-app (chimed or quiet-synced).
+    // Only stamp edgeAt when chimed:true so quiet-arm does not block a
+    // legitimate background notify that never sounded.
     event.waitUntil(
       (async () => {
         const state = await readState();
@@ -515,9 +546,7 @@ self.addEventListener("message", (event) => {
           const ticker = msg.ticker || "";
           state.edgeKey = `${ticker}:${msg.side}`;
           state.edgeAsk = Math.round(Number(msg.askCents) || 0);
-          if (msg.chimed !== false) state.edgeAt = Date.now();
-        } else if (msg.clear === false) {
-          // keep edgeKey until cooldown; just touch timestamp
+          if (msg.chimed === true) state.edgeAt = Date.now();
         }
         if (typeof msg.chimeOn === "boolean") state.chimeOn = msg.chimeOn;
         await writeState(state);
@@ -556,19 +585,16 @@ self.addEventListener("push", (event) => {
         );
         const side = payload.side || "above";
         const ticker = payload.ticker || "";
-        // Sticky per window+side — ask wobble must not re-notify.
         const sticky = `${ticker}:${side}`;
         const now = Date.now();
         const lastAt = Number(state.edgeAt) || 0;
         const prevKey = state.edgeKey || "";
         const prevAsk = Number(state.edgeAsk) || 0;
-        const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
+        const sameSide = sameEdgeSticky(prevKey, sticky);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
 
-        // Focused page owns the in-app chime — do not show or stamp edgeAt
-        // (a silent FG system banner used to consume the sticky and block BG).
-        if (await hasFocusedClient()) return;
-
+        // NEVER drop on focused/visible — Android lies. Only dedupe if this
+        // sticky already sounded recently (real notify or page chimed:true).
         if (
           sameSide &&
           !askImproved &&
@@ -576,19 +602,15 @@ self.addEventListener("push", (event) => {
         ) {
           return;
         }
-        // Opposite side always notifies — don't let Above silence Below.
 
-        await showEdgeNotification(
-          {
-            side,
-            askCents: ask,
-            pWin: payload.p_win ?? payload.pWin,
-            suggest_stake: payload.suggest_stake ?? payload.suggestStake,
-            beat: payload.beat ?? payload.price_to_beat ?? payload.target,
-            ticker: payload.ticker,
-          },
-          { force: true }
-        );
+        await showEdgeNotification({
+          side,
+          askCents: ask,
+          pWin: payload.p_win ?? payload.pWin,
+          suggest_stake: payload.suggest_stake ?? payload.suggestStake,
+          beat: payload.beat ?? payload.price_to_beat ?? payload.target,
+          ticker: payload.ticker,
+        });
         state.edgeKey = sticky;
         state.edgeAsk = ask;
         state.edgeAt = now;
@@ -631,17 +653,32 @@ self.addEventListener("notificationclick", (event) => {
               // ignore
             }
           }
-          if ("navigate" in client) {
-            try {
-              await client.navigate(url);
-            } catch {
-              // ignore
-            }
-          }
+          // Do NOT navigate an existing client — navigate reloads the page and
+          // re-triggers open first-arm / alert dump.
           return;
         }
       }
-      await clients.openWindow(url);
+      if (clients.openWindow) {
+        const win = await clients.openWindow(url);
+        if (win && data.kind === "clear_edge") {
+          try {
+            win.postMessage({ type: "apply-edge-alert", ...data });
+          } catch {
+            // ignore
+          }
+        }
+      }
     })()
   );
+});
+
+self.addEventListener("periodicsync", (event) => {
+  if (event.tag === "kalshi-15m-check") {
+    event.waitUntil(
+      (async () => {
+        await checkTarget(false);
+        await checkClearEdge(false);
+      })()
+    );
+  }
 });

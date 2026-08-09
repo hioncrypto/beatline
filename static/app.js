@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.89";
+  const APP_VERSION = "9.90";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -382,8 +382,7 @@
   let heldAlertEdge = null; // { side, askCents, pWin, suggestStake, ticker, beat, at }
   const HELD_ALERT_MS = 3 * 60 * 1000;
   const HELD_ALERT_KEY = "beatlineHeldAlertEdge";
-  // Do NOT restore a prior edge key on boot — that blocked Best Side alerts
-  // after reopen when a suggestion was already on screen.
+  // Restored at boot via restoreEdgeAlertKeyFromSession() after helpers exist.
   let lastClearEdgeAlertKey = null;
   let lastClearEdgeAlertAt = 0;
   let lastClearEdgeGoneAt = 0;
@@ -4731,6 +4730,15 @@
     }
   }
 
+  function restoreEdgeAlertKeyFromSession() {
+    const key = loadStoredEdgeAlertKey();
+    if (!key || key === "none") return;
+    lastClearEdgeAlertKey = key;
+    // Treat as recently handled so open first-arm stays quiet.
+    lastClearEdgeAlertAt = Date.now();
+    edgeAlertsArmed = true;
+  }
+
   function persistEdgeAlertKey(key) {
     try {
       if (key == null) sessionStorage.removeItem(EDGE_ALERT_STORE_KEY);
@@ -4995,7 +5003,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.14", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.15", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5048,25 +5056,47 @@
   }
 
   function swAlreadySoundedEdge(best) {
-    if (!best || !best.side || !swEdgeState) return false;
+    if (!best || !best.side) return false;
     const ticker = lastTicker || lastFifteenTicker || "";
     const sticky = `${ticker}:${best.side}`;
+    const now = Date.now();
+
+    // Session sticky from a prior chime / quiet-arm this tab.
+    if (lastClearEdgeAlertKey && now - lastClearEdgeAlertAt < EDGE_ALERT_COOLDOWN_MS) {
+      const prev = String(lastClearEdgeAlertKey);
+      const prevSide = prev.split(":")[1] || prev.split(":").pop();
+      if (prevSide === best.side) {
+        const prevTicker = prev.split(":")[0];
+        if (!ticker || !prevTicker || prevTicker === ticker || prev.startsWith(`${sticky}`)) {
+          return true;
+        }
+      }
+    }
+
+    if (!swEdgeState) return false;
     const key = swEdgeState.edgeKey || "";
-    const same = key === sticky || key.startsWith(`${sticky}:`);
-    if (!same) return false;
     const at = Number(swEdgeState.edgeAt) || 0;
-    if (!at) return false;
-    return Date.now() - at < EDGE_ALERT_COOLDOWN_MS;
+    if (!at || now - at >= EDGE_ALERT_COOLDOWN_MS) return false;
+    if (key === sticky || key.startsWith(`${sticky}:`)) return true;
+    const keySide = String(key).split(":").pop();
+    const keyTicker = String(key).includes(":")
+      ? String(key).slice(0, String(key).lastIndexOf(":"))
+      : "";
+    // Side match when either ticker was empty at arm time.
+    if (keySide === best.side && (!keyTicker || !ticker)) return true;
+    return false;
   }
 
-  function quietArmClearEdge(best, { chimed = false } = {}) {
+  function quietArmClearEdge(best, { chimed = false, ticker: tickerOverride } = {}) {
     if (!best || !best.side) return;
     const ask = Math.round(Number(best.askCents) || 0);
-    const ticker = lastTicker || lastFifteenTicker || "";
+    const ticker =
+      tickerOverride || lastTicker || lastFifteenTicker || "";
     lastClearEdgeAlertKey = `${ticker}:${best.side}:${ask}`;
     lastClearEdgeAlertAt = Date.now();
     lastClearEdgeGoneAt = 0;
     persistEdgeAlertKey(lastClearEdgeAlertKey);
+    edgeAlertsArmed = true;
     postToSW({
       type: "edge-armed",
       side: best.side,
@@ -5075,6 +5105,12 @@
       chimeOn,
       chimed: !!chimed,
     });
+    if (!swEdgeState) swEdgeState = { edgeKey: null, edgeAsk: 0, edgeAt: 0, chimeOn };
+    swEdgeState.edgeKey = `${ticker}:${best.side}`;
+    swEdgeState.edgeAsk = ask || 0;
+    // Only local-mark as sounded when we actually chimed — quiet arm must
+    // not invent an edgeAt that blocks a real background notify.
+    if (chimed) swEdgeState.edgeAt = Date.now();
   }
 
   function readHeldAlertEdge() {
@@ -5134,26 +5170,23 @@
     } catch {
       // ignore
     }
-    // Paint immediately so opening a notification shows Suggested buy.
-    try {
-      refreshBestSide();
-    } catch {
-      // ignore — may run before odds are ready
-    }
-    // Background already rang this sticky — quiet-arm so open doesn't re-blast.
+    // Quiet-arm FIRST so refreshBestSide cannot first-arm → alert dump.
     quietArmClearEdge(
       {
         side,
         askCents: ask || null,
       },
-      { chimed: false }
+      { chimed: false, ticker: payload.ticker || "" }
     );
-    edgeAlertsArmed = true;
-    if (swEdgeState) {
-      const ticker = payload.ticker || lastTicker || lastFifteenTicker || "";
-      swEdgeState.edgeKey = `${ticker}:${side}`;
-      swEdgeState.edgeAsk = ask || 0;
-      swEdgeState.edgeAt = Date.now();
+    if (!swEdgeState) swEdgeState = { edgeKey: null, edgeAsk: 0, edgeAt: 0, chimeOn };
+    swEdgeState.edgeKey = `${payload.ticker || ""}:${side}`;
+    swEdgeState.edgeAsk = ask || 0;
+    swEdgeState.edgeAt = Date.now();
+    // Paint after arming — open stays quiet for this sticky.
+    try {
+      refreshBestSide();
+    } catch {
+      // ignore — may run before odds are ready
     }
   }
 
@@ -6467,8 +6500,17 @@
       !(secs > 12 * 60 && Math.abs(best.ev) < 0.03);
 
     if (clear) {
-      // Live clear edge wins — drop any stale notification hold.
-      clearHeldAlertEdge();
+      // Keep a matching held alert for open-time dedupe; only drop stale
+      // holds for a different ticker/side.
+      const held = readHeldAlertEdge();
+      if (
+        held &&
+        held.side &&
+        (held.side !== best.side ||
+          (held.ticker && lastTicker && held.ticker !== lastTicker))
+      ) {
+        clearHeldAlertEdge();
+      }
     } else {
       // Notification said Best buy but live tape already cooled — still show
       // that Suggested buy briefly so the alert and UI match.
@@ -6661,25 +6703,16 @@
     }
     let didEdgeAlert = false;
     if (!edgeAlertsArmed) {
+      // Opening / first paint onto a live BUY: NEVER chime here.
+      // Background owns the system notification for this sticky; open only
+      // quiet-syncs. Transitions after arm still use alertClearEdge below.
       edgeAlertsArmed = true;
-      // Opening onto a live BUY: only chime if background hasn't already
-      // sounded this sticky. Re-chiming every open caused a burst, then
-      // edge-armed silenced the next background pushes.
-      if (chimeOn && !atRiskCap) {
-        if (swAlreadySoundedEdge(best) || heldAlertStillValid()) {
-          quietArmClearEdge(best, { chimed: false });
-          didEdgeAlert = false;
-        } else {
-          didEdgeAlert = !!alertClearEdge(best);
-        }
-      } else {
-        quietArmClearEdge(best, { chimed: false });
-      }
+      quietArmClearEdge(best, { chimed: false });
       maybeClickAddSuggest(best, {
         sameAsOpen,
         atRiskCap,
         suggestStake,
-        afterTone: didEdgeAlert,
+        afterTone: false,
       });
       return;
     }
@@ -8066,8 +8099,10 @@
       unlockAudioPlayback();
       if (pendingEdgeChime && chimeOn) {
         pendingEdgeChime = false;
-        playEdgeChime(true);
-        vibrateEdge();
+        if (!(lastBestPick && swAlreadySoundedEdge(lastBestPick))) {
+          playEdgeChime(true);
+          vibrateEdge();
+        }
       }
       if (pendingProfitChime && chimeOn) {
         pendingProfitChime = false;
@@ -8207,6 +8242,7 @@
     getUserId();
     wireAccountShareUi();
     setupEphemeralBanner();
+    restoreEdgeAlertKeyFromSession();
     Promise.all([hydrateDemoFromServer(), ensureServiceWorker()]).finally(() => {
       refreshTarget()
         .then(() => refreshCandles())

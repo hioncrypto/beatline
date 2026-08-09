@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.97";
+  const APP_VERSION = "9.98";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -389,6 +389,12 @@
   let lastClearEdgeAlertKey = null;
   let lastClearEdgeAlertAt = 0;
   let lastClearEdgeGoneAt = 0;
+  /**
+   * Only set after a real chime / phone notification. Quiet-arm and session
+   * restore must NOT write this — that was silencing FG forever.
+   */
+  let lastSoundedEdgeSticky = null; // `${ticker}:${side}`
+  let lastSoundedAsk = 0;
   const EDGE_ALERT_COOLDOWN_MS = 90_000;
   const EDGE_GONE_RESET_MS = 45_000;
   let edgeAlertsArmed = false;
@@ -4773,9 +4779,34 @@
     const key = loadStoredEdgeAlertKey();
     if (!key || key === "none") return;
     lastClearEdgeAlertKey = key;
-    edgeAlertsArmed = true;
-    // Do NOT stamp lastClearEdgeAlertAt — that used to silence FG for 90s
-    // after every reload even when nothing had chimed.
+    // Identity only — do NOT arm or mark sounded. A quiet-restored sticky
+    // used to block alertClearEdge for the whole window with no chime.
+  }
+
+  function markEdgeSounded(best, { ask } = {}) {
+    if (!best || !best.side) return;
+    const ticker = lastTicker || lastFifteenTicker || "";
+    const a =
+      ask != null
+        ? Math.round(Number(ask) || 0)
+        : Math.round(Number(best.askCents) || 0);
+    lastSoundedEdgeSticky = `${ticker}:${best.side}`;
+    lastSoundedAsk = a || 0;
+    lastClearEdgeAlertAt = Date.now();
+  }
+
+  function sameSoundedSticky(sticky) {
+    if (!lastSoundedEdgeSticky || !sticky) return false;
+    if (lastSoundedEdgeSticky === sticky) return true;
+    // Tolerate ticker-less sticky matches on side.
+    const a = String(lastSoundedEdgeSticky).split(":");
+    const b = String(sticky).split(":");
+    const sideA = a.length >= 2 ? a[a.length - 1] : "";
+    const sideB = b.length >= 2 ? b[b.length - 1] : "";
+    if (!sideA || sideA !== sideB) return false;
+    const tickA = a.length >= 2 ? a.slice(0, -1).join(":") : "";
+    const tickB = b.length >= 2 ? b.slice(0, -1).join(":") : "";
+    return !tickA || !tickB || tickA === tickB;
   }
 
   function persistEdgeAlertKey(key) {
@@ -5217,6 +5248,11 @@
         askCents: ask || null,
       },
       { chimed: false, ticker: payload.ticker || "" }
+    );
+    // Phone notification already rang for this sticky — don't FG re-chime it.
+    markEdgeSounded(
+      { side, askCents: ask || null },
+      { ask: ask || 0 }
     );
     if (!swEdgeState) swEdgeState = { edgeKey: null, edgeAsk: 0, edgeAt: 0, chimeOn };
     swEdgeState.edgeKey = `${payload.ticker || ""}:${side}`;
@@ -5670,7 +5706,10 @@
         chimeOn: true,
       });
     }
-    setStatus("ok", "Test Best-buy alert — leave app to confirm background tone");
+    setStatus(
+      "ok",
+      "Test sent — hear chime now (FG) · leave app to confirm BG notification"
+    );
   }
 
   async function ensureNotificationPermission() {
@@ -5687,6 +5726,11 @@
     chimeOn = true;
     localStorage.setItem(CHIME_KEY, "1");
     postToSW({ type: "set-chime", enabled: true });
+    // Fresh enable — allow the next real clear edge to sound.
+    lastSoundedEdgeSticky = null;
+    lastSoundedAsk = 0;
+    lastClearEdgeAlertAt = 0;
+    pendingEdgeChime = false;
     const allowed = await ensureNotificationPermission();
     if (!allowed) {
       syncAlertsUi();
@@ -5702,7 +5746,7 @@
     localStorage.setItem(BG_ARMED_KEY, "1");
     syncAlertsUi();
     await runChimeTest();
-    setStatus("ok", "Alerts on — Best Side clear edge");
+    setStatus("ok", "Alerts on — FG chime when open · BG notification when away");
     return true;
   }
 
@@ -5836,6 +5880,8 @@
   function alertClearEdge(best) {
     if (!best || !best.side) return false;
     if (!chimeOn) return false;
+    // Waiting for unlock tap to replay — don't re-enter every poll.
+    if (pendingEdgeChime) return false;
     // Flat: always alert. Same-side open: still alert (add decision).
     // Opposite open: skip — that used to spam BUY while already long the other way.
     if (demo.position && demo.position.side !== best.side) return false;
@@ -5843,37 +5889,23 @@
     const side = best.side;
     const ask = Math.round(Number(best.askCents) || 0);
     const ticker = lastTicker || lastFifteenTicker || "";
-    // Sticky per window+side; ask only used to detect a meaningfully better entry.
+    const sticky = `${ticker}:${side}`;
     const alertKey = `${ticker}:${side}:${ask}`;
     const now = Date.now();
 
     if (now - lastClearEdgeAlertAt < EDGE_ALERT_COOLDOWN_MS) return false;
 
-    const prev = lastClearEdgeAlertKey;
-    const newlyClear = !prev || prev === "none";
-    const prevParts = prev && prev !== "none" ? String(prev).split(":") : null;
-    const prevTicker = prevParts && prevParts.length >= 3 ? prevParts[0] : null;
-    const prevSide = prevParts && prevParts.length >= 3 ? prevParts[1] : null;
-    const prevAsk =
-      prevParts && prevParts.length >= 3
-        ? Number(prevParts[2])
-        : prev && String(prev).includes(":")
-          ? Number(String(prev).split(":").pop())
-          : NaN;
-    const tickerChanged = !!(ticker && prevTicker && ticker !== prevTicker);
-    const sideChanged = !!(prevSide && prevSide !== side);
-    // Re-alert only if the ask got meaningfully cheaper — not on ±wobble.
+    const sameSounded = sameSoundedSticky(sticky);
     const askImproved =
-      !tickerChanged &&
-      prevSide === side &&
-      Number.isFinite(prevAsk) &&
-      prevAsk > 0 &&
-      prevAsk - ask >= 5;
+      sameSounded &&
+      lastSoundedAsk > 0 &&
+      ask > 0 &&
+      lastSoundedAsk - ask >= 5;
 
-    if (!(newlyClear || tickerChanged || sideChanged || askImproved)) return false;
+    // Dedupe on what actually chimed/notified — never on quiet-arm keys.
+    if (sameSounded && !askImproved) return false;
 
-    // Remember sticky so refresh doesn't re-enter — but only start the 90s
-    // cooldown after something actually sounded (below).
+    // Remember identity so refresh doesn't thrash UI; sounding stamps separately.
     lastClearEdgeAlertKey = alertKey;
     lastClearEdgeGoneAt = 0;
     persistEdgeAlertKey(alertKey);
@@ -5914,11 +5946,11 @@
           // ignore
         }
         if (!played) {
-          // Autoplay blocked — retry on the next tap. Do not stamp cooldown.
+          // Autoplay blocked — retry on the next tap. Do not mark sounded.
           pendingEdgeChime = true;
         } else {
           pendingEdgeChime = false;
-          lastClearEdgeAlertAt = Date.now();
+          markEdgeSounded(best, { ask });
           postToSW({
             type: "edge-armed",
             side,
@@ -5941,9 +5973,9 @@
       // App in background / locked — notification sound IS the chime.
       // Also hold + paint locally so Best Side updates even if the SW
       // broadcast is delayed/dropped (common with shade-open / no network).
+      markEdgeSounded(best, { ask });
       holdAlertEdgeFromNotify(edgePayload);
       if (canNotify) {
-        lastClearEdgeAlertAt = Date.now();
         const ctrl =
           navigator.serviceWorker && navigator.serviceWorker.controller;
         if (ctrl) {
@@ -6669,6 +6701,8 @@
     if (now - lastClearEdgeGoneAt >= EDGE_GONE_RESET_MS) {
       lastClearEdgeAlertKey = "none";
       persistEdgeAlertKey("none");
+      lastSoundedEdgeSticky = null;
+      lastSoundedAsk = 0;
     }
   }
 
@@ -7009,6 +7043,9 @@
       ) {
         didEdgeAlert = !!alertClearEdge(best);
       } else {
+        if (swAlreadySoundedEdge(best) || heldAlertStillValid()) {
+          markEdgeSounded(best);
+        }
         quietArmClearEdge(best, { chimed: false });
       }
       maybeClickAddSuggest(best, {
@@ -8421,9 +8458,11 @@
         // sticky stamp block the only chance to hear the Best-buy tone.
         playEdgeChime(true).then((ok) => {
           if (ok) {
-            lastClearEdgeAlertAt = Date.now();
             if (lastBestPick && lastBestPick.side) {
+              markEdgeSounded(lastBestPick);
               quietArmClearEdge(lastBestPick, { chimed: true });
+            } else {
+              lastClearEdgeAlertAt = Date.now();
             }
           } else {
             pendingEdgeChime = true;
@@ -8460,9 +8499,11 @@
           pendingEdgeChime = false;
           playEdgeChime(true).then((ok) => {
             if (ok) {
-              lastClearEdgeAlertAt = Date.now();
               if (lastBestPick && lastBestPick.side) {
+                markEdgeSounded(lastBestPick);
                 quietArmClearEdge(lastBestPick, { chimed: true });
+              } else {
+                lastClearEdgeAlertAt = Date.now();
               }
             } else {
               pendingEdgeChime = true;
@@ -8471,7 +8512,7 @@
           vibrateEdge();
         }
         // Re-enter: keep sticky identity so we don't first-arm dump, but do
-        // NOT refresh lastClearEdgeAlertAt (that silenced FG for 90s).
+        // NOT mark sounded (that silenced FG after every resume).
         if (lastBestPick && lastBestPick.side) {
           const ask = Math.round(Number(lastBestPick.askCents) || 0);
           const ticker = lastTicker || lastFifteenTicker || "";

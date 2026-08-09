@@ -2129,7 +2129,7 @@
         secondsVisible: false,
         rightOffset: 4,
         barSpacing: 8,
-        minBarSpacing: 0.5,
+        minBarSpacing: 0.1,
         lockVisibleTimeRangeOnResize: true,
         tickMarkFormatter: formatPlTickMark,
       },

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.86";
+  const APP_VERSION = "9.87";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -6007,7 +6007,7 @@
     if (bestSideFlashTimer) clearTimeout(bestSideFlashTimer);
     bestSideFlashTimer = setTimeout(() => {
       if (el.bestSide) el.bestSide.classList.remove("is-flash");
-    }, 1200);
+    }, 1300);
   }
 
   async function refreshVersionLine() {

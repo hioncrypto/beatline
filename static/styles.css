@@ -2586,38 +2586,68 @@ h1 {
   color: var(--muted);
 }
 
+.best-side.is-flash {
+  animation: best-side-box-pop 1.25s ease-out;
+}
+
 .best-side.is-flash .best-side-label {
-  animation: best-side-pop 1.15s ease-out;
+  animation: best-side-pop 1.25s ease-out;
 }
 
 .best-side.is-flash .best-side-amount {
-  animation: best-side-amount-pop 1.15s ease-out;
+  animation: best-side-amount-pop 1.25s ease-out;
+}
+
+@keyframes best-side-box-pop {
+  0% {
+    transform: scale(1);
+    box-shadow: none;
+  }
+  16% {
+    transform: scale(1.04);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.18);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: none;
+  }
 }
 
 @keyframes best-side-pop {
   0% {
     transform: scale(1);
     filter: brightness(1);
+    font-size: 1.85rem;
   }
-  18% {
-    transform: scale(1.22);
-    filter: brightness(1.35);
+  16% {
+    transform: scale(1.38);
+    filter: brightness(1.55);
+    font-size: 2.2rem;
+  }
+  42% {
+    transform: scale(1.12);
+    filter: brightness(1.2);
+    font-size: 1.95rem;
   }
   100% {
     transform: scale(1);
     filter: brightness(1);
+    font-size: 1.85rem;
   }
 }
 
 @keyframes best-side-amount-pop {
   0% {
     transform: scale(1);
+    font-size: 1.2rem;
   }
-  18% {
-    transform: scale(1.12);
+  16% {
+    transform: scale(1.28);
+    font-size: 1.4rem;
   }
   100% {
     transform: scale(1);
+    font-size: 1.2rem;
   }
 }
 

@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.16-target-open-dump";
+const SW_VERSION = "3.17-no-tobeat-alert";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -324,34 +324,18 @@ async function checkTarget(forceNotify) {
   }
   const beat = data.price_to_beat ?? data.target;
   const ticker = data.ticker || null;
-  const changed =
-    state.ticker &&
-    ticker &&
-    state.ticker !== ticker &&
-    (data.source === "kalshi" || String(ticker).includes("KXBTC15M"));
-
-  if (changed || forceNotify) {
-    const now = Date.now();
-    const lastAt = Number(state.targetAt) || 0;
-    const alreadyNotified =
-      !forceNotify &&
-      state.notifiedTicker &&
-      state.notifiedTicker === ticker &&
-      now - lastAt < 120_000;
-    if (!alreadyNotified) {
-      await showTargetNotification(
-        {
-          beat,
-          ticker,
-          closeEt: data.close_et,
-        },
-        { force: true }
-      );
-      state.targetAt = now;
-      state.notifiedTicker = ticker;
-    }
+  // Track ticker/beat only — never alert on TO BEAT / new 15m generation.
+  // (forceNotify is reserved for explicit Options → Test.)
+  if (forceNotify) {
+    await showTargetNotification(
+      {
+        beat,
+        ticker,
+        closeEt: data.close_et,
+      },
+      { force: true }
+    );
   }
-
   state.ticker = ticker || state.ticker;
   if (beat != null) state.target = beat;
   await writeState(state);
@@ -525,34 +509,8 @@ self.addEventListener("message", (event) => {
     );
   }
   if (msg.type === "target-notify") {
-    event.waitUntil(
-      (async () => {
-        const state = await readState();
-        if (!state.chimeOn && !msg.force) return;
-        const ticker = msg.ticker || "";
-        const now = Date.now();
-        const lastAt = Number(state.targetAt) || 0;
-        if (
-          !msg.force &&
-          state.notifiedTicker === ticker &&
-          now - lastAt < 120_000
-        ) {
-          return;
-        }
-        await showTargetNotification(
-          {
-            beat: msg.beat,
-            ticker,
-            closeEt: msg.closeEt,
-          },
-          { force: true }
-        );
-        state.notifiedTicker = ticker;
-        state.targetAt = now;
-        if (ticker) state.ticker = ticker;
-        await writeState(state);
-      })()
-    );
+    // Intentionally ignored — TO BEAT generation must not alert.
+    return;
   }
   if (msg.type === "edge-notify") {
     event.waitUntil(

@@ -6506,9 +6506,16 @@
       });
       if (el.bestSideMeta) {
         const lead = spot - beat;
+        const conf = Math.round((Number(best.pWin) || 0) * 100);
+        const why =
+          best.pWin < 0.52
+            ? `${conf}% model (need ≥52%)`
+            : best.ev <= 0.01
+              ? "edge too thin"
+              : "wait for better ask";
         el.bestSideMeta.textContent = `Live ${
           lead >= 0 ? "+" : ""
-        }$${lead.toFixed(0)} · wait for better ask`;
+        }$${lead.toFixed(0)} · ${why} · no alert yet`;
       }
       setRoiCardBest(null);
       setDockBestDetail("Wait", null);

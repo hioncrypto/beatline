@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.17-no-tobeat-alert";
+const SW_VERSION = "3.18-bg-push-keepalive";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -11,6 +11,27 @@ const RENDER_DEPLOY_URL =
   "https://render.com/deploy?repo=https://github.com/hioncrypto/beatline";
 const EDGE_NOTIFY_COOLDOWN_MS = 90_000;
 const KEEP_ALIVE_MS = 4 * 60 * 1000;
+
+/**
+ * Chrome requires showNotification on every push (userVisibleOnly).
+ * Returning without one can revoke the push subscription — silent BG death.
+ */
+async function showPushKeepalive(body) {
+  try {
+    await self.registration.showNotification("BeatLine", {
+      body: body || "Alerts active",
+      icon: "/icons/icon-192.png?v=2.6",
+      badge: "/icons/icon-192.png?v=2.6",
+      tag: "beatline-push-keepalive",
+      renotify: false,
+      silent: true,
+      requireInteraction: false,
+      data: { url: "/", kind: "keepalive" },
+    });
+  } catch {
+    // ignore
+  }
+}
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -418,15 +439,29 @@ async function keepServerAwake() {
 
 function startPollLoop() {
   if (pollTimer) return;
+  // Serialize writes — parallel checkTarget + checkClearEdge used to wipe
+  // pendingEdgeCount and stall the poll confirm path.
   pollTimer = setInterval(() => {
-    checkTarget(false);
-    checkClearEdge(false);
+    (async () => {
+      try {
+        await checkTarget(false);
+        await checkClearEdge(false);
+      } catch {
+        // ignore
+      }
+    })();
   }, 12_000);
   if (!keepAliveTimer) {
     keepAliveTimer = setInterval(keepServerAwake, KEEP_ALIVE_MS);
   }
-  checkTarget(false);
-  checkClearEdge(false);
+  (async () => {
+    try {
+      await checkTarget(false);
+      await checkClearEdge(false);
+    } catch {
+      // ignore
+    }
+  })();
   keepServerAwake();
 }
 
@@ -601,13 +636,14 @@ self.addEventListener("push", (event) => {
         const sameSide = sameEdgeSticky(prevKey, sticky);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
 
-        // NEVER drop on focused/visible — Android lies. Only dedupe if this
-        // sticky already sounded recently (real notify or page chimed:true).
+        // NEVER drop a push without showNotification — Chrome revokes the
+        // subscription after silent push handlers, killing all BG alerts.
         if (
           sameSide &&
           !askImproved &&
           now - lastAt < EDGE_NOTIFY_COOLDOWN_MS
         ) {
+          await showPushKeepalive("Best buy already alerted");
           return;
         }
 
@@ -627,8 +663,9 @@ self.addEventListener("push", (event) => {
     );
     return;
   }
-  // new_target / TO BEAT generation — update ticker state only, never alert.
-  if (kind === "new_target" || kind === "to_beat" || !payload.type) {
+  // new_target / TO BEAT — no user alert, but still show a silent
+  // notification so Chrome does not revoke the push subscription.
+  if (kind === "new_target" || kind === "to_beat") {
     event.waitUntil(
       (async () => {
         const state = await readState();
@@ -637,9 +674,13 @@ self.addEventListener("push", (event) => {
         if (ticker) state.ticker = ticker;
         if (beat != null) state.target = beat;
         await writeState(state);
+        await showPushKeepalive("TO BEAT updated");
       })()
     );
+    return;
   }
+  // Unknown / missing type — keepalive only.
+  event.waitUntil(showPushKeepalive("BeatLine"));
 });
 
 self.addEventListener("notificationclick", (event) => {

@@ -1626,19 +1626,19 @@ def push_watcher_loop() -> None:
                     and _last_edge_ask is not None
                     and (_last_edge_ask - ask) >= 5
                 )
-                # New window/side: always push. Same side: only on ask improve
-                # (or after full cooldown if key somehow stuck).
+                # New window/side: always push. Same side: ask improve (with a
+                # short gap), or after full cooldown so a swallowed delivery
+                # can retry while the edge is still clear.
                 if not confirmed:
                     should_push = False
                 elif sticky != _last_edge_key:
                     should_push = True
-                elif ask_improved:
+                elif ask_improved and (now - _last_edge_at) >= 20.0:
+                    should_push = True
+                elif cooled:
                     should_push = True
                 else:
                     should_push = False
-                if should_push and sticky == _last_edge_key and not cooled:
-                    # Same sticky re-push needs a short gap against ask chatter.
-                    should_push = (now - _last_edge_at) >= 20.0
                 if should_push:
                     n = send_web_push(
                         {

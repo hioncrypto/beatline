@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.12-bg-alert-audit";
+const SW_VERSION = "3.13-bg-visible-fix";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -72,19 +72,28 @@ async function writeState(state) {
   );
 }
 
-async function hasVisibleClient() {
+/**
+ * True only when a BeatLine window is actually focused (user looking at it).
+ * Do NOT treat visibilityState alone — Android PWAs often keep "visible"
+ * while backgrounded/locked, which previously dropped every Best-buy push.
+ */
+async function hasFocusedClient() {
   const all = await self.clients.matchAll({
     type: "window",
     includeUncontrolled: true,
   });
   for (const client of all) {
     try {
-      if (client.visibilityState === "visible") return true;
+      if (client.focused) return true;
     } catch {
       // ignore
     }
   }
   return false;
+}
+
+async function hasVisibleClient() {
+  return hasFocusedClient();
 }
 
 async function showTargetNotification(payload, { force = false } = {}) {
@@ -144,10 +153,10 @@ async function broadcastEdgeAlert(payload) {
 }
 
 async function showEdgeNotification(payload, { force = false } = {}) {
-  // When BeatLine is open and visible, the page plays its own edge chime —
-  // skip a duplicate system banner. Background / locked: this notification
-  // IS the audible chime (silent:false + renotify).
-  if (!force && (await hasVisibleClient())) return;
+  // Skip only when a focused page is actively owning the chime. Background /
+  // locked / unfocused Android clients must still get this notification —
+  // it IS the audible chime (silent:false + renotify).
+  if (!force && (await hasFocusedClient())) return;
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const ask =
     payload && payload.askCents != null
@@ -307,9 +316,9 @@ async function checkClearEdge(forceNotify) {
     await writeState(state);
     return;
   }
-  // Visible BeatLine tab plays its own chime — do not arm here or we
-  // silence the next background push for this edge.
-  if (!forceNotify && (await hasVisibleClient())) return;
+  // Only skip the SW poll backup when the page is truly focused (and will
+  // own the in-app chime). Cooldown below still dedupes after a real ring.
+  if (!forceNotify && (await hasFocusedClient())) return;
 
   const ask = Math.round(Number(data.ask_cents) || 0);
   const ticker = data.ticker || "";
@@ -523,11 +532,10 @@ self.addEventListener("push", (event) => {
         const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
 
-        // If a BeatLine tab is visibly open, the page owns the chime.
-        // Do NOT arm here — arming without notifying blocked later pushes.
-        const visible = await hasVisibleClient();
-        if (visible) return;
-
+        // Always prefer sounding the Best-buy notification on Web Push.
+        // Dedup only via sticky + recent edgeAt (set after a real notify or
+        // after the page posts edge-armed with chimed:true). Do NOT drop on
+        // visibility alone — Android often reports visible while backgrounded.
         if (
           sameSide &&
           !askImproved &&

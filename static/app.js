@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.95";
+  const APP_VERSION = "9.96";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5006,7 +5006,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.19", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.20", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5023,6 +5023,19 @@
               edgeAt: Number(msg.edgeAt) || 0,
               chimeOn: !!msg.chimeOn,
             };
+            // Re-apply a recent BG Best-buy if the page missed the broadcast
+            // (frozen tab / no network / shade open).
+            const last = msg.lastEdgeAlert;
+            const at = last && (Number(last.at) || Number(msg.edgeAt) || 0);
+            if (
+              last &&
+              last.side &&
+              at &&
+              Date.now() - at < HELD_ALERT_MS &&
+              !heldAlertStillValid()
+            ) {
+              holdAlertEdgeFromNotify(last);
+            }
             return;
           }
           if (msg.type !== "apply-edge-alert") return;
@@ -5173,7 +5186,15 @@
     swEdgeState.edgeKey = `${payload.ticker || ""}:${side}`;
     swEdgeState.edgeAsk = ask || 0;
     swEdgeState.edgeAt = Date.now();
-    // Paint after arming — open stays quiet for this sticky.
+    // Paint the Suggested buy immediately from the notification payload.
+    // Do not wait on live tape — phone alert and in-app Best Side must match
+    // even when the app is offline / unfocused / still on Wait.
+    try {
+      paintHeldAlertEdge(heldAlertEdge);
+      flashBestSide();
+    } catch {
+      // ignore
+    }
     try {
       refreshBestSide();
     } catch {
@@ -5882,6 +5903,9 @@
       }
 
       // App in background / locked — notification sound IS the chime.
+      // Also hold + paint locally so Best Side updates even if the SW
+      // broadcast is delayed/dropped (common with shade-open / no network).
+      holdAlertEdgeFromNotify(edgePayload);
       if (canNotify) {
         lastClearEdgeAlertAt = Date.now();
         const ctrl =
@@ -6640,6 +6664,13 @@
       // Keep the last Best Side paint during brief data gaps (open-P/L
       // reflows / spot hiccups) so the card doesn't blink out.
       if (lastBestPick && lastBestPick.side) return;
+      // Phone alert landed but tape/network is gone — still show Suggested buy.
+      const heldGap = heldAlertStillValid();
+      if (heldGap && paintHeldAlertEdge(heldGap)) {
+        if (!edgeAlertsArmed) edgeAlertsArmed = true;
+        syncBestSideLayout();
+        return;
+      }
       el.bestSide.hidden = true;
       renderBestSideSuggest(null, null);
       setRoiCardBest(null);
@@ -6661,6 +6692,12 @@
     if (b) scored.push(b);
     if (!scored.length) {
       if (lastBestPick && lastBestPick.side) return;
+      const heldEmpty = heldAlertStillValid();
+      if (heldEmpty && paintHeldAlertEdge(heldEmpty)) {
+        if (!edgeAlertsArmed) edgeAlertsArmed = true;
+        syncBestSideLayout();
+        return;
+      }
       el.bestSide.hidden = true;
       renderBestSideSuggest(null, null);
       setRoiCardBest(null);
@@ -8364,6 +8401,10 @@
         // If we opened from a Best-buy notification, keep that suggestion up.
         const held = heldAlertStillValid();
         if (held) paintHeldAlertEdge(held);
+        else {
+          // Recover from SW sticky if broadcast was missed while frozen.
+          postToSW({ type: "get-edge-state" });
+        }
         // Replay a chime that was blocked while audio was locked.
         if (pendingEdgeChime && chimeOn) {
           pendingEdgeChime = false;

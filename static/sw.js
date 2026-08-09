@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.19-alert-audit";
+const SW_VERSION = "3.20-in-app-edge";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -281,6 +281,14 @@ async function showEdgeNotification(payload) {
     silent: false,
     data: edgeData,
   });
+  // Persist so a frozen/offline page can re-apply Best Side on focus.
+  try {
+    const state = await readState();
+    state.lastEdgeAlert = { ...edgeData, at: Date.now() };
+    await writeState(state);
+  } catch {
+    // ignore
+  }
   // Tell any open BeatLine windows to paint this Suggested buy so the
   // notification and in-app Best Side stay in sync (quiet — no re-chime).
   await broadcastEdgeAlert(edgeData);
@@ -503,6 +511,7 @@ self.addEventListener("message", (event) => {
           edgeAsk: Number(state.edgeAsk) || 0,
           edgeAt: Number(state.edgeAt) || 0,
           chimeOn: !!state.chimeOn,
+          lastEdgeAlert: state.lastEdgeAlert || null,
         };
         for (const client of all) {
           try {

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.81";
+  const APP_VERSION = "9.82";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -65,7 +65,8 @@
       return {
         // Default expanded so the chart is easy to find; remember either way.
         optionsOpen: parsed.optionsOpen == null ? true : !!parsed.optionsOpen,
-        range,
+        // Always open on full trade history — pinch/pan still works after.
+        range: null,
         height:
           Number.isFinite(height) && height >= 120 && height <= 420
             ? Math.round(height)
@@ -252,13 +253,6 @@
     plChartToggle: document.getElementById("pl-chart-toggle"),
     plChartBody: document.getElementById("pl-chart-body"),
     plChartToggleMeta: document.getElementById("pl-chart-toggle-meta"),
-    plChartGrow: document.getElementById("pl-chart-grow"),
-    plChartShrink: document.getElementById("pl-chart-shrink"),
-    plChartFit: document.getElementById("pl-chart-fit"),
-    plChartZoomIn: document.getElementById("pl-chart-zoom-in"),
-    plChartZoomOut: document.getElementById("pl-chart-zoom-out"),
-    plChartPanLeft: document.getElementById("pl-chart-pan-left"),
-    plChartPanRight: document.getElementById("pl-chart-pan-right"),
     plChartStage: document.getElementById("pl-chart-stage"),
     plCrosshair: document.getElementById("pl-crosshair"),
     plCrosshairDate: document.getElementById("pl-crosshair-date"),
@@ -2187,11 +2181,11 @@
     const barCount = candles.length;
     const grew = barCount > plLastBarCount;
     plLastBarCount = barCount;
-    // Hold the user's zoom/pan place across expand/collapse and redraws.
-    // Only auto-fit on first paint or when there was no saved place yet.
+    // Open on the full trade history; pinch/slide can zoom afterward.
+    // Keep an in-session place only after the user has pinched/panned.
     const restored = restorePlVisibleRange(barCount);
     if (!restored) {
-      fitPlChartRecent(barCount);
+      fitPlChartFull(barCount);
     } else if (grew && plUi.range && plUi.range.to >= barCount - 2.5) {
       // If they were parked near the live edge, keep them at the new tip.
       try {
@@ -7728,32 +7722,6 @@
       el.plChartToggle.addEventListener("click", () => {
         setPlOptionsOpen(!plUi.optionsOpen);
       });
-    }
-    if (el.plChartGrow) {
-      el.plChartGrow.addEventListener("click", () => nudgePlChartHeight(60));
-    }
-    if (el.plChartShrink) {
-      el.plChartShrink.addEventListener("click", () => nudgePlChartHeight(-60));
-    }
-    if (el.plChartFit) {
-      el.plChartFit.addEventListener("click", () => {
-        plUi.range = null;
-        savePlUi();
-        if (plLastBarCount > 0) fitPlChartFull(plLastBarCount);
-        else renderPlChart();
-      });
-    }
-    if (el.plChartZoomIn) {
-      el.plChartZoomIn.addEventListener("click", () => nudgePlZoom(0.28));
-    }
-    if (el.plChartZoomOut) {
-      el.plChartZoomOut.addEventListener("click", () => nudgePlZoom(3.6));
-    }
-    if (el.plChartPanLeft) {
-      el.plChartPanLeft.addEventListener("click", () => nudgePlPan(-1));
-    }
-    if (el.plChartPanRight) {
-      el.plChartPanRight.addEventListener("click", () => nudgePlPan(1));
     }
     if (el.tradeHistoryToggle) {
       el.tradeHistoryToggle.addEventListener("click", () => {

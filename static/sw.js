@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.22-branch-alerts";
+const SW_VERSION = "3.23-deliver-alerts";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -122,15 +122,21 @@ async function writeState(state) {
 }
 
 /**
- * True only when a BeatLine window is actually focused (user looking at it).
- * Used for optional FG dedupe — never as the sole reason to drop a push.
+ * True when a BeatLine window is visible (user may be looking at it).
+ * Prefer visibility over focused — Android often reports unfocused while the
+ * PWA is still on screen, and we must FG-chime instead of tray-notify.
  */
-async function hasFocusedClient() {
+async function hasVisibleBeatLineClient() {
   const all = await self.clients.matchAll({
     type: "window",
     includeUncontrolled: true,
   });
   for (const client of all) {
+    try {
+      if (client.visibilityState === "visible") return true;
+    } catch {
+      // ignore
+    }
     try {
       if (client.focused) return true;
     } catch {
@@ -140,8 +146,45 @@ async function hasFocusedClient() {
   return false;
 }
 
+async function hasFocusedClient() {
+  return hasVisibleBeatLineClient();
+}
+
 async function hasVisibleClient() {
-  return hasFocusedClient();
+  return hasVisibleBeatLineClient();
+}
+
+async function broadcastMarketEdgeAlert(payload) {
+  const msg = {
+    type: "market-edge-alert",
+    side: payload && payload.side,
+    askCents:
+      payload &&
+      (payload.askCents != null ? payload.askCents : payload.ask_cents),
+    pWin: payload && (payload.pWin != null ? payload.pWin : payload.p_win),
+    suggestStake:
+      payload &&
+      (payload.suggestStake != null
+        ? payload.suggestStake
+        : payload.suggest_stake),
+    beat: payload && (payload.beat ?? payload.price_to_beat ?? payload.target),
+    ticker: payload && payload.ticker,
+  };
+  try {
+    const all = await clients.matchAll({
+      type: "window",
+      includeUncontrolled: true,
+    });
+    for (const client of all) {
+      try {
+        client.postMessage(msg);
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
 }
 
 function sameEdgeSticky(prevKey, sticky) {
@@ -188,13 +231,33 @@ async function showTargetNotification(payload, { force = false } = {}) {
 }
 
 async function showEdgeNotification(payload, { force = false } = {}) {
-  // App open + focused: foreground owns the alert from live market.
-  // Do not mirror a (possibly stale) push into the tray or the Best Side UI.
-  if (!force && (await hasFocusedClient())) {
+  // App visible: deliver in-app Best-buy chime from this market signal.
+  // App backgrounded: phone notification is the audible alert.
+  // Never drop the signal — that caused "no phone notify, dump on open".
+  if (!force && (await hasVisibleBeatLineClient())) {
+    await broadcastMarketEdgeAlert(payload);
     await showPushKeepalive("Best buy (app open)");
+    try {
+      const state = await readState();
+      const side = payload && payload.side;
+      const ask = Math.round(
+        Number(
+          payload &&
+            (payload.askCents != null ? payload.askCents : payload.ask_cents)
+        ) || 0
+      );
+      const ticker = (payload && payload.ticker) || "";
+      if (side) {
+        state.edgeKey = `${ticker}:${side}`;
+        state.edgeAsk = ask;
+        state.edgeAt = Date.now();
+        await writeState(state);
+      }
+    } catch {
+      // ignore
+    }
     return;
   }
-  // Always show when called for background — callers own cooldown / ownership.
   // Background / locked: this notification IS the audible chime.
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const ask =
@@ -258,12 +321,13 @@ async function showEdgeNotification(payload, { force = false } = {}) {
   try {
     const state = await readState();
     state.lastEdgeAlert = { ...edgeData, at: Date.now() };
+    state.edgeKey = `${edgeData.ticker || ""}:${edgeData.side || ""}`;
+    state.edgeAsk = ask || 0;
+    state.edgeAt = Date.now();
     await writeState(state);
   } catch {
     // ignore
   }
-  // Intentionally do NOT broadcast apply-edge-alert into open windows.
-  // Phone notify and in-app Best Side are separate market-driven paths.
 }
 
 async function showProfitNotification(payload, { force = false } = {}) {
@@ -430,7 +494,7 @@ function startPollLoop() {
         // ignore
       }
     })();
-  }, 12_000);
+  }, 6_000);
   if (!keepAliveTimer) {
     keepAliveTimer = setInterval(keepServerAwake, KEEP_ALIVE_MS);
   }

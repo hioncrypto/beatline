@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.03";
+  const APP_VERSION = "10.04";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5075,7 +5075,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.22", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.23", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5092,11 +5092,13 @@
               edgeAt: Number(msg.edgeAt) || 0,
               chimeOn: !!msg.chimeOn,
             };
-            // Do not paint Best Side from SW lastEdgeAlert — phone notify and
-            // in-app alerts are separate market-driven branches.
             return;
           }
-          // apply-edge-alert ignored — never mirror tray payload into Best Side.
+          // Live market Best-buy from server/SW while the app is visible.
+          if (msg.type === "market-edge-alert") {
+            handleMarketEdgeAlert(msg);
+            return;
+          }
         });
       }
       postToSW({ type: "get-edge-state" });
@@ -5117,17 +5119,73 @@
     else if (swReg && swReg.active) swReg.active.postMessage(msg);
   }
 
-  /** Page is actually in front of the user (not merely "visible" while backgrounded). */
+  /** Page is in front — use visibility, not focus (Android steals focus often). */
   function pageOwnsAlerts() {
-    if (document.visibilityState !== "visible" || document.hidden) return false;
-    try {
-      if (typeof document.hasFocus === "function" && !document.hasFocus()) {
-        return false;
+    return document.visibilityState === "visible" && !document.hidden;
+  }
+
+  /**
+   * Server/SW detected a live clear edge while this page is visible.
+   * Always try to chime — this is the FG delivery path for pushes that would
+   * otherwise only keepalive and leave the user with no phone notify either.
+   */
+  function handleMarketEdgeAlert(payload) {
+    if (!chimeOn) return;
+    if (!pageOwnsAlerts()) return;
+    if (!payload || !payload.side) return;
+    const side = payload.side === "below" ? "below" : "above";
+    const ask = Math.round(
+      Number(payload.askCents != null ? payload.askCents : payload.ask_cents) ||
+        0
+    );
+    const ticker =
+      payload.ticker || lastTicker || lastFifteenTicker || "";
+    const sticky = `${ticker}:${side}`;
+    if (sameSoundedSticky(sticky)) return;
+    if (demo.position && demo.position.side !== side) return;
+    const best = {
+      side,
+      askCents: ask || null,
+      pWin:
+        payload.pWin != null
+          ? Number(payload.pWin)
+          : payload.p_win != null
+            ? Number(payload.p_win)
+            : null,
+      suggestedStake:
+        payload.suggestStake != null
+          ? Number(payload.suggestStake)
+          : payload.suggest_stake != null
+            ? Number(payload.suggest_stake)
+            : null,
+    };
+    // Bypass resume suppress — this is a live market signal, not a reopen dump.
+    const sideLabel = side === "above" ? "Above" : "Below";
+    const sug = best.suggestedStake;
+    setStatus(
+      "ok",
+      sug != null
+        ? `Clear edge · Buy ${sideLabel} · suggest $${Math.round(sug)}${
+            ask ? ` @ ${ask}¢` : ""
+          }`
+        : `Clear edge · Buy ${sideLabel}${ask ? ` @ ${ask}¢` : ""}`
+    );
+    ensureAudioReady().then(async () => {
+      const played = await playEdgeChime(true);
+      vibrateEdge();
+      try {
+        flashBestSide();
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
-    }
-    return true;
+      if (played) {
+        pendingEdgeChime = false;
+        markEdgeSounded(best, { ask });
+        quietArmClearEdge(best, { chimed: true, ticker });
+      } else {
+        pendingEdgeChime = true;
+      }
+    });
   }
 
   function swAlreadySoundedEdge(best) {
@@ -5574,7 +5632,7 @@
     if (el.alertsStatusLine) {
       if (on) {
         el.alertsStatusLine.textContent =
-          "On — in-app chime from live Best Side · phone notify when away";
+          "On — live Best-buy chime in-app · phone notify when away";
       } else if (chimeOn && "Notification" in window && Notification.permission === "denied") {
         el.alertsStatusLine.textContent =
           "Blocked — site settings → Notifications → Allow, then Enable";
@@ -5832,15 +5890,9 @@
     const alertKey = `${ticker}:${side}:${ask}`;
     const now = Date.now();
 
-    // Resume/open quiet-sync: do not chime, but ACK the sticky so when
-    // suppress lifts we do not dump this same Best-buy as "new".
+    // Brief reopen quiet window only — do NOT mark sounded here.
+    // Marking sounded without chiming/notifying silenced both phone and FG.
     if (now < suppressEdgeChimeUntil) {
-      lastClearEdgeAlertKey = alertKey;
-      lastClearEdgeGoneAt = 0;
-      persistEdgeAlertKey(alertKey);
-      edgeAlertsArmed = true;
-      markEdgeSounded(best, { ask });
-      quietArmClearEdge(best, { chimed: false });
       return false;
     }
 
@@ -8098,8 +8150,8 @@
   }
 
   function boot() {
-    // Cold open / PWA relaunch: never first-arm dump a Best-buy on paint.
-    suppressEdgeChimeUntil = Date.now() + 12_000;
+    // Short sync window for SW edge-state — do not quiet-ack/mark sounded.
+    suppressEdgeChimeUntil = Date.now() + 2500;
     suppressTargetChimeUntil = Date.now() + 4000;
     pendingEdgeChime = false;
     if (!window.LightweightCharts) {
@@ -8448,24 +8500,24 @@
         // Quiet-sync any 15m window that rolled while we were away — do not
         // dump the "new 15m target / Price to beat" chime on open.
         suppressTargetChimeUntil = Date.now() + 4000;
-        // Quiet-sync Best-buy: suppress + ACK any clear edge seen while
-        // suppressed so lifting the window does not dump the same sticky.
-        // (No phone notification ≠ reason to FG-blast on open.)
-        suppressEdgeChimeUntil = Date.now() + 12_000;
+        // Brief SW sync only. If BG already notified, swAlreadySoundedEdge
+        // blocks re-chime. If BG missed, allow a real catch-up chime after sync
+        // — that is the buy signal, not a false dump.
+        suppressEdgeChimeUntil = Date.now() + 2500;
         pendingEdgeChime = false;
         postToSW({ type: "get-edge-state" });
-        // Acknowledge the edge already on screen / left from background.
-        // Phone notify owned BG; do not FG re-blast the same sticky on open.
         if (lastBestPick && lastBestPick.side) {
           const ask = Math.round(Number(lastBestPick.askCents) || 0);
           const ticker = lastTicker || lastFifteenTicker || "";
           lastClearEdgeAlertKey = `${ticker}:${lastBestPick.side}:${ask}`;
           persistEdgeAlertKey(lastClearEdgeAlertKey);
           edgeAlertsArmed = true;
-          markEdgeSounded(lastBestPick, { ask });
+          // Only mark sounded when SW already rang this sticky while away.
+          if (swAlreadySoundedEdge(lastBestPick)) {
+            markEdgeSounded(lastBestPick, { ask });
+          }
           quietArmClearEdge(lastBestPick, { chimed: false });
         }
-        // Re-upsert push in case Render rotated VAPID while we were away.
         if (
           chimeOn &&
           "Notification" in window &&
@@ -8473,10 +8525,13 @@
         ) {
           subscribePush().catch(() => {});
         }
-        // Let SW edge-state land before scoring so swAlreadySoundedEdge works.
         setTimeout(() => {
-          refreshTarget({ forceCandles: true });
-        }, 280);
+          // Re-read SW state then score — catch-up chime if phone never got it.
+          postToSW({ type: "get-edge-state" });
+          setTimeout(() => {
+            refreshTarget({ forceCandles: true });
+          }, 200);
+        }, 300);
         runSystemHealthReport({ force: true });
       } else {
         // Page hidden — system notification is the only audible chime.
@@ -8496,25 +8551,23 @@
         if (chimeOn && lastBestPick && lastBestPick.side) {
           const ask = Math.round(Number(lastBestPick.askCents) || 0);
           const ticker = lastTicker || lastFifteenTicker || "";
-          if (pendingEdgeChime) {
-            // Foreground chime never landed — ring via notification now.
-            pendingEdgeChime = false;
-            postToSW({
-              type: "edge-notify",
-              force: true,
-              bypassDedupe: true,
-              side: lastBestPick.side,
-              askCents: ask || null,
-              pWin: lastBestPick.pWin,
-              suggestStake: lastBestPick.suggestedStake,
-              ticker,
-              beat: lastTarget,
-              chimeOn,
-            });
-            markEdgeSounded(lastBestPick, { ask });
-          }
-          // Do NOT edge-armed on every hide — that refreshed the SW cooldown
-          // and blocked the next background Web Push for ~90s.
+          const wasPending = !!pendingEdgeChime;
+          pendingEdgeChime = false;
+          // Backup BG path when leaving the app on a clear edge — server push
+          // can miss brief windows; SW cooldown still dedupes.
+          postToSW({
+            type: "edge-notify",
+            force: true,
+            bypassDedupe: wasPending,
+            side: lastBestPick.side,
+            askCents: ask || null,
+            pWin: lastBestPick.pWin,
+            suggestStake: lastBestPick.suggestedStake,
+            ticker,
+            beat: lastTarget,
+            chimeOn,
+          });
+          if (wasPending) markEdgeSounded(lastBestPick, { ask });
         }
         // Poll for a NEW clear edge while backgrounded (SW + server push).
         postToSW({ type: "check-now", forceNotify: false });

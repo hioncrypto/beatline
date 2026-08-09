@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.01";
+  const APP_VERSION = "10.02";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -367,6 +367,8 @@
   let lastFifteenTicker = null;
   /** While > now, sync 15m ticker quietly — no open-from-background chime dump. */
   let suppressTargetChimeUntil = 0;
+  /** While > now, do not FG Best-buy chime (resume / open quiet-sync). */
+  let suppressEdgeChimeUntil = 0;
   let lastKalshiUrl = "https://kalshi.com/markets/kxbtc15m";
   let lastYesPct = null;
   let lastSettlementAvg = null;
@@ -5817,6 +5819,8 @@
   function alertClearEdge(best) {
     if (!best || !best.side) return false;
     if (!chimeOn) return false;
+    // Resume/open quiet-sync — never dump a buy chime just because we came back.
+    if (Date.now() < suppressEdgeChimeUntil) return false;
     // Waiting for unlock tap to replay — don't re-enter every poll.
     if (pendingEdgeChime) return false;
     // Flat: always alert. Same-side open: still alert (add decision).
@@ -8391,10 +8395,14 @@
     }
     const unlock = () => {
       unlockAudioPlayback();
-      if (pendingEdgeChime && chimeOn) {
+      // After resume suppress window, allow a true pending replay from a
+      // failed autoplay — but never during the open quiet-sync.
+      if (
+        pendingEdgeChime &&
+        chimeOn &&
+        Date.now() >= suppressEdgeChimeUntil
+      ) {
         pendingEdgeChime = false;
-        // Always replay — pending means autoplay failed; do not let a quiet
-        // sticky stamp block the only chance to hear the Best-buy tone.
         playEdgeChime(true).then((ok) => {
           if (ok) {
             if (lastBestPick && lastBestPick.side) {
@@ -8426,33 +8434,23 @@
         // Quiet-sync any 15m window that rolled while we were away — do not
         // dump the "new 15m target / Price to beat" chime on open.
         suppressTargetChimeUntil = Date.now() + 4000;
-        // Best Side follows live market only — do not adopt tray notifications.
+        // Quiet-sync Best-buy too — the resume dump was:
+        // 1) replaying pendingEdgeChime (failed FG autoplay / stale), and/or
+        // 2) refreshTarget → alertClearEdge treating the still-clear edge as new
+        //    because lastSounded was not marked on hide/show.
+        suppressEdgeChimeUntil = Date.now() + 5000;
+        pendingEdgeChime = false;
         postToSW({ type: "get-edge-state" });
-        // Replay a chime that was blocked while audio was locked.
-        if (pendingEdgeChime && chimeOn) {
-          pendingEdgeChime = false;
-          playEdgeChime(true).then((ok) => {
-            if (ok) {
-              if (lastBestPick && lastBestPick.side) {
-                markEdgeSounded(lastBestPick);
-                quietArmClearEdge(lastBestPick, { chimed: true });
-              } else {
-                lastClearEdgeAlertAt = Date.now();
-              }
-            } else {
-              pendingEdgeChime = true;
-            }
-          });
-          vibrateEdge();
-        }
-        // Re-enter: keep sticky identity so we don't first-arm dump, but do
-        // NOT mark sounded (that silenced FG after every resume).
+        // Acknowledge the edge already on screen / left from background.
+        // Phone notify owned BG; do not FG re-blast the same sticky on open.
         if (lastBestPick && lastBestPick.side) {
           const ask = Math.round(Number(lastBestPick.askCents) || 0);
           const ticker = lastTicker || lastFifteenTicker || "";
           lastClearEdgeAlertKey = `${ticker}:${lastBestPick.side}:${ask}`;
           persistEdgeAlertKey(lastClearEdgeAlertKey);
           edgeAlertsArmed = true;
+          markEdgeSounded(lastBestPick, { ask });
+          quietArmClearEdge(lastBestPick, { chimed: false });
         }
         // Re-upsert push in case Render rotated VAPID while we were away.
         if (
@@ -8462,7 +8460,10 @@
         ) {
           subscribePush().catch(() => {});
         }
-        refreshTarget({ forceCandles: true });
+        // Let SW edge-state land before scoring so swAlreadySoundedEdge works.
+        setTimeout(() => {
+          refreshTarget({ forceCandles: true });
+        }, 280);
         runSystemHealthReport({ force: true });
       } else {
         // Page hidden — system notification is the only audible chime.
@@ -8497,6 +8498,7 @@
               beat: lastTarget,
               chimeOn,
             });
+            markEdgeSounded(lastBestPick, { ask });
           }
           // Do NOT edge-armed on every hide — that refreshed the SW cooldown
           // and blocked the next background Web Push for ~90s.

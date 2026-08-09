@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.83";
+  const APP_VERSION = "9.84";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -351,6 +351,8 @@
   let plRangeSaveTimer = null;
   let plRestoringRange = false;
   let plLastBarCount = 0;
+  /** Right-axis Y zoom via scaleMargins (smaller = candles fill more). Chart box size stays fixed. */
+  let plYMargin = 0.12;
   let tradeHistoryUi = loadTradeHistoryUi();
   let targetSeries = null;
   let targetLine = null;
@@ -1703,11 +1705,11 @@
   }
 
   /**
-   * Simple P/L chart gestures:
-   * - one finger drag = pan left/right (1:1, no surprise zoom)
-   * - pinch = gentle zoom in/out
+   * Simple P/L chart gestures (chart box size stays fixed):
+   * - one finger drag = pan left/right
+   * - pinch = gentle time zoom
    * - tap = toggle inspect crosshair
-   * - press/drag on right price numbers = grow/shrink chart height
+   * - drag on right price numbers = zoom candles vertically (Y scale only)
    */
   function wirePlChartTouchGuards() {
     if (!el.plChart || el.plChart.dataset.touchGuarded === "1") return;
@@ -1724,7 +1726,7 @@
     let panMoved = false;
     let axisMode = false;
     let axisStartY = null;
-    let axisStartHeight = null;
+    let axisStartMargin = null;
     let axisMoved = false;
     let pressStartX = null;
     let pressStartY = null;
@@ -1757,6 +1759,22 @@
       plRestoringRange = true;
       try {
         plChart.timeScale().setVisibleLogicalRange({ from, to });
+      } catch {
+        // ignore
+      }
+    };
+
+    const applyYMargin = (margin) => {
+      if (!plChart) return;
+      plYMargin = Math.min(0.42, Math.max(0.02, margin));
+      try {
+        const ps = plChart.priceScale("right");
+        if (ps) {
+          ps.applyOptions({
+            autoScale: true,
+            scaleMargins: { top: plYMargin, bottom: plYMargin },
+          });
+        }
       } catch {
         // ignore
       }
@@ -1827,19 +1845,19 @@
         clearInspectHold();
 
         if (inPriceAxis(t.clientX)) {
-          // Right-side price labels: press/drag changes chart height.
+          // Right-side price labels: vertical drag zooms candles, not chart size.
           axisMode = true;
           axisStartY = t.clientY;
-          axisStartHeight = plUi.height || 180;
+          axisStartMargin = plYMargin;
           panStartX = null;
           panStartRange = null;
           return;
         }
 
         axisMode = false;
+        axisStartMargin = null;
         panStartX = t.clientX;
         panStartRange = readRange();
-        // Hold still to inspect — drag cancels this.
         inspectHoldTimer = setTimeout(() => {
           inspectHoldTimer = null;
           if (!panMoved && !axisMoved) {
@@ -1868,7 +1886,6 @@
           }
           const d = touchDist(ev.touches[0], ev.touches[1]);
           if (d < 8) return;
-          // Gentle zoom — close to 1:1 with finger distance change.
           const raw = pinchStartDist / d;
           const factor = Math.pow(raw, 1.25);
           const mid = (pinchStartRange.from + pinchStartRange.to) / 2;
@@ -1885,25 +1902,17 @@
         ev.stopPropagation();
         const t = ev.touches[0];
 
-        if (axisMode && axisStartY != null) {
+        if (axisMode && axisStartY != null && axisStartMargin != null) {
           const dy = t.clientY - axisStartY;
           if (Math.abs(dy) >= MOVE_PX) {
             axisMoved = true;
             clearInspectHold();
             clearPlInspect();
           }
-          // Drag up on price scale → taller chart; down → shorter.
-          const next = Math.round(
-            Math.min(
-              420,
-              Math.max(120, (axisStartHeight || 180) - dy)
-            )
-          );
-          if (next !== plUi.height) {
-            plUi.height = next;
-            applyPlChartHeight();
-            resizePlChart();
-          }
+          const h = Math.max(1, el.plChart.clientHeight || 180);
+          // Drag up → smaller margins → candles expand. Drag down → contract.
+          // Chart box / perimeter stays the same.
+          applyYMargin(axisStartMargin + (dy / h) * 0.4);
           return;
         }
 
@@ -1932,7 +1941,6 @@
           (el.plChart.clientWidth || 1) - PRICE_AXIS_PX
         );
         const span = panStartRange.to - panStartRange.from;
-        // 1:1 pan — finger distance matches chart travel.
         const shift = -(dx / width) * span;
         applyRange(panStartRange.from + shift, panStartRange.to + shift);
       },
@@ -1943,11 +1951,6 @@
       clearInspectHold();
       const wasPan = panMoved;
       const wasAxis = axisMode;
-      const grewAxis =
-        wasAxis &&
-        !axisMoved &&
-        pressStartedAt &&
-        Date.now() - pressStartedAt >= 180;
       const heldMs = pressStartedAt ? Date.now() - pressStartedAt : 0;
       const tapX = pressStartX;
       const tapY = pressStartY;
@@ -1959,15 +1962,6 @@
         heldMs < TAP_MS;
       const hadInspect = inspectAlreadyOn;
 
-      if (wasAxis) {
-        savePlUi();
-        if (plLastBarCount > 0) restorePlVisibleRange(plLastBarCount);
-        // Short press on price numbers expands the chart vertically.
-        if (grewAxis) {
-          nudgePlChartHeight(70);
-        }
-      }
-
       pinchStartDist = null;
       pinchStartRange = null;
       panStartX = null;
@@ -1975,7 +1969,7 @@
       panMoved = false;
       axisMode = false;
       axisStartY = null;
-      axisStartHeight = null;
+      axisStartMargin = null;
       axisMoved = false;
       pressStartX = null;
       pressStartY = null;
@@ -1985,6 +1979,8 @@
       if (wasPan) {
         plRestoringRange = false;
         capturePlVisibleRange();
+        clearPlInspect();
+      } else if (wasAxis) {
         clearPlInspect();
       } else if (quickTap && hadInspect) {
         clearPlInspect();
@@ -2012,11 +2008,8 @@
       if (!plInspecting) clearPlInspect();
     });
     el.plChart.addEventListener("click", (ev) => {
-      const rect = el.plChart.getBoundingClientRect();
-      if (ev.clientX - rect.left >= rect.width - PRICE_AXIS_PX) {
-        nudgePlChartHeight(70);
-        return;
-      }
+      // Price-axis clicks are for vertical candle zoom via drag — ignore tap.
+      if (inPriceAxis(ev.clientX)) return;
       if (crosshairVisible() || plInspecting) {
         ev.preventDefault();
         clearPlInspect();
@@ -2024,6 +2017,10 @@
       }
       updatePlInspectAtClient(ev.clientX, ev.clientY);
       plInspecting = true;
+    });
+    el.plChart.addEventListener("dblclick", (ev) => {
+      if (!inPriceAxis(ev.clientX) || !plChart) return;
+      applyYMargin(0.12);
     });
   }
 
@@ -2103,7 +2100,7 @@
       },
       rightPriceScale: {
         borderColor: "rgba(255,255,255,0.08)",
-        scaleMargins: { top: 0.12, bottom: 0.12 },
+        scaleMargins: { top: plYMargin, bottom: plYMargin },
       },
       timeScale: {
         borderColor: "rgba(255,255,255,0.08)",
@@ -2125,7 +2122,7 @@
         vertTouchDrag: false,
       },
       handleScale: {
-        axisPressedMouseMove: { time: true, price: false },
+        axisPressedMouseMove: { time: true, price: true },
         axisDoubleClickReset: true,
         mouseWheel: true,
         pinch: false,

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.94";
+  const APP_VERSION = "9.95";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -226,6 +226,7 @@
     tutorialSkip: document.getElementById("tutorial-skip"),
     tutorialOpen: document.getElementById("tutorial-open"),
     appVersionLine: document.getElementById("app-version-line"),
+    systemHealth: document.getElementById("system-health"),
     appUpdate: document.getElementById("app-update"),
     pullRefresh: document.getElementById("pull-refresh"),
     pullRefreshLabel: document.getElementById("pull-refresh-label"),
@@ -5242,6 +5243,13 @@
       suggestion,
       fromAlert: true,
     };
+    setBestHealthSnap({
+      clear: true,
+      side,
+      askCents: ask,
+      pWin,
+      suggestedStake: suggestStake,
+    });
     el.bestSide.hidden = false;
     syncBestSideLayout();
     el.bestSide.classList.toggle("is-below", side === "below");
@@ -5296,6 +5304,220 @@
     el.bgStatus.classList.toggle("warn", !ok);
   }
 
+  /** Light in-app health report — not every poll; ~60s + on open/resume. */
+  const SYSTEM_HEALTH_MS = 60_000;
+  let systemHealthTimer = null;
+  let systemHealthRunning = false;
+  let lastSystemHealthAt = 0;
+  let lastHealthOk = null;
+  let lastHealthIssues = [];
+  /** Latest /api/clear-edge snapshot for the health chip. */
+  let lastHealthEdge = null;
+  /**
+   * Live Best Buy Above/Below for the health chip (clear or wait).
+   * Updated from refreshBestSide — not only when lastBestPick is set.
+   */
+  let lastBestHealthSnap = null;
+
+  function setBestHealthSnap(snap) {
+    lastBestHealthSnap = snap;
+    refreshSystemHealthBestBuy();
+  }
+
+  function formatBestBuyHealthBit() {
+    const snap = lastBestHealthSnap;
+    if (snap && snap.side) {
+      const side = snap.side === "below" ? "Below" : "Above";
+      const ask =
+        snap.askCents != null && Number.isFinite(Number(snap.askCents))
+          ? Math.round(Number(snap.askCents))
+          : null;
+      const conf =
+        snap.pWin != null && Number.isFinite(Number(snap.pWin))
+          ? Math.round(Number(snap.pWin) * 100)
+          : null;
+      const stake =
+        snap.suggestedStake != null &&
+        Number.isFinite(Number(snap.suggestedStake))
+          ? Math.round(Number(snap.suggestedStake))
+          : null;
+      if (snap.clear) {
+        let s = `Buy ${side}`;
+        if (ask != null) s += ` @ ${ask}¢`;
+        if (conf != null) s += ` · ${conf}%`;
+        if (stake != null) s += ` · $${stake}`;
+        return s;
+      }
+      if (snap.waitWhy) return `Wait ${side} · ${snap.waitWhy}`;
+      if (conf != null && conf < 52) {
+        return `Wait ${side} · ${conf}% (need ≥52%)`;
+      }
+      return ask != null ? `Wait ${side} @ ${ask}¢` : `Wait ${side}`;
+    }
+    const pick = lastBestPick;
+    if (pick && pick.side) {
+      const side = pick.side === "below" ? "Below" : "Above";
+      const ask =
+        pick.askCents != null && Number.isFinite(Number(pick.askCents))
+          ? Math.round(Number(pick.askCents))
+          : null;
+      const conf =
+        pick.pWin != null && Number.isFinite(Number(pick.pWin))
+          ? Math.round(Number(pick.pWin) * 100)
+          : null;
+      const stake =
+        pick.suggestedStake != null && Number.isFinite(Number(pick.suggestedStake))
+          ? Math.round(Number(pick.suggestedStake))
+          : null;
+      let s = `Buy ${side}`;
+      if (ask != null) s += ` @ ${ask}¢`;
+      if (conf != null) s += ` · ${conf}%`;
+      if (stake != null) s += ` · $${stake}`;
+      return s;
+    }
+    const edge = lastHealthEdge;
+    if (edge && edge.side) {
+      const side = edge.side === "below" ? "Below" : "Above";
+      const ask =
+        edge.ask_cents != null && Number.isFinite(Number(edge.ask_cents))
+          ? Math.round(Number(edge.ask_cents))
+          : null;
+      const conf =
+        edge.p_win != null && Number.isFinite(Number(edge.p_win))
+          ? Math.round(Number(edge.p_win) * 100)
+          : null;
+      if (edge.clear) {
+        let s = `Buy ${side}`;
+        if (ask != null) s += ` @ ${ask}¢`;
+        if (conf != null) s += ` · ${conf}%`;
+        return s;
+      }
+      if (conf != null && conf < 52) {
+        return `Wait ${side} · ${conf}% (need ≥52%)`;
+      }
+      if (edge.reject === "ev" || (edge.ev != null && Number(edge.ev) <= 0.01)) {
+        return `Wait ${side} · edge thin`;
+      }
+      return ask != null ? `Wait ${side} @ ${ask}¢` : `Wait ${side}`;
+    }
+    return "No Best buy yet";
+  }
+
+  function paintSystemHealth(healthy, issues) {
+    if (!el.systemHealth) return;
+    lastHealthOk = !!healthy;
+    lastHealthIssues = issues || [];
+    el.systemHealth.classList.remove("is-checking");
+    el.systemHealth.classList.toggle("is-ok", !!healthy);
+    el.systemHealth.classList.toggle("is-bad", !healthy);
+    const bestBit = formatBestBuyHealthBit();
+    if (healthy) {
+      el.systemHealth.textContent = `Healthy · ${bestBit}`;
+      el.systemHealth.title =
+        "Server, Best-buy alerts, service worker, and push look good · " + bestBit;
+      return;
+    }
+    const detail = (issues && issues[0]) || "check Options → Alerts";
+    el.systemHealth.innerHTML =
+      '<span class="system-health-strike">Healthy</span>' +
+      `<span class="system-health-detail">${detail}</span>` +
+      `<span class="system-health-detail"> · ${bestBit}</span>`;
+    el.systemHealth.title =
+      (issues && issues.length ? issues.join(" · ") : detail) +
+      " · " +
+      bestBit +
+      " — Options → Alerts → Enable / Test";
+  }
+
+  function refreshSystemHealthBestBuy() {
+    if (!el.systemHealth || lastHealthOk == null) return;
+    paintSystemHealth(lastHealthOk, lastHealthIssues);
+  }
+
+  async function runSystemHealthReport({ force = false } = {}) {
+    if (!el.systemHealth) return;
+    if (systemHealthRunning) return;
+    if (document.visibilityState !== "visible") return;
+    const now = Date.now();
+    if (!force && now - lastSystemHealthAt < 12_000) return;
+    systemHealthRunning = true;
+    lastSystemHealthAt = now;
+    try {
+      const issues = [];
+
+      try {
+        const res = await fetch(`/api/health?_=${Date.now()}`, {
+          cache: "no-store",
+        });
+        const health = await res.json();
+        if (!(health && health.ok)) issues.push("server down");
+        else if (health.push === false) issues.push("push disabled");
+      } catch {
+        issues.push("server unreachable");
+      }
+
+      try {
+        const er = await fetch(`/api/clear-edge?_=${Date.now()}`, {
+          cache: "no-store",
+        });
+        if (!er.ok) issues.push("edge API bad");
+        else {
+          const edge = await er.json().catch(() => null);
+          if (!(edge && edge.ok)) issues.push("edge API bad");
+          else lastHealthEdge = edge;
+        }
+      } catch {
+        issues.push("edge API down");
+      }
+
+      if (!chimeOn) {
+        issues.push("alerts off");
+      } else if (!("Notification" in window)) {
+        issues.push("no notifications API");
+      } else if (Notification.permission === "denied") {
+        issues.push("notify blocked");
+      } else if (Notification.permission !== "granted") {
+        issues.push("notify not allowed");
+      } else {
+        try {
+          const reg =
+            swReg ||
+            (await navigator.serviceWorker.getRegistration().catch(() => null));
+          if (!reg) {
+            issues.push("no service worker");
+          } else {
+            const sub = await reg.pushManager.getSubscription();
+            if (!sub) issues.push("no push subscription");
+            else if (
+              !(
+                navigator.serviceWorker.controller ||
+                (reg.active && reg.active.state === "activated")
+              )
+            ) {
+              issues.push("service worker inactive");
+            }
+          }
+        } catch {
+          issues.push("push check failed");
+        }
+      }
+
+      paintSystemHealth(issues.length === 0, issues);
+    } finally {
+      systemHealthRunning = false;
+    }
+  }
+
+  function startSystemHealthLoop() {
+    runSystemHealthReport({ force: true });
+    if (systemHealthTimer) clearInterval(systemHealthTimer);
+    systemHealthTimer = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        runSystemHealthReport({ force: false });
+      }
+    }, SYSTEM_HEALTH_MS);
+  }
+
   function isBgArmed() {
     if (localStorage.getItem(BG_ARMED_KEY) === "1") return true;
     return (
@@ -5346,6 +5568,8 @@
     } else {
       setBgStatus(null, "");
     }
+    // Refresh the top health chip when alert state changes (cheap debounce).
+    runSystemHealthReport({ force: false });
   }
 
   async function runChimeTest() {
@@ -6424,6 +6648,7 @@
       lastBestPick = null;
       clearEdgeLatched = false;
       markClearEdgeGone();
+      setBestHealthSnap(null);
       syncBestSideLayout();
       return;
     }
@@ -6443,6 +6668,7 @@
       lastBestPick = null;
       clearEdgeLatched = false;
       markClearEdgeGone();
+      setBestHealthSnap(null);
       syncBestSideLayout();
       return;
     }
@@ -6520,6 +6746,21 @@
       setRoiCardBest(null);
       setDockBestDetail("Wait", null);
       lastBestPick = null;
+      const conf = Math.round((Number(best.pWin) || 0) * 100);
+      const waitWhy =
+        best.pWin < 0.52
+          ? `${conf}% (need ≥52%)`
+          : best.ev <= 0.01
+            ? "edge thin"
+            : "better ask";
+      setBestHealthSnap({
+        clear: false,
+        side: best.side,
+        askCents: best.askCents,
+        pWin: best.pWin,
+        suggestedStake: null,
+        waitWhy,
+      });
       const noneKey = "none";
       if (lastBestSideKey !== noneKey) {
         lastBestSideKey = noneKey;
@@ -6564,6 +6805,13 @@
       suggestion,
       atRiskCap,
     };
+    setBestHealthSnap({
+      clear: true,
+      side: best.side,
+      askCents: best.askCents,
+      pWin: best.pWin,
+      suggestedStake: suggestStake,
+    });
     const suggestKey = `${lastTicker || "?"}:${best.side}:${Math.round(
       Number(best.askCents) || 0
     )}`;
@@ -8070,6 +8318,7 @@
     wireChartResizeHandle(el.chartResizeTop, "top");
     wireChartResizeHandle(el.chartResizeBottom, "bottom");
     syncAlertsUi();
+    startSystemHealthLoop();
     try {
       if (localStorage.getItem(TUTORIAL_KEY) !== "1") {
         setTimeout(() => openTutorial(true), 700);
@@ -8148,6 +8397,7 @@
           subscribePush().catch(() => {});
         }
         refreshTarget({ forceCandles: true });
+        runSystemHealthReport({ force: true });
       } else {
         // Page hidden — system notification is the only audible chime.
         if (

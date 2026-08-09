@@ -5425,7 +5425,7 @@
       setStatus("warn", "Allow Notifications to enable alerts");
       return false;
     }
-    const ok = await subscribePush();
+    const ok = await subscribePush({ forceRefresh: true });
     if (!ok) {
       syncAlertsUi();
       setStatus("warn", "Could not enable push alerts — try Update now, then Enable again");
@@ -5454,7 +5454,7 @@
     else await turnAlertsOn();
   }
 
-  async function subscribePush() {
+  async function subscribePush({ forceRefresh = false } = {}) {
     const reg = swReg || (await ensureServiceWorker());
     if (!reg || !reg.pushManager) return false;
     const allowed = await ensureNotificationPermission();
@@ -5473,8 +5473,9 @@
       let sub = await reg.pushManager.getSubscription();
       // Render restarts regenerate VAPID keys — old subs go dead. Also force a
       // fresh subscribe when we have no cached key (stale browser subscription).
+      // forceRefresh recovers after Chrome revoked a sub that went silent.
       const keyMismatch = !cachedKey || cachedKey !== publicKey;
-      if (sub && keyMismatch) {
+      if (sub && (keyMismatch || forceRefresh)) {
         try {
           await fetch("/api/push/unsubscribe", {
             method: "POST",

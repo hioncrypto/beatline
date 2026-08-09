@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.02";
+  const APP_VERSION = "10.03";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5819,8 +5819,6 @@
   function alertClearEdge(best) {
     if (!best || !best.side) return false;
     if (!chimeOn) return false;
-    // Resume/open quiet-sync — never dump a buy chime just because we came back.
-    if (Date.now() < suppressEdgeChimeUntil) return false;
     // Waiting for unlock tap to replay — don't re-enter every poll.
     if (pendingEdgeChime) return false;
     // Flat: always alert. Same-side open: still alert (add decision).
@@ -5833,6 +5831,18 @@
     const sticky = `${ticker}:${side}`;
     const alertKey = `${ticker}:${side}:${ask}`;
     const now = Date.now();
+
+    // Resume/open quiet-sync: do not chime, but ACK the sticky so when
+    // suppress lifts we do not dump this same Best-buy as "new".
+    if (now < suppressEdgeChimeUntil) {
+      lastClearEdgeAlertKey = alertKey;
+      lastClearEdgeGoneAt = 0;
+      persistEdgeAlertKey(alertKey);
+      edgeAlertsArmed = true;
+      markEdgeSounded(best, { ask });
+      quietArmClearEdge(best, { chimed: false });
+      return false;
+    }
 
     if (now - lastClearEdgeAlertAt < EDGE_ALERT_COOLDOWN_MS) return false;
 
@@ -8088,6 +8098,10 @@
   }
 
   function boot() {
+    // Cold open / PWA relaunch: never first-arm dump a Best-buy on paint.
+    suppressEdgeChimeUntil = Date.now() + 12_000;
+    suppressTargetChimeUntil = Date.now() + 4000;
+    pendingEdgeChime = false;
     if (!window.LightweightCharts) {
       setStatus("warn", "Chart library failed to load");
       return;
@@ -8434,11 +8448,10 @@
         // Quiet-sync any 15m window that rolled while we were away — do not
         // dump the "new 15m target / Price to beat" chime on open.
         suppressTargetChimeUntil = Date.now() + 4000;
-        // Quiet-sync Best-buy too — the resume dump was:
-        // 1) replaying pendingEdgeChime (failed FG autoplay / stale), and/or
-        // 2) refreshTarget → alertClearEdge treating the still-clear edge as new
-        //    because lastSounded was not marked on hide/show.
-        suppressEdgeChimeUntil = Date.now() + 5000;
+        // Quiet-sync Best-buy: suppress + ACK any clear edge seen while
+        // suppressed so lifting the window does not dump the same sticky.
+        // (No phone notification ≠ reason to FG-blast on open.)
+        suppressEdgeChimeUntil = Date.now() + 12_000;
         pendingEdgeChime = false;
         postToSW({ type: "get-edge-state" });
         // Acknowledge the edge already on screen / left from background.

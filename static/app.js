@@ -6703,16 +6703,24 @@
     }
     let didEdgeAlert = false;
     if (!edgeAlertsArmed) {
-      // Opening / first paint onto a live BUY: NEVER chime here.
-      // Background owns the system notification for this sticky; open only
-      // quiet-syncs. Transitions after arm still use alertClearEdge below.
       edgeAlertsArmed = true;
-      quietArmClearEdge(best, { chimed: false });
+      // First paint: chime only for a NEW sticky. If BG already notified this
+      // edge (SW/held/session), quiet-sync — never dump on open.
+      if (
+        chimeOn &&
+        !atRiskCap &&
+        !swAlreadySoundedEdge(best) &&
+        !heldAlertStillValid()
+      ) {
+        didEdgeAlert = !!alertClearEdge(best);
+      } else {
+        quietArmClearEdge(best, { chimed: false });
+      }
       maybeClickAddSuggest(best, {
         sameAsOpen,
         atRiskCap,
         suggestStake,
-        afterTone: false,
+        afterTone: didEdgeAlert,
       });
       return;
     }

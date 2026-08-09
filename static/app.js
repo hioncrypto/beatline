@@ -1489,6 +1489,8 @@
   function setPlOptionsOpen(open) {
     // Save zoom place before collapsing so expand restores it.
     if (!open) capturePlVisibleRange();
+    // Re-open always on the full trade history; pinch afterward.
+    if (open) plUi.range = null;
     plUi.optionsOpen = !!open;
     savePlUi();
     applyPlUi();

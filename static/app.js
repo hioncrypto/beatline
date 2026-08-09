@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.90";
+  const APP_VERSION = "9.91";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -364,6 +364,8 @@
   let lastTarget = null;
   let lastFifteenTarget = null;
   let lastFifteenTicker = null;
+  /** While > now, sync 15m ticker quietly — no open-from-background chime dump. */
+  let suppressTargetChimeUntil = 0;
   let lastKalshiUrl = "https://kalshi.com/markets/kxbtc15m";
   let lastYesPct = null;
   let lastSettlementAvg = null;
@@ -5003,7 +5005,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.15", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.16", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5536,6 +5538,16 @@
 
   async function alertNewTarget(beat, ticker, closeEt) {
     // Foreground: chime only. Background: system notification (+ server push).
+    // Opening from background must not re-play a window that already notified.
+    if (Date.now() < suppressTargetChimeUntil) {
+      postToSW({
+        type: "arm-state",
+        ticker,
+        target: beat,
+        chimeOn,
+      });
+      return;
+    }
     playChime();
     postToSW({
       type: "arm-state",
@@ -5544,14 +5556,59 @@
       chimeOn,
     });
     if (!chimeOn) return;
-    if (document.visibilityState !== "visible") {
+    if (!pageOwnsAlerts()) {
       postToSW({
-        type: "test-notify",
+        type: "target-notify",
         beat,
         ticker,
         closeEt,
+        force: true,
       });
     }
+  }
+
+  function maybeChimeNewFifteenTarget(beat, ticker, source, closeEt) {
+    const isFifteen =
+      source === "kalshi" || (ticker && String(ticker).includes("KXBTC15M"));
+    if (!isFifteen) return;
+
+    const tickerChanged =
+      lastFifteenTicker && ticker && lastFifteenTicker !== ticker;
+    const beatReady = beat != null && Number.isFinite(beat);
+    // Ignore tiny float / book jitter — only real window rolls should chime.
+    const beatChanged =
+      beatReady &&
+      lastFifteenTarget != null &&
+      tickerChanged &&
+      Math.abs(lastFifteenTarget - beat) > 1;
+
+    // Resume from background: adopt the live ticker/beat quietly. The BG
+    // "new 15m target / Price to beat" notification already covered the roll.
+    if (Date.now() < suppressTargetChimeUntil) {
+      if (ticker) lastFifteenTicker = ticker;
+      if (beatReady) lastFifteenTarget = beat;
+      postToSW({
+        type: "arm-state",
+        ticker: lastFifteenTicker,
+        target: lastFifteenTarget,
+        chimeOn,
+      });
+      return;
+    }
+
+    if (tickerChanged || beatChanged) {
+      alertNewTarget(beat, ticker, closeEt);
+      setStatus("ok", "New 15m target · chime");
+    }
+
+    if (ticker) lastFifteenTicker = ticker;
+    if (beatReady) lastFifteenTarget = beat;
+    postToSW({
+      type: "arm-state",
+      ticker: lastFifteenTicker,
+      target: lastFifteenTarget,
+      chimeOn,
+    });
   }
 
   function alertClearEdge(best) {
@@ -5689,36 +5746,6 @@
       // silence later background pushes without ever sounding.
     });
     return true;
-  }
-
-  function maybeChimeNewFifteenTarget(beat, ticker, source, closeEt) {
-    const isFifteen =
-      source === "kalshi" || (ticker && String(ticker).includes("KXBTC15M"));
-    if (!isFifteen) return;
-
-    const tickerChanged =
-      lastFifteenTicker && ticker && lastFifteenTicker !== ticker;
-    const beatReady = beat != null && Number.isFinite(beat);
-    // Ignore tiny float / book jitter — only real window rolls should chime.
-    const beatChanged =
-      beatReady &&
-      lastFifteenTarget != null &&
-      tickerChanged &&
-      Math.abs(lastFifteenTarget - beat) > 1;
-
-    if (tickerChanged || beatChanged) {
-      alertNewTarget(beat, ticker, closeEt);
-      setStatus("ok", "New 15m target · chime");
-    }
-
-    if (ticker) lastFifteenTicker = ticker;
-    if (beatReady) lastFifteenTarget = beat;
-    postToSW({
-      type: "arm-state",
-      ticker: lastFifteenTicker,
-      target: lastFifteenTarget,
-      chimeOn,
-    });
   }
 
   let swReg = null;
@@ -8126,6 +8153,9 @@
         unlockAudioPlayback();
         ensurePortraitLock(true);
         startRolloverBurst();
+        // Quiet-sync any 15m window that rolled while we were away — do not
+        // dump the "new 15m target / Price to beat" chime on open.
+        suppressTargetChimeUntil = Date.now() + 4000;
         // If we opened from a Best-buy notification, keep that suggestion up.
         const held = heldAlertStillValid();
         if (held) paintHeldAlertEdge(held);

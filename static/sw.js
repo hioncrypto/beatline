@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.15-alert-owner";
+const SW_VERSION = "3.16-target-open-dump";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -331,14 +331,25 @@ async function checkTarget(forceNotify) {
     (data.source === "kalshi" || String(ticker).includes("KXBTC15M"));
 
   if (changed || forceNotify) {
-    await showTargetNotification(
-      {
-        beat,
-        ticker,
-        closeEt: data.close_et,
-      },
-      { force: !!forceNotify }
-    );
+    const now = Date.now();
+    const lastAt = Number(state.targetAt) || 0;
+    const alreadyNotified =
+      !forceNotify &&
+      state.notifiedTicker &&
+      state.notifiedTicker === ticker &&
+      now - lastAt < 120_000;
+    if (!alreadyNotified) {
+      await showTargetNotification(
+        {
+          beat,
+          ticker,
+          closeEt: data.close_et,
+        },
+        { force: true }
+      );
+      state.targetAt = now;
+      state.notifiedTicker = ticker;
+    }
   }
 
   state.ticker = ticker || state.ticker;
@@ -494,14 +505,53 @@ self.addEventListener("message", (event) => {
   }
   if (msg.type === "test-notify") {
     event.waitUntil(
-      showTargetNotification(
-        {
-          beat: msg.beat,
-          ticker: msg.ticker || "TEST",
-          closeEt: msg.closeEt,
-        },
-        { force: !!msg.force }
-      )
+      (async () => {
+        await showTargetNotification(
+          {
+            beat: msg.beat,
+            ticker: msg.ticker || "TEST",
+            closeEt: msg.closeEt,
+          },
+          { force: true }
+        );
+        const state = await readState();
+        if (msg.ticker) {
+          state.notifiedTicker = msg.ticker;
+          state.targetAt = Date.now();
+          state.ticker = msg.ticker;
+          await writeState(state);
+        }
+      })()
+    );
+  }
+  if (msg.type === "target-notify") {
+    event.waitUntil(
+      (async () => {
+        const state = await readState();
+        if (!state.chimeOn && !msg.force) return;
+        const ticker = msg.ticker || "";
+        const now = Date.now();
+        const lastAt = Number(state.targetAt) || 0;
+        if (
+          !msg.force &&
+          state.notifiedTicker === ticker &&
+          now - lastAt < 120_000
+        ) {
+          return;
+        }
+        await showTargetNotification(
+          {
+            beat: msg.beat,
+            ticker,
+            closeEt: msg.closeEt,
+          },
+          { force: true }
+        );
+        state.notifiedTicker = ticker;
+        state.targetAt = now;
+        if (ticker) state.ticker = ticker;
+        await writeState(state);
+      })()
     );
   }
   if (msg.type === "edge-notify") {
@@ -621,14 +671,29 @@ self.addEventListener("push", (event) => {
   }
   event.waitUntil(
     (async () => {
+      const state = await readState();
+      const ticker = payload.ticker || "";
+      const now = Date.now();
+      const lastAt = Number(state.targetAt) || 0;
+      if (
+        state.notifiedTicker &&
+        state.notifiedTicker === ticker &&
+        now - lastAt < 120_000
+      ) {
+        return;
+      }
       await showTargetNotification(
         {
           beat: payload.beat ?? payload.price_to_beat ?? payload.target,
           ticker: payload.ticker,
           closeEt: payload.close_et || payload.closeEt,
         },
-        { force: !(await hasVisibleClient()) }
+        { force: true }
       );
+      state.notifiedTicker = ticker;
+      state.targetAt = now;
+      if (ticker) state.ticker = ticker;
+      await writeState(state);
     })()
   );
 });

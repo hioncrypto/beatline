@@ -187,48 +187,6 @@ async function showTargetNotification(payload, { force = false } = {}) {
   });
 }
 
-async function broadcastEdgeAlert(payload) {
-  const msg = {
-    type: "apply-edge-alert",
-    side: payload && payload.side,
-    askCents:
-      payload && (payload.askCents != null ? payload.askCents : payload.ask_cents),
-    pWin: payload && (payload.pWin != null ? payload.pWin : payload.p_win),
-    suggestStake:
-      payload &&
-      (payload.suggestStake != null
-        ? payload.suggestStake
-        : payload.suggest_stake),
-    beat: payload && (payload.beat ?? payload.price_to_beat ?? payload.target),
-    ticker: payload && payload.ticker,
-    kind: "clear_edge",
-  };
-  const send = async () => {
-    const all = await clients.matchAll({
-      type: "window",
-      includeUncontrolled: true,
-    });
-    for (const client of all) {
-      try {
-        client.postMessage(msg);
-      } catch {
-        // ignore
-      }
-    }
-    return all.length;
-  };
-  try {
-    let n = await send();
-    // Retry once — Android sometimes has no client list on the first tick.
-    if (n === 0) {
-      await new Promise((r) => setTimeout(r, 400));
-      n = await send();
-    }
-  } catch {
-    // ignore
-  }
-}
-
 async function showEdgeNotification(payload, { force = false } = {}) {
   // App open + focused: foreground owns the alert from live market.
   // Do not mirror a (possibly stale) push into the tray or the Best Side UI.

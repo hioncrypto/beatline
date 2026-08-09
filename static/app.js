@@ -4151,11 +4151,7 @@
       );
       // Expand the open-P/L drawer so Close is obvious.
       try {
-        if (el.openPlBar) {
-          el.openPlBar.hidden = false;
-          el.openPlBar.classList.remove("is-collapsed");
-          document.body.classList.remove("open-pl-collapsed");
-        }
+        setOpenPlCollapsed(false);
         if (el.openPlClose) {
           el.openPlClose.classList.add("is-pulse");
           setTimeout(() => {

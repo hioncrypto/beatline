@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.82";
+  const APP_VERSION = "9.83";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -1703,31 +1703,36 @@
   }
 
   /**
-   * Fast one-finger pan + pinch, plus light-press inspect crosshair.
-   * Short hold (~0.12s) shows dotted date/amount lines; drag to scrub.
-   * Quick tap dismisses an open crosshair. Quick drag pans with high gain.
+   * Simple P/L chart gestures:
+   * - one finger drag = pan left/right (1:1, no surprise zoom)
+   * - pinch = gentle zoom in/out
+   * - tap = toggle inspect crosshair
+   * - press/drag on right price numbers = grow/shrink chart height
    */
   function wirePlChartTouchGuards() {
     if (!el.plChart || el.plChart.dataset.touchGuarded === "1") return;
     el.plChart.dataset.touchGuarded = "1";
-    const PAN_GAIN = 3.4;
-    const PINCH_POWER = 3.6;
-    const LONG_PRESS_MS = 120;
-    const MOVE_CANCEL_PX = 10;
-    const TAP_MS = 280;
+    const PRICE_AXIS_PX = 58;
+    const MOVE_PX = 8;
+    const TAP_MS = 320;
+    const INSPECT_HOLD_MS = 420;
 
     let pinchStartDist = null;
     let pinchStartRange = null;
     let panStartX = null;
     let panStartRange = null;
     let panMoved = false;
-    let pressTimer = null;
+    let axisMode = false;
+    let axisStartY = null;
+    let axisStartHeight = null;
+    let axisMoved = false;
     let pressStartX = null;
     let pressStartY = null;
     let pressStartedAt = 0;
+    let inspectHoldTimer = null;
     let inspectMode = false;
     let inspectAlreadyOn = false;
-    let activatedThisPress = false;
+    let activatedInspect = false;
 
     const crosshairVisible = () =>
       !!(el.plCrosshair && !el.plCrosshair.hidden);
@@ -1757,29 +1762,15 @@
       }
     };
 
-    const ensurePannableRange = (range) => {
-      if (!range) return null;
-      const barCount = Math.max(1, plLastBarCount);
-      const span = range.to - range.from;
-      if (span >= barCount - 0.5) {
-        const visible = Math.min(14, Math.max(5, barCount));
-        const to = barCount - 0.5;
-        const from = Math.max(-0.5, to - visible);
-        applyRange(from, to);
-        return { from, to };
-      }
-      return range;
-    };
-
-    const clearPressTimer = () => {
-      if (pressTimer) {
-        clearTimeout(pressTimer);
-        pressTimer = null;
+    const clearInspectHold = () => {
+      if (inspectHoldTimer) {
+        clearTimeout(inspectHoldTimer);
+        inspectHoldTimer = null;
       }
     };
 
     const beginInspectAt = (x, y) => {
-      activatedThisPress = true;
+      activatedInspect = true;
       inspectMode = true;
       plInspecting = true;
       panStartX = null;
@@ -1793,6 +1784,11 @@
       updatePlInspectAtClient(x, y);
     };
 
+    const inPriceAxis = (clientX) => {
+      const rect = el.plChart.getBoundingClientRect();
+      return clientX - rect.left >= rect.width - PRICE_AXIS_PX;
+    };
+
     const opts = { passive: false, capture: true };
 
     el.plChart.addEventListener(
@@ -1801,10 +1797,10 @@
         if (ev.touches && ev.touches.length >= 2) {
           ev.preventDefault();
           ev.stopPropagation();
-          clearPressTimer();
+          clearInspectHold();
           inspectMode = false;
-          activatedThisPress = false;
-          inspectAlreadyOn = false;
+          activatedInspect = false;
+          axisMode = false;
           clearPlInspect();
           panStartX = null;
           panStartRange = null;
@@ -1813,36 +1809,43 @@
           pinchStartRange = readRange();
           return;
         }
+
         pinchStartDist = null;
         pinchStartRange = null;
-        if (ev.touches && ev.touches.length === 1) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          const t = ev.touches[0];
-          pressStartX = t.clientX;
-          pressStartY = t.clientY;
-          pressStartedAt = Date.now();
-          inspectAlreadyOn = crosshairVisible() || plInspecting;
-          activatedThisPress = false;
-          panStartX = t.clientX;
-          panStartRange = ensurePannableRange(readRange());
-          panMoved = false;
-          inspectMode = false;
-          clearPressTimer();
-          pressTimer = setTimeout(() => {
-            pressTimer = null;
-            // Light press → inspect crosshair (date + amount).
-            beginInspectAt(pressStartX, pressStartY);
-          }, LONG_PRESS_MS);
-        } else {
-          clearPressTimer();
+        if (!(ev.touches && ev.touches.length === 1)) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const t = ev.touches[0];
+        pressStartX = t.clientX;
+        pressStartY = t.clientY;
+        pressStartedAt = Date.now();
+        inspectAlreadyOn = crosshairVisible() || plInspecting;
+        activatedInspect = false;
+        inspectMode = false;
+        panMoved = false;
+        axisMoved = false;
+        clearInspectHold();
+
+        if (inPriceAxis(t.clientX)) {
+          // Right-side price labels: press/drag changes chart height.
+          axisMode = true;
+          axisStartY = t.clientY;
+          axisStartHeight = plUi.height || 180;
           panStartX = null;
           panStartRange = null;
-          panMoved = false;
-          inspectMode = false;
-          activatedThisPress = false;
-          inspectAlreadyOn = false;
+          return;
         }
+
+        axisMode = false;
+        panStartX = t.clientX;
+        panStartRange = readRange();
+        // Hold still to inspect — drag cancels this.
+        inspectHoldTimer = setTimeout(() => {
+          inspectHoldTimer = null;
+          if (!panMoved && !axisMoved) {
+            beginInspectAt(pressStartX, pressStartY);
+          }
+        }, INSPECT_HOLD_MS);
       },
       opts
     );
@@ -1853,7 +1856,7 @@
         if (ev.touches && ev.touches.length >= 2) {
           ev.preventDefault();
           ev.stopPropagation();
-          clearPressTimer();
+          clearInspectHold();
           inspectMode = false;
           if (
             !plChart ||
@@ -1865,13 +1868,14 @@
           }
           const d = touchDist(ev.touches[0], ev.touches[1]);
           if (d < 8) return;
+          // Gentle zoom — close to 1:1 with finger distance change.
           const raw = pinchStartDist / d;
-          const amplified = Math.pow(raw, PINCH_POWER);
+          const factor = Math.pow(raw, 1.25);
           const mid = (pinchStartRange.from + pinchStartRange.to) / 2;
           const barCount = Math.max(1, plLastBarCount);
           let half =
-            ((pinchStartRange.to - pinchStartRange.from) / 2) * amplified;
-          half = Math.max(1.2, Math.min(half, Math.max(barCount / 2 + 4, 6)));
+            ((pinchStartRange.to - pinchStartRange.from) / 2) * factor;
+          half = Math.max(2, Math.min(half, Math.max(barCount / 2 + 2, 4)));
           applyRange(mid - half, mid + half);
           return;
         }
@@ -1881,7 +1885,29 @@
         ev.stopPropagation();
         const t = ev.touches[0];
 
-        if (inspectMode || activatedThisPress) {
+        if (axisMode && axisStartY != null) {
+          const dy = t.clientY - axisStartY;
+          if (Math.abs(dy) >= MOVE_PX) {
+            axisMoved = true;
+            clearInspectHold();
+            clearPlInspect();
+          }
+          // Drag up on price scale → taller chart; down → shorter.
+          const next = Math.round(
+            Math.min(
+              420,
+              Math.max(120, (axisStartHeight || 180) - dy)
+            )
+          );
+          if (next !== plUi.height) {
+            plUi.height = next;
+            applyPlChartHeight();
+            resizePlChart();
+          }
+          return;
+        }
+
+        if (inspectMode || activatedInspect) {
           updatePlInspectAtClient(t.clientX, t.clientY);
           return;
         }
@@ -1890,21 +1916,10 @@
           pressStartX != null
             ? Math.hypot(t.clientX - pressStartX, t.clientY - pressStartY)
             : 0;
-
-        // Crosshair already open: a slide scrubs it; a later quick tap clears.
-        if (inspectAlreadyOn && movedFromStart >= MOVE_CANCEL_PX) {
-          clearPressTimer();
-          beginInspectAt(t.clientX, t.clientY);
+        if (movedFromStart >= MOVE_PX) {
+          clearInspectHold();
+        } else {
           return;
-        }
-
-        // Cancel pending light-press if the finger slides first → pan.
-        if (pressTimer != null && pressStartX != null) {
-          if (movedFromStart >= MOVE_CANCEL_PX) {
-            clearPressTimer();
-          } else {
-            return;
-          }
         }
 
         if (panStartX == null || !panStartRange || !plChart) return;
@@ -1912,68 +1927,96 @@
         if (Math.abs(dx) < 1) return;
         panMoved = true;
         clearPlInspect();
-        const width = Math.max(1, el.plChart.clientWidth || 1);
+        const width = Math.max(
+          1,
+          (el.plChart.clientWidth || 1) - PRICE_AXIS_PX
+        );
         const span = panStartRange.to - panStartRange.from;
-        const shift = -(dx / width) * span * PAN_GAIN;
+        // 1:1 pan — finger distance matches chart travel.
+        const shift = -(dx / width) * span;
         applyRange(panStartRange.from + shift, panStartRange.to + shift);
       },
       opts
     );
 
     const endGesture = () => {
-      clearPressTimer();
+      clearInspectHold();
       const wasPan = panMoved;
+      const wasAxis = axisMode;
+      const grewAxis =
+        wasAxis &&
+        !axisMoved &&
+        pressStartedAt &&
+        Date.now() - pressStartedAt >= 180;
       const heldMs = pressStartedAt ? Date.now() - pressStartedAt : 0;
       const tapX = pressStartX;
       const tapY = pressStartY;
       const quickTap =
         !wasPan &&
-        !activatedThisPress &&
+        !wasAxis &&
+        !activatedInspect &&
         heldMs > 0 &&
         heldMs < TAP_MS;
       const hadInspect = inspectAlreadyOn;
+
+      if (wasAxis) {
+        savePlUi();
+        if (plLastBarCount > 0) restorePlVisibleRange(plLastBarCount);
+        // Short press on price numbers expands the chart vertically.
+        if (grewAxis) {
+          nudgePlChartHeight(70);
+        }
+      }
+
       pinchStartDist = null;
       pinchStartRange = null;
       panStartX = null;
       panStartRange = null;
       panMoved = false;
+      axisMode = false;
+      axisStartY = null;
+      axisStartHeight = null;
+      axisMoved = false;
       pressStartX = null;
       pressStartY = null;
       pressStartedAt = 0;
       inspectMode = false;
+
       if (wasPan) {
         plRestoringRange = false;
         capturePlVisibleRange();
         clearPlInspect();
       } else if (quickTap && hadInspect) {
-        // Quick tap removes an open crosshair.
         clearPlInspect();
       } else if (quickTap && !hadInspect && tapX != null && tapY != null) {
-        // Quick tap also brings the crosshair up (no hard press needed).
         beginInspectAt(tapX, tapY);
         plInspecting = true;
-      } else if (activatedThisPress) {
-        // Keep the last readout/crosshair until tap-off or pan.
+      } else if (activatedInspect) {
         plInspecting = true;
       }
-      activatedThisPress = false;
+      activatedInspect = false;
       inspectAlreadyOn = false;
     };
     el.plChart.addEventListener("touchend", endGesture, opts);
     el.plChart.addEventListener("touchcancel", endGesture, opts);
 
-    // Desktop: hover a candle to show gain/loss on the label; click toggles off.
     el.plChart.addEventListener("mousemove", (ev) => {
       if (ev.buttons) {
         clearPlInspect();
         return;
       }
+      if (!plInspecting && !crosshairVisible()) return;
       updatePlInspectAtClient(ev.clientX, ev.clientY);
     });
     el.plChart.addEventListener("mouseleave", () => {
       if (!plInspecting) clearPlInspect();
     });
     el.plChart.addEventListener("click", (ev) => {
+      const rect = el.plChart.getBoundingClientRect();
+      if (ev.clientX - rect.left >= rect.width - PRICE_AXIS_PX) {
+        nudgePlChartHeight(70);
+        return;
+      }
       if (crosshairVisible() || plInspecting) {
         ev.preventDefault();
         clearPlInspect();

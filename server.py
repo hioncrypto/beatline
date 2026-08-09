@@ -1743,11 +1743,21 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/push/test":
+            # Audible Best-buy style push — exercises the real clear_edge SW path
+            # (type "test" used to hit a silent keepalive and lied about BG).
             n = send_web_push(
                 {
-                    "type": "test",
+                    "type": "clear_edge",
+                    "side": body.get("side") or "above",
+                    "ask_cents": int(body.get("ask_cents") or body.get("askCents") or 40),
+                    "p_win": float(body.get("p_win") or body.get("pWin") or 0.55),
+                    "suggest_stake": body.get("suggest_stake")
+                    if body.get("suggest_stake") is not None
+                    else body.get("suggestStake") or 25,
+                    "ticker": body.get("ticker") or "TEST",
                     "beat": body.get("beat"),
-                    "ticker": "TEST",
+                    "price_to_beat": body.get("beat"),
+                    "target": body.get("beat"),
                     "close_et": body.get("close_et"),
                 }
             )

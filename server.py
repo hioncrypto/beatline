@@ -1620,22 +1620,21 @@ def push_watcher_loop() -> None:
                 # matching in-app Suggested buy.
                 confirmed = _edge_confirm_count >= EDGE_CONFIRM_POLLS
                 ask = int(edge["ask_cents"])
-                cooled = now - _last_edge_at >= EDGE_PUSH_COOLDOWN_SEC
                 ask_improved = (
                     sticky == _last_edge_key
                     and _last_edge_ask is not None
                     and (_last_edge_ask - ask) >= 5
                 )
-                # New window/side: always push. Same side: ask improve (with a
-                # short gap), or after full cooldown so a swallowed delivery
-                # can retry while the edge is still clear.
+                # New window/side: always push. Same side: only on ask improve
+                # (with a short gap). After the edge is gone long enough,
+                # EDGE_GONE_RESET clears _last_edge_key so a return can push.
+                # Do NOT re-push the same sticky every cooldown — that stacked
+                # tray renotifies and then armed the client into BG silence.
                 if not confirmed:
                     should_push = False
                 elif sticky != _last_edge_key:
                     should_push = True
                 elif ask_improved and (now - _last_edge_at) >= 20.0:
-                    should_push = True
-                elif cooled:
                     should_push = True
                 else:
                     should_push = False

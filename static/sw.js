@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.13-bg-visible-fix";
+const SW_VERSION = "3.14-alert-burst-fix";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -212,7 +212,7 @@ async function showEdgeNotification(payload, { force = false } = {}) {
     vibrate: [80, 40, 80, 40, 80, 40, 160],
     tag: "kalshi-clear-edge",
     renotify: true,
-    requireInteraction: true,
+    requireInteraction: false,
     silent: false,
     data: edgeData,
   });
@@ -356,8 +356,16 @@ async function checkClearEdge(forceNotify) {
     beat: data.beat ?? data.price_to_beat,
     ticker: data.ticker,
   };
-  await showEdgeNotification(payload, { force: true });
+  await showEdgeNotification(payload, { force: false });
   // Arm only after a real notification so background pushes keep working.
+  // If a focused page owned the chime, showEdgeNotification no-ops and we
+  // must NOT stamp edgeAt here (or we'd silence later background pushes).
+  if (await hasFocusedClient()) {
+    state.pendingEdgeKey = null;
+    state.pendingEdgeCount = 0;
+    await writeState(state);
+    return;
+  }
   state.edgeKey = sticky;
   state.edgeAsk = ask;
   state.edgeAt = now;
@@ -415,6 +423,31 @@ self.addEventListener("message", (event) => {
         if (typeof msg.chimeOn === "boolean") state.chimeOn = msg.chimeOn;
         await writeState(state);
         startPollLoop();
+      })()
+    );
+  }
+  if (msg.type === "get-edge-state") {
+    event.waitUntil(
+      (async () => {
+        const state = await readState();
+        const all = await self.clients.matchAll({
+          type: "window",
+          includeUncontrolled: true,
+        });
+        const payload = {
+          type: "edge-state",
+          edgeKey: state.edgeKey || null,
+          edgeAsk: Number(state.edgeAsk) || 0,
+          edgeAt: Number(state.edgeAt) || 0,
+          chimeOn: !!state.chimeOn,
+        };
+        for (const client of all) {
+          try {
+            client.postMessage(payload);
+          } catch {
+            // ignore
+          }
+        }
       })()
     );
   }
@@ -532,10 +565,10 @@ self.addEventListener("push", (event) => {
         const sameSide = prevKey === sticky || prevKey.startsWith(`${sticky}:`);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
 
-        // Always prefer sounding the Best-buy notification on Web Push.
-        // Dedup only via sticky + recent edgeAt (set after a real notify or
-        // after the page posts edge-armed with chimed:true). Do NOT drop on
-        // visibility alone — Android often reports visible while backgrounded.
+        // Focused page owns the in-app chime — do not show or stamp edgeAt
+        // (a silent FG system banner used to consume the sticky and block BG).
+        if (await hasFocusedClient()) return;
+
         if (
           sameSide &&
           !askImproved &&

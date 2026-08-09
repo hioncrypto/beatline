@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.99";
+  const APP_VERSION = "10.00";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5073,7 +5073,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.21", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.22", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5090,30 +5090,18 @@
               edgeAt: Number(msg.edgeAt) || 0,
               chimeOn: !!msg.chimeOn,
             };
-            // Re-apply a recent BG Best-buy if the page missed the broadcast
-            // (frozen tab / no network / shade open).
-            const last = msg.lastEdgeAlert;
-            const at = last && (Number(last.at) || Number(msg.edgeAt) || 0);
-            if (
-              last &&
-              last.side &&
-              at &&
-              Date.now() - at < HELD_ALERT_MS &&
-              !heldAlertStillValid()
-            ) {
-              holdAlertEdgeFromNotify(last);
-            }
+            // Do not paint Best Side from SW lastEdgeAlert — phone notify and
+            // in-app alerts are separate market-driven branches.
             return;
           }
-          if (msg.type !== "apply-edge-alert") return;
-          holdAlertEdgeFromNotify(msg);
+          // apply-edge-alert ignored — never mirror tray payload into Best Side.
         });
       }
       postToSW({ type: "get-edge-state" });
       // Brief wait so cold-open first-arm can see a recent BG sticky.
       await new Promise((r) => setTimeout(r, 200));
-      // If a Best-buy notification is already in the tray, paint it in-app.
-      adoptOpenEdgeNotifications().catch(() => {});
+      // Drop any old notify-held Best Side from prior builds.
+      clearHeldAlertEdge();
       return reg;
     } catch (err) {
       console.warn("SW register failed", err);
@@ -5209,150 +5197,28 @@
     }
   }
 
-  function holdAlertEdgeFromNotify(payload) {
-    if (!payload || !payload.side) return;
-    const side = payload.side === "below" ? "below" : "above";
-    const ask = Math.round(
-      Number(payload.askCents != null ? payload.askCents : payload.ask_cents) ||
-        0
-    );
-    const stakeRaw =
-      payload.suggestStake != null
-        ? payload.suggestStake
-        : payload.suggest_stake;
-    const stake =
-      stakeRaw != null && Number.isFinite(Number(stakeRaw))
-        ? Math.round(Number(stakeRaw))
-        : null;
-    const pWinRaw = payload.pWin != null ? payload.pWin : payload.p_win;
-    const pWin =
-      pWinRaw != null && Number.isFinite(Number(pWinRaw))
-        ? Number(pWinRaw)
-        : null;
-    // Prefer live window ticker so heldAlertStillValid does not wipe TEST/*.
-    const rawTicker = String(payload.ticker || "");
-    const ticker =
-      !rawTicker || rawTicker === "TEST" || rawTicker.startsWith("TEST-")
-        ? lastTicker || lastFifteenTicker || rawTicker
-        : rawTicker;
-    heldAlertEdge = {
-      side,
-      askCents: ask || null,
-      pWin,
-      suggestStake: stake,
-      ticker,
-      beat: payload.beat ?? payload.price_to_beat ?? null,
-      at: Date.now(),
-      fromNotify: true,
-    };
-    try {
-      sessionStorage.setItem(HELD_ALERT_KEY, JSON.stringify(heldAlertEdge));
-    } catch {
-      // ignore
-    }
-    // Quiet-arm FIRST so refreshBestSide cannot first-arm → alert dump.
-    quietArmClearEdge(
-      {
-        side,
-        askCents: ask || null,
-      },
-      { chimed: false, ticker }
-    );
-    // Phone notification already rang for this sticky — don't FG re-chime it.
-    markEdgeSounded({ side, askCents: ask || null }, { ask: ask || 0 });
-    if (!swEdgeState) swEdgeState = { edgeKey: null, edgeAsk: 0, edgeAt: 0, chimeOn };
-    swEdgeState.edgeKey = `${ticker}:${side}`;
-    swEdgeState.edgeAsk = ask || 0;
-    swEdgeState.edgeAt = Date.now();
-    // Paint the Suggested buy immediately from the notification payload.
-    // Do not wait on live tape — phone alert and in-app Best Side must match
-    // even when the app is offline / unfocused / still on Wait.
-    try {
-      paintHeldAlertEdge(heldAlertEdge);
-      flashBestSide();
-    } catch {
-      // ignore
-    }
-    try {
-      refreshBestSide();
-    } catch {
-      // ignore — may run before odds are ready
-    }
-    // refreshBestSide can race back to Wait — re-assert notify paint.
-    try {
-      if (heldAlertEdge) paintHeldAlertEdge(heldAlertEdge);
-    } catch {
-      // ignore
-    }
+  function holdAlertEdgeFromNotify(_payload) {
+    // No-op: phone notifications must not drive in-app Best Side.
+    // Foreground alerts come only from live market scoring in refreshBestSide.
   }
 
   function heldAlertStillValid() {
     const held = readHeldAlertEdge();
     if (!held || !held.side) return null;
+    // Notify-sourced holds from older builds — never trust them for UI.
+    if (held.fromNotify) {
+      clearHeldAlertEdge();
+      return null;
+    }
     if (Date.now() - (Number(held.at) || 0) > HELD_ALERT_MS) {
       clearHeldAlertEdge();
       return null;
     }
-    const heldTicker = String(held.ticker || "");
-    // Test / synthetic notifies, or notify with no ticker: keep painting.
-    if (
-      !heldTicker ||
-      heldTicker === "TEST" ||
-      heldTicker.startsWith("TEST-") ||
-      held.fromNotify
-    ) {
-      return held;
-    }
-    // Real window rolled to a different ticker — drop stale held.
-    if (heldTicker && lastTicker && heldTicker !== lastTicker) {
+    if (held.ticker && lastTicker && held.ticker !== lastTicker) {
       clearHeldAlertEdge();
       return null;
     }
     return held;
-  }
-
-  /** Pull Best-buy data out of an already-shown phone notification. */
-  async function adoptOpenEdgeNotifications() {
-    try {
-      const reg =
-        swReg ||
-        (await navigator.serviceWorker.getRegistration().catch(() => null));
-      if (!reg || typeof reg.getNotifications !== "function") return false;
-      const notes = await reg.getNotifications({ tag: "kalshi-clear-edge" });
-      for (const n of notes || []) {
-        const data = (n && n.data) || {};
-        if (data.kind === "clear_edge" && data.side) {
-          holdAlertEdgeFromNotify(data);
-          return true;
-        }
-        // Some browsers drop custom fields — parse title/body as fallback.
-        if (!data.side && n && n.title && /Best buy/i.test(String(n.title))) {
-          const title = String(n.title);
-          const body = String(n.body || "");
-          const side = /below/i.test(title)
-            ? "below"
-            : /above/i.test(title)
-              ? "above"
-              : null;
-          if (!side) continue;
-          const askM = body.match(/ask\s+(\d+)\s*¢/i);
-          const confM = body.match(/(\d+)\s*%\s*model/i);
-          const stakeM = body.match(/suggest\s+\$(\d+)/i);
-          holdAlertEdgeFromNotify({
-            side,
-            askCents: askM ? Number(askM[1]) : null,
-            pWin: confM ? Number(confM[1]) / 100 : null,
-            suggestStake: stakeM ? Number(stakeM[1]) : null,
-            kind: "clear_edge",
-            ticker: lastTicker || lastFifteenTicker || "TEST",
-          });
-          return true;
-        }
-      }
-    } catch {
-      // ignore
-    }
-    return false;
   }
 
   function paintHeldAlertEdge(held) {
@@ -5702,7 +5568,7 @@
     if (el.alertsStatusLine) {
       if (on) {
         el.alertsStatusLine.textContent =
-          "On — in-app chime when open · notification tone when backgrounded";
+          "On — in-app chime from live Best Side · phone notify when away";
       } else if (chimeOn && "Notification" in window && Notification.permission === "denied") {
         el.alertsStatusLine.textContent =
           "Blocked — site settings → Notifications → Allow, then Enable";
@@ -5775,7 +5641,7 @@
     }
     setStatus(
       "ok",
-      "Test sent — hear chime now (FG) · leave app to confirm BG notification"
+      "Test: FG chime now · leave app + Test again for phone notify"
     );
   }
 
@@ -6037,11 +5903,9 @@
         return;
       }
 
-      // App in background / locked — notification sound IS the chime.
-      // Also hold + paint locally so Best Side updates even if the SW
-      // broadcast is delayed/dropped (common with shade-open / no network).
+      // App in background / locked — phone notification is the chime.
+      // Best Side UI stays on live market only (no notify mirroring).
       markEdgeSounded(best, { ask });
-      holdAlertEdgeFromNotify(edgePayload);
       if (canNotify) {
         const ctrl =
           navigator.serviceWorker && navigator.serviceWorker.controller;
@@ -6879,17 +6743,8 @@
         clearHeldAlertEdge();
       }
     } else {
-      // Notification said Best buy but live tape already cooled — still show
-      // that Suggested buy briefly so the alert and UI match.
-      const held = heldAlertStillValid();
-      if (held && paintHeldAlertEdge(held)) {
-        if (!edgeAlertsArmed) edgeAlertsArmed = true;
-        return;
-      }
-      // Phone notification may exist while held was never applied (broadcast miss).
-      adoptOpenEdgeNotifications().then((ok) => {
-        if (ok) return;
-      });
+      // Live tape not clear — never paint Best Side from a phone notification.
+      // (Older builds held notify payloads here; that caused false in-app alerts.)
     }
 
     el.bestSide.hidden = false;
@@ -8558,14 +8413,8 @@
         // Quiet-sync any 15m window that rolled while we were away — do not
         // dump the "new 15m target / Price to beat" chime on open.
         suppressTargetChimeUntil = Date.now() + 4000;
-        // If we opened from a Best-buy notification, keep that suggestion up.
-        const held = heldAlertStillValid();
-        if (held) paintHeldAlertEdge(held);
-        else {
-          // Recover from SW sticky / open notification if broadcast was missed.
-          postToSW({ type: "get-edge-state" });
-          adoptOpenEdgeNotifications();
-        }
+        // Best Side follows live market only — do not adopt tray notifications.
+        postToSW({ type: "get-edge-state" });
         // Replay a chime that was blocked while audio was locked.
         if (pendingEdgeChime && chimeOn) {
           pendingEdgeChime = false;

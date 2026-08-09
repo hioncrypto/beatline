@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.21-notify-paint";
+const SW_VERSION = "3.22-branch-alerts";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -229,8 +229,14 @@ async function broadcastEdgeAlert(payload) {
   }
 }
 
-async function showEdgeNotification(payload) {
-  // Always show when called — callers own cooldown / ownership dedupe.
+async function showEdgeNotification(payload, { force = false } = {}) {
+  // App open + focused: foreground owns the alert from live market.
+  // Do not mirror a (possibly stale) push into the tray or the Best Side UI.
+  if (!force && (await hasFocusedClient())) {
+    await showPushKeepalive("Best buy (app open)");
+    return;
+  }
+  // Always show when called for background — callers own cooldown / ownership.
   // Background / locked: this notification IS the audible chime.
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const ask =
@@ -291,7 +297,6 @@ async function showEdgeNotification(payload) {
     silent: false,
     data: edgeData,
   });
-  // Persist so a frozen/offline page can re-apply Best Side on focus.
   try {
     const state = await readState();
     state.lastEdgeAlert = { ...edgeData, at: Date.now() };
@@ -299,9 +304,8 @@ async function showEdgeNotification(payload) {
   } catch {
     // ignore
   }
-  // Tell any open BeatLine windows to paint this Suggested buy so the
-  // notification and in-app Best Side stay in sync (quiet — no re-chime).
-  await broadcastEdgeAlert(edgeData);
+  // Intentionally do NOT broadcast apply-edge-alert into open windows.
+  // Phone notify and in-app Best Side are separate market-driven paths.
 }
 
 async function showProfitNotification(payload, { force = false } = {}) {
@@ -589,7 +593,7 @@ self.addEventListener("message", (event) => {
             return;
           }
         }
-        await showEdgeNotification(msg);
+        await showEdgeNotification(msg, { force: !!msg.force });
         state.edgeKey = sticky;
         state.edgeAsk = ask;
         state.edgeAt = now;
@@ -715,27 +719,14 @@ self.addEventListener("notificationclick", (event) => {
       for (const client of all) {
         if ("focus" in client) {
           await client.focus();
-          if (data.kind === "clear_edge") {
-            try {
-              client.postMessage({ type: "apply-edge-alert", ...data });
-            } catch {
-              // ignore
-            }
-          }
+          // Do not push notify payload into Best Side — live market owns the UI.
           // Do NOT navigate an existing client — navigate reloads the page and
           // re-triggers open first-arm / alert dump.
           return;
         }
       }
       if (clients.openWindow) {
-        const win = await clients.openWindow(url);
-        if (win && data.kind === "clear_edge") {
-          try {
-            win.postMessage({ type: "apply-edge-alert", ...data });
-          } catch {
-            // ignore
-          }
-        }
+        await clients.openWindow(url);
       }
     })()
   );

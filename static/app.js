@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.98";
+  const APP_VERSION = "9.99";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -383,7 +383,7 @@
    * phone just said Best buy.
    */
   let heldAlertEdge = null; // { side, askCents, pWin, suggestStake, ticker, beat, at }
-  const HELD_ALERT_MS = 3 * 60 * 1000;
+  const HELD_ALERT_MS = 5 * 60 * 1000;
   const HELD_ALERT_KEY = "beatlineHeldAlertEdge";
   // Restored at boot via restoreEdgeAlertKeyFromSession() after helpers exist.
   let lastClearEdgeAlertKey = null;
@@ -5073,7 +5073,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.20", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.21", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5112,6 +5112,8 @@
       postToSW({ type: "get-edge-state" });
       // Brief wait so cold-open first-arm can see a recent BG sticky.
       await new Promise((r) => setTimeout(r, 200));
+      // If a Best-buy notification is already in the tray, paint it in-app.
+      adoptOpenEdgeNotifications().catch(() => {});
       return reg;
     } catch (err) {
       console.warn("SW register failed", err);
@@ -5227,14 +5229,21 @@
       pWinRaw != null && Number.isFinite(Number(pWinRaw))
         ? Number(pWinRaw)
         : null;
+    // Prefer live window ticker so heldAlertStillValid does not wipe TEST/*.
+    const rawTicker = String(payload.ticker || "");
+    const ticker =
+      !rawTicker || rawTicker === "TEST" || rawTicker.startsWith("TEST-")
+        ? lastTicker || lastFifteenTicker || rawTicker
+        : rawTicker;
     heldAlertEdge = {
       side,
       askCents: ask || null,
       pWin,
       suggestStake: stake,
-      ticker: payload.ticker || "",
+      ticker,
       beat: payload.beat ?? payload.price_to_beat ?? null,
       at: Date.now(),
+      fromNotify: true,
     };
     try {
       sessionStorage.setItem(HELD_ALERT_KEY, JSON.stringify(heldAlertEdge));
@@ -5247,15 +5256,12 @@
         side,
         askCents: ask || null,
       },
-      { chimed: false, ticker: payload.ticker || "" }
+      { chimed: false, ticker }
     );
     // Phone notification already rang for this sticky — don't FG re-chime it.
-    markEdgeSounded(
-      { side, askCents: ask || null },
-      { ask: ask || 0 }
-    );
+    markEdgeSounded({ side, askCents: ask || null }, { ask: ask || 0 });
     if (!swEdgeState) swEdgeState = { edgeKey: null, edgeAsk: 0, edgeAt: 0, chimeOn };
-    swEdgeState.edgeKey = `${payload.ticker || ""}:${side}`;
+    swEdgeState.edgeKey = `${ticker}:${side}`;
     swEdgeState.edgeAsk = ask || 0;
     swEdgeState.edgeAt = Date.now();
     // Paint the Suggested buy immediately from the notification payload.
@@ -5272,6 +5278,12 @@
     } catch {
       // ignore — may run before odds are ready
     }
+    // refreshBestSide can race back to Wait — re-assert notify paint.
+    try {
+      if (heldAlertEdge) paintHeldAlertEdge(heldAlertEdge);
+    } catch {
+      // ignore
+    }
   }
 
   function heldAlertStillValid() {
@@ -5281,11 +5293,66 @@
       clearHeldAlertEdge();
       return null;
     }
-    if (held.ticker && lastTicker && held.ticker !== lastTicker) {
+    const heldTicker = String(held.ticker || "");
+    // Test / synthetic notifies, or notify with no ticker: keep painting.
+    if (
+      !heldTicker ||
+      heldTicker === "TEST" ||
+      heldTicker.startsWith("TEST-") ||
+      held.fromNotify
+    ) {
+      return held;
+    }
+    // Real window rolled to a different ticker — drop stale held.
+    if (heldTicker && lastTicker && heldTicker !== lastTicker) {
       clearHeldAlertEdge();
       return null;
     }
     return held;
+  }
+
+  /** Pull Best-buy data out of an already-shown phone notification. */
+  async function adoptOpenEdgeNotifications() {
+    try {
+      const reg =
+        swReg ||
+        (await navigator.serviceWorker.getRegistration().catch(() => null));
+      if (!reg || typeof reg.getNotifications !== "function") return false;
+      const notes = await reg.getNotifications({ tag: "kalshi-clear-edge" });
+      for (const n of notes || []) {
+        const data = (n && n.data) || {};
+        if (data.kind === "clear_edge" && data.side) {
+          holdAlertEdgeFromNotify(data);
+          return true;
+        }
+        // Some browsers drop custom fields — parse title/body as fallback.
+        if (!data.side && n && n.title && /Best buy/i.test(String(n.title))) {
+          const title = String(n.title);
+          const body = String(n.body || "");
+          const side = /below/i.test(title)
+            ? "below"
+            : /above/i.test(title)
+              ? "above"
+              : null;
+          if (!side) continue;
+          const askM = body.match(/ask\s+(\d+)\s*¢/i);
+          const confM = body.match(/(\d+)\s*%\s*model/i);
+          const stakeM = body.match(/suggest\s+\$(\d+)/i);
+          holdAlertEdgeFromNotify({
+            side,
+            askCents: askM ? Number(askM[1]) : null,
+            pWin: confM ? Number(confM[1]) / 100 : null,
+            suggestStake: stakeM ? Number(stakeM[1]) : null,
+            kind: "clear_edge",
+            ticker: lastTicker || lastFifteenTicker || "TEST",
+          });
+          return true;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return false;
   }
 
   function paintHeldAlertEdge(held) {
@@ -6819,6 +6886,10 @@
         if (!edgeAlertsArmed) edgeAlertsArmed = true;
         return;
       }
+      // Phone notification may exist while held was never applied (broadcast miss).
+      adoptOpenEdgeNotifications().then((ok) => {
+        if (ok) return;
+      });
     }
 
     el.bestSide.hidden = false;
@@ -8491,8 +8562,9 @@
         const held = heldAlertStillValid();
         if (held) paintHeldAlertEdge(held);
         else {
-          // Recover from SW sticky if broadcast was missed while frozen.
+          // Recover from SW sticky / open notification if broadcast was missed.
           postToSW({ type: "get-edge-state" });
+          adoptOpenEdgeNotifications();
         }
         // Replay a chime that was blocked while audio was locked.
         if (pendingEdgeChime && chimeOn) {

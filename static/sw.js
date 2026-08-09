@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.20-in-app-edge";
+const SW_VERSION = "3.21-notify-paint";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -201,8 +201,9 @@ async function broadcastEdgeAlert(payload) {
         : payload.suggest_stake),
     beat: payload && (payload.beat ?? payload.price_to_beat ?? payload.target),
     ticker: payload && payload.ticker,
+    kind: "clear_edge",
   };
-  try {
+  const send = async () => {
     const all = await clients.matchAll({
       type: "window",
       includeUncontrolled: true,
@@ -213,6 +214,15 @@ async function broadcastEdgeAlert(payload) {
       } catch {
         // ignore
       }
+    }
+    return all.length;
+  };
+  try {
+    let n = await send();
+    // Retry once — Android sometimes has no client list on the first tick.
+    if (n === 0) {
+      await new Promise((r) => setTimeout(r, 400));
+      n = await send();
     }
   } catch {
     // ignore

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.84";
+  const APP_VERSION = "9.85";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -1357,10 +1357,18 @@
     ) {
       return false;
     }
-    // Clamp into current data so a shorter history still shows something.
+    // Keep the user's zoom place, including zoomed-out full-history views.
+    // Only require some overlap with current bars so an empty window never sticks.
     const maxTo = Math.max(barCount - 0.5, 0.5);
-    const from = Math.max(-0.5, Math.min(saved.from, maxTo - 1));
-    const to = Math.max(from + 1, Math.min(saved.to, maxTo + 4));
+    let from = saved.from;
+    let to = saved.to;
+    if (to < -0.5 || from > maxTo + 0.5) {
+      return false;
+    }
+    // If history shrank a lot, nudge the window so it still covers data.
+    if (to - from < 1) {
+      to = from + 1;
+    }
     plRestoringRange = true;
     try {
       plChart.timeScale().setVisibleLogicalRange({ from, to });
@@ -1537,8 +1545,8 @@
     }
     const mid = (range.from + range.to) / 2;
     let half = ((range.to - range.from) / 2) * factor;
-    // Keep a usable window: at least ~3 bars, at most a bit past full history.
-    half = Math.max(1.5, Math.min(half, Math.max(barCount / 2 + 4, 6)));
+    // Keep a usable window: at least ~3 bars; allow wide full-history zoom-out.
+    half = Math.max(1.5, Math.min(half, Math.max(barCount, 8)));
     const next = {
       from: mid - half,
       to: mid + half,
@@ -1721,6 +1729,7 @@
 
     let pinchStartDist = null;
     let pinchStartRange = null;
+    let pinchMoved = false;
     let panStartX = null;
     let panStartRange = null;
     let panMoved = false;
@@ -1756,12 +1765,18 @@
     const applyRange = (from, to) => {
       if (!plChart || !Number.isFinite(from) || !Number.isFinite(to) || to <= from)
         return;
+      // Block the range-change subscriber while we set it; endGesture saves.
       plRestoringRange = true;
       try {
         plChart.timeScale().setVisibleLogicalRange({ from, to });
       } catch {
         // ignore
       }
+    };
+
+    const commitVisibleRange = () => {
+      plRestoringRange = false;
+      capturePlVisibleRange();
     };
 
     const applyYMargin = (margin) => {
@@ -1825,6 +1840,7 @@
           panMoved = false;
           pinchStartDist = touchDist(ev.touches[0], ev.touches[1]);
           pinchStartRange = readRange();
+          pinchMoved = false;
           return;
         }
 
@@ -1892,7 +1908,9 @@
           const barCount = Math.max(1, plLastBarCount);
           let half =
             ((pinchStartRange.to - pinchStartRange.from) / 2) * factor;
-          half = Math.max(2, Math.min(half, Math.max(barCount / 2 + 2, 4)));
+          // Allow zooming out past full history so the whole ledger can hold.
+          half = Math.max(2, Math.min(half, Math.max(barCount, 8)));
+          pinchMoved = true;
           applyRange(mid - half, mid + half);
           return;
         }
@@ -1950,12 +1968,14 @@
     const endGesture = () => {
       clearInspectHold();
       const wasPan = panMoved;
+      const wasPinch = pinchMoved;
       const wasAxis = axisMode;
       const heldMs = pressStartedAt ? Date.now() - pressStartedAt : 0;
       const tapX = pressStartX;
       const tapY = pressStartY;
       const quickTap =
         !wasPan &&
+        !wasPinch &&
         !wasAxis &&
         !activatedInspect &&
         heldMs > 0 &&
@@ -1964,6 +1984,7 @@
 
       pinchStartDist = null;
       pinchStartRange = null;
+      pinchMoved = false;
       panStartX = null;
       panStartRange = null;
       panMoved = false;
@@ -1976,9 +1997,9 @@
       pressStartedAt = 0;
       inspectMode = false;
 
-      if (wasPan) {
-        plRestoringRange = false;
-        capturePlVisibleRange();
+      if (wasPan || wasPinch) {
+        // Persist zoom/pan — do not snap back to the previous window.
+        commitVisibleRange();
         clearPlInspect();
       } else if (wasAxis) {
         clearPlInspect();
@@ -2205,7 +2226,8 @@
       Math.min(14, Math.floor(280 / Math.max(8, candles.length)))
     );
     try {
-      const scaleOpts = { minBarSpacing: 0.5, rightOffset: 4 };
+      // Low minBarSpacing so zooming out to the full ledger can hold.
+      const scaleOpts = { minBarSpacing: 0.1, rightOffset: 4 };
       if (!plUi.range) scaleOpts.barSpacing = spacing;
       plChart.timeScale().applyOptions(scaleOpts);
     } catch {

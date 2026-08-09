@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.85";
+  const APP_VERSION = "9.86";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4623,68 +4623,49 @@
       ctx.resume().catch(() => {});
     }
     // Prime HTMLAudio — required on iOS before programmatic .play() works.
-    try {
-      const a = getEdgeAudio();
-      const wasMuted = a.muted;
-      a.muted = true;
-      const p = a.play();
-      if (p && typeof p.then === "function") {
-        p.then(() => {
+    // Only reset the element if it is still muted (our unlock priming). If a
+    // real chime unmuted and started while unlock was pending, do not kill it.
+    const prime = (a) => {
+      if (!a) return;
+      try {
+        const wasMuted = a.muted;
+        a.muted = true;
+        const p = a.play();
+        if (p && typeof p.then === "function") {
+          p.then(() => {
+            if (!a.muted) return;
+            a.pause();
+            a.currentTime = 0;
+            a.muted = wasMuted;
+          }).catch(() => {
+            if (a.muted) a.muted = wasMuted;
+          });
+        } else {
           a.pause();
           a.currentTime = 0;
           a.muted = wasMuted;
-          audioUnlocked = true;
-        }).catch(() => {
-          a.muted = wasMuted;
-        });
-      } else {
-        a.pause();
-        a.currentTime = 0;
-        a.muted = wasMuted;
-        audioUnlocked = true;
+        }
+      } catch {
+        // ignore
       }
+    };
+    try {
+      prime(getEdgeAudio());
     } catch {
       // ignore
     }
     try {
-      const c = getClickAudio();
-      const wasMuted = c.muted;
-      c.muted = true;
-      const p = c.play();
-      if (p && typeof p.then === "function") {
-        p.then(() => {
-          c.pause();
-          c.currentTime = 0;
-          c.muted = wasMuted;
-        }).catch(() => {
-          c.muted = wasMuted;
-        });
-      } else {
-        c.pause();
-        c.currentTime = 0;
-        c.muted = wasMuted;
-      }
+      prime(getClickAudio());
     } catch {
       // ignore
     }
     try {
-      const pr = getProfitAudio();
-      const wasMuted = pr.muted;
-      pr.muted = true;
-      const p = pr.play();
-      if (p && typeof p.then === "function") {
-        p.then(() => {
-          pr.pause();
-          pr.currentTime = 0;
-          pr.muted = wasMuted;
-        }).catch(() => {
-          pr.muted = wasMuted;
-        });
-      } else {
-        pr.pause();
-        pr.currentTime = 0;
-        pr.muted = wasMuted;
-      }
+      prime(getProfitAudio());
+    } catch {
+      // ignore
+    }
+    try {
+      prime(getTargetAudio());
     } catch {
       // ignore
     }
@@ -5537,20 +5518,21 @@
       chimeOn,
     };
 
-    // Foreground: in-app chime. Background: system notification is the tone
-    // (iOS suppresses notification sound while the app is open — so do NOT
-    // force a notify while visible or the SW arms the edge and never rings
-    // when you leave).
-    ensureAudioReady().then(async (ctx) => {
+    // Foreground: in-app chime (+ vibrate). Background: system notification.
+    // Do NOT force a system notify while visible — Android/iOS usually mute
+    // notification sound for the focused app, so that "fallback" is silent.
+    ensureAudioReady().then(async () => {
       if (visible) {
         const played = await playEdgeChime(true);
         vibrateEdge();
-        if (!played || !ctx || ctx.state !== "running") {
+        try {
+          flashBestSide();
+        } catch {
+          // ignore
+        }
+        if (!played) {
+          // Autoplay blocked — retry on the next tap (unlock handler).
           pendingEdgeChime = true;
-          // Chime failed — fall back to a sounding system notification.
-          if (canNotify) {
-            postToSW({ type: "edge-notify", force: true, ...edgePayload });
-          }
         } else {
           pendingEdgeChime = false;
           // Remember this edge so SW/push don't re-blast it on background.
@@ -8036,6 +8018,12 @@
         // If we opened from a Best-buy notification, keep that suggestion up.
         const held = heldAlertStillValid();
         if (held) paintHeldAlertEdge(held);
+        // Replay a chime that was blocked while audio was locked.
+        if (pendingEdgeChime && chimeOn) {
+          pendingEdgeChime = false;
+          playEdgeChime(true);
+          vibrateEdge();
+        }
         // Re-enter quietly: keep the current edge armed so refresh doesn't
         // replay every Best Side tone that stacked while we were away.
         if (lastBestPick && lastBestPick.side) {

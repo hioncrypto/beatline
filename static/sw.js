@@ -627,33 +627,19 @@ self.addEventListener("push", (event) => {
     );
     return;
   }
-  event.waitUntil(
-    (async () => {
-      const state = await readState();
-      const ticker = payload.ticker || "";
-      const now = Date.now();
-      const lastAt = Number(state.targetAt) || 0;
-      if (
-        state.notifiedTicker &&
-        state.notifiedTicker === ticker &&
-        now - lastAt < 120_000
-      ) {
-        return;
-      }
-      await showTargetNotification(
-        {
-          beat: payload.beat ?? payload.price_to_beat ?? payload.target,
-          ticker: payload.ticker,
-          closeEt: payload.close_et || payload.closeEt,
-        },
-        { force: true }
-      );
-      state.notifiedTicker = ticker;
-      state.targetAt = now;
-      if (ticker) state.ticker = ticker;
-      await writeState(state);
-    })()
-  );
+  // new_target / TO BEAT generation — update ticker state only, never alert.
+  if (kind === "new_target" || kind === "to_beat" || !payload.type) {
+    event.waitUntil(
+      (async () => {
+        const state = await readState();
+        const ticker = payload.ticker || "";
+        const beat = payload.beat ?? payload.price_to_beat ?? payload.target;
+        if (ticker) state.ticker = ticker;
+        if (beat != null) state.target = beat;
+        await writeState(state);
+      })()
+    );
+  }
 });
 
 self.addEventListener("notificationclick", (event) => {

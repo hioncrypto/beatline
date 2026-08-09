@@ -1567,20 +1567,12 @@ def push_watcher_loop() -> None:
                 and ticker != _last_push_ticker
                 and data.get("source") == "kalshi"
             ):
-                n = send_web_push(
-                    {
-                        "type": "new_target",
-                        "ticker": ticker,
-                        "beat": beat,
-                        "price_to_beat": beat,
-                        "target": beat,
-                        "close_et": data.get("close_et"),
-                        "close_time": data.get("close_time"),
-                    }
-                )
+                # New 15m / TO BEAT window — do NOT push an alert for this
+                # trigger. Still reset clear-edge sticky so Best-buy can fire
+                # fresh in the new window.
                 print(
                     f"[kalshi-btc-target] new 15m target {ticker} "
-                    f"beat={beat} pushed={n}"
+                    f"beat={beat} (no to-beat alert)"
                 )
                 _last_edge_key = None
                 _last_edge_gone_at = 0.0

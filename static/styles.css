@@ -2159,9 +2159,26 @@ h1 {
   color: var(--down);
 }
 
-.dock-btn:disabled {
-  opacity: 0.4;
+.dock-btn:disabled,
+.dock-btn.is-locked,
+.demo-btn.is-locked {
+  opacity: 0.45;
   cursor: not-allowed;
+}
+
+.open-pl-close.is-pulse {
+  animation: open-pl-close-pulse 0.7s ease-in-out 2;
+  box-shadow: 0 0 0 2px rgba(255, 210, 138, 0.85);
+}
+
+@keyframes open-pl-close-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.03);
+  }
 }
 
 .odds-row.compact {

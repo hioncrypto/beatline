@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "9.96";
+  const APP_VERSION = "9.97";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -3663,11 +3663,32 @@
     const busyBelow = !!demo.position && !canBuySide("below");
     if (el.demoBuyBest) {
       const bestSide = lastBestPick && lastBestPick.side;
-      el.demoBuyBest.disabled =
+      const bestLocked =
         !bestSide || (demo.position ? !canBuySide(bestSide) : false);
+      // Keep clickable when locked so we can explain "close first to flip".
+      el.demoBuyBest.disabled = !demo.on;
+      el.demoBuyBest.classList.toggle("is-locked", !!demo.on && bestLocked);
+      el.demoBuyBest.setAttribute(
+        "aria-disabled",
+        !demo.on || bestLocked ? "true" : "false"
+      );
     }
-    if (el.demoBuyAbove) el.demoBuyAbove.disabled = !demo.on || busyAbove;
-    if (el.demoBuyBelow) el.demoBuyBelow.disabled = !demo.on || busyBelow;
+    if (el.demoBuyAbove) {
+      el.demoBuyAbove.disabled = !demo.on;
+      el.demoBuyAbove.classList.toggle("is-locked", !!demo.on && busyAbove);
+      el.demoBuyAbove.setAttribute(
+        "aria-disabled",
+        !demo.on || busyAbove ? "true" : "false"
+      );
+    }
+    if (el.demoBuyBelow) {
+      el.demoBuyBelow.disabled = !demo.on;
+      el.demoBuyBelow.classList.toggle("is-locked", !!demo.on && busyBelow);
+      el.demoBuyBelow.setAttribute(
+        "aria-disabled",
+        !demo.on || busyBelow ? "true" : "false"
+      );
+    }
     if (el.demoClose) el.demoClose.disabled = !pos || !mark || mark.bidCents == null;
     syncBuyDock();
   }
@@ -4123,10 +4144,29 @@
   function openBuySheet(side, opts = {}) {
     if (side !== "above" && side !== "below") return;
     if (demo.position && !canBuySide(side)) {
+      const held = demo.position.side === "above" ? "Above" : "Below";
       setStatus(
         "warn",
-        `Already long ${demo.position.side === "above" ? "Above" : "Below"} — close first to flip`
+        `Already long ${held} — tap Close at bid first to flip`
       );
+      // Expand the open-P/L drawer so Close is obvious.
+      try {
+        if (el.openPlBar) {
+          el.openPlBar.hidden = false;
+          el.openPlBar.classList.remove("is-collapsed");
+          document.body.classList.remove("open-pl-collapsed");
+        }
+        if (el.openPlClose) {
+          el.openPlClose.classList.add("is-pulse");
+          setTimeout(() => {
+            try {
+              el.openPlClose.classList.remove("is-pulse");
+            } catch (_) {}
+          }, 1600);
+        }
+      } catch {
+        // ignore
+      }
       return;
     }
     const ask = side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
@@ -7072,32 +7112,46 @@
         lastRoiAsks.below != null ? `${Math.round(lastRoiAsks.below)}¢` : "—";
     }
     if (el.dockBuyAbove) {
-      // Same-side add must stay tappable while a position is open.
-      el.dockBuyAbove.disabled = !canAbove;
+      // Never HTML-disable opposite side — clicks must explain "close to flip".
+      el.dockBuyAbove.disabled = false;
+      el.dockBuyAbove.classList.toggle("is-locked", !canAbove);
       el.dockBuyAbove.setAttribute("aria-disabled", canAbove ? "false" : "true");
       const label = el.dockBuyAbove.querySelector(".dock-label");
       if (label) {
         label.textContent =
-          pos && pos.side === "above" ? "Add Above" : "Buy Above";
+          pos && pos.side === "above"
+            ? "Add Above"
+            : pos && pos.side === "below"
+              ? "Close to flip"
+              : "Buy Above";
       }
     }
     if (el.dockBuyBelow) {
-      el.dockBuyBelow.disabled = !canBelow;
+      el.dockBuyBelow.disabled = false;
+      el.dockBuyBelow.classList.toggle("is-locked", !canBelow);
       el.dockBuyBelow.setAttribute("aria-disabled", canBelow ? "false" : "true");
       const label = el.dockBuyBelow.querySelector(".dock-label");
       if (label) {
         label.textContent =
-          pos && pos.side === "below" ? "Add Below" : "Buy Below";
+          pos && pos.side === "below"
+            ? "Add Below"
+            : pos && pos.side === "above"
+              ? "Close to flip"
+              : "Buy Below";
       }
     }
     if (el.dockBuyBest) {
       const bestSide = lastBestPick && lastBestPick.side;
       const canBest = !!(bestSide && canBuySide(bestSide));
-      el.dockBuyBest.disabled = !canBest;
+      el.dockBuyBest.disabled = false;
+      el.dockBuyBest.classList.toggle("is-locked", !canBest);
+      el.dockBuyBest.setAttribute("aria-disabled", canBest ? "false" : "true");
       const label = el.dockBuyBest.querySelector(".dock-label");
       if (label) {
-        label.textContent =
-          pos && bestSide && pos.side === bestSide ? "Add Best" : "Best";
+        if (!bestSide) label.textContent = "Best";
+        else if (pos && pos.side === bestSide) label.textContent = "Add Best";
+        else if (pos && pos.side !== bestSide) label.textContent = "Close to flip";
+        else label.textContent = "Best";
       }
     }
   }

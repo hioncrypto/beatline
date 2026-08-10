@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.11";
+  const APP_VERSION = "10.12";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -2186,7 +2186,7 @@
     }
   }
 
-  /** Candle timestamp in ms. */
+  /** Candle timestamp in ms (real wall clock — not the synthetic LWC `time`). */
   function plCandleAtMs(c) {
     if (!c) return NaN;
     const at = Number(c.at);
@@ -2196,101 +2196,85 @@
   }
 
   /**
-   * Screen X for each Pacific midnight between trades.
-   * Prefer exact midnight; fall back to midpoint between day-change candles.
+   * Every Pacific midnight strictly between the first and last trade.
+   * Includes empty days with no trades (those were previously skipped).
    */
-  function plDayLineXs() {
-    const candles = plCandlesCache || [];
-    if (!plChart || candles.length < 2) return [];
-    const xs = [];
-    let prevKey = appDateKey(plCandleAtMs(candles[0]));
-    for (let i = 1; i < candles.length; i++) {
-      const ms = plCandleAtMs(candles[i]);
-      const key = appDateKey(ms);
-      if (!key || key === prevKey) continue;
-      prevKey = key;
-      let x = null;
-      // Exact Pacific midnight for this candle's calendar day.
-      try {
-        const midSec = Math.floor(startOfAppDayMs(ms) / 1000);
-        x = plTimeToCoordinate(midSec);
-      } catch {
-        x = null;
-      }
-      // Fallback: halfway between the last prior-day bar and this bar.
-      if (x == null || !Number.isFinite(x)) {
-        try {
-          const xa = plChart.timeScale().timeToCoordinate(candles[i - 1].time);
-          const xb = plChart.timeScale().timeToCoordinate(candles[i].time);
-          if (
-            xa != null &&
-            xb != null &&
-            Number.isFinite(xa) &&
-            Number.isFinite(xb)
-          ) {
-            x = (xa + xb) / 2;
-          }
-        } catch {
-          x = null;
-        }
-      }
-      if (x != null && Number.isFinite(x)) xs.push(x);
+  function plPacificMidnightMsList(candles) {
+    if (!candles || candles.length < 2) return [];
+    const firstMs = plCandleAtMs(candles[0]);
+    const lastMs = plCandleAtMs(candles[candles.length - 1]);
+    if (!Number.isFinite(firstMs) || !Number.isFinite(lastMs) || lastMs <= firstMs) {
+      return [];
     }
-    return xs;
+    const out = [];
+    let t = startOfAppDayMs(firstMs);
+    // First midnight strictly after the first trade.
+    if (t <= firstMs) {
+      const next = startOfAppDayMs(t + 36 * 3600 * 1000);
+      if (next <= t) return out;
+      t = next;
+    }
+    while (t < lastMs && out.length < 500) {
+      out.push(t);
+      const next = startOfAppDayMs(t + 36 * 3600 * 1000);
+      if (next <= t) break;
+      t = next;
+    }
+    return out;
   }
 
-  /** Map a unix-sec time onto chart X, interpolating between neighboring bars. */
-  function plTimeToCoordinate(timeSec) {
-    if (!plChart || !Number.isFinite(timeSec)) return null;
-    try {
-      const x = plChart.timeScale().timeToCoordinate(timeSec);
-      if (x != null && Number.isFinite(x)) return x;
-    } catch {
-      // fall through to manual interpolate
-    }
+  /**
+   * Map a real wall-clock instant onto chart X.
+   * LWC bar `time` can be bumped +1s for uniqueness, so interpolate by `.at`
+   * and only use `time` to ask the chart for each neighbor's pixel X.
+   */
+  function plWallTimeToX(wallMs) {
+    if (!plChart || !Number.isFinite(wallMs)) return null;
     const candles = plCandlesCache || [];
     if (candles.length < 2) return null;
-    if (timeSec <= candles[0].time) {
+
+    const barX = (c) => {
       try {
-        return plChart.timeScale().timeToCoordinate(candles[0].time);
+        const x = plChart.timeScale().timeToCoordinate(c.time);
+        return x != null && Number.isFinite(x) ? x : null;
       } catch {
         return null;
       }
-    }
-    const last = candles[candles.length - 1];
-    if (timeSec >= last.time) {
-      try {
-        return plChart.timeScale().timeToCoordinate(last.time);
-      } catch {
-        return null;
-      }
-    }
+    };
+
+    const firstAt = plCandleAtMs(candles[0]);
+    const lastAt = plCandleAtMs(candles[candles.length - 1]);
+    if (wallMs <= firstAt) return barX(candles[0]);
+    if (wallMs >= lastAt) return barX(candles[candles.length - 1]);
+
     for (let i = 1; i < candles.length; i++) {
       const a = candles[i - 1];
       const b = candles[i];
-      if (b.time < timeSec) continue;
-      if (b.time === a.time) {
-        try {
-          return plChart.timeScale().timeToCoordinate(a.time);
-        } catch {
-          return null;
-        }
-      }
-      let xa = null;
-      let xb = null;
-      try {
-        xa = plChart.timeScale().timeToCoordinate(a.time);
-        xb = plChart.timeScale().timeToCoordinate(b.time);
-      } catch {
-        return null;
-      }
-      if (xa == null || xb == null || !Number.isFinite(xa) || !Number.isFinite(xb)) {
-        return null;
-      }
-      const t = (timeSec - a.time) / (b.time - a.time);
-      return xa + (xb - xa) * t;
+      const aAt = plCandleAtMs(a);
+      const bAt = plCandleAtMs(b);
+      if (!Number.isFinite(aAt) || !Number.isFinite(bAt)) continue;
+      if (bAt < wallMs) continue;
+      const xa = barX(a);
+      const xb = barX(b);
+      if (xa == null || xb == null) return null;
+      if (bAt === aAt) return xa;
+      const t = (wallMs - aAt) / (bAt - aAt);
+      return xa + (xb - xa) * Math.max(0, Math.min(1, t));
     }
     return null;
+  }
+
+  /** Screen X for each Pacific midnight in the trade span. */
+  function plDayLineXs() {
+    const candles = plCandlesCache || [];
+    if (!plChart || candles.length < 2) return [];
+    const midnights = plPacificMidnightMsList(candles);
+    const xs = [];
+    for (const ms of midnights) {
+      const x = plWallTimeToX(ms);
+      if (x != null && Number.isFinite(x)) xs.push({ x, ms });
+    }
+    return xs;
   }
 
   function clearPlDayLines() {
@@ -2315,8 +2299,8 @@
       clearPlDayLines();
       return;
     }
-    const xs = plDayLineXs();
-    if (!xs.length) {
+    const lines = plDayLineXs();
+    if (!lines.length) {
       clearPlDayLines();
       return;
     }
@@ -2325,13 +2309,13 @@
     const maxX = Math.max(0, chartW - 56);
     const frag = document.createDocumentFragment();
     let drawn = 0;
-    for (const x of xs) {
+    for (const { x, ms } of lines) {
       if (x == null || !Number.isFinite(x)) continue;
       if (x < 2 || x > maxX) continue;
       const line = document.createElement("div");
       line.className = "pl-day-line";
       line.style.left = `${x}px`;
-      line.title = "Pacific midnight";
+      line.title = `Pacific midnight · ${appDateKey(ms)}`;
       frag.appendChild(line);
       drawn += 1;
     }

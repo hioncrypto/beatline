@@ -1363,13 +1363,14 @@ def _short_term_trend() -> dict:
 
 
 def _green_spike_suggest(ask: float, p_win: float) -> int:
+    """Suggested Best-buy entry — stays ≤ $100 even if manual size goes to $250."""
     cost = ask / 100.0
     edge_amt = p_win - cost
     suggest = 10
     if edge_amt > 0 and cost < 1:
         kelly = edge_amt / max(0.01, 1.0 - cost)
-        suggest = int(max(5, min(40, round(100 * kelly * 0.3))))
-    return suggest
+        suggest = int(max(5, min(100, round(100 * kelly * 0.3))))
+    return min(100, suggest)
 
 
 def evaluate_clear_edge(

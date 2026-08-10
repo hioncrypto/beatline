@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.26-storage-resilient";
+const SW_VERSION = "3.27-no-15m-alarm";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -213,27 +213,10 @@ function sameEdgeSticky(prevKey, sticky) {
 }
 
 async function showTargetNotification(payload, { force = false } = {}) {
-  // Foreground tab already chimed for new targets — skip duplicate system tone.
-  if (!force && (await hasVisibleClient())) return;
-  const title = "BeatLine · new 15m target";
-  const body =
-    payload && payload.beat != null
-      ? `Price to beat $${Number(payload.beat).toLocaleString("en-US", {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })}${payload.closeEt ? ` · settles ${payload.closeEt}` : ""}`
-      : "A new 15-minute window just opened";
-  await self.registration.showNotification(title, {
-    body,
-    icon: "/icons/icon-192.png?v=2.6",
-    badge: "/icons/icon-192.png?v=2.6",
-    vibrate: [80, 40, 80, 40, 160],
-    tag: "kalshi-15m-target",
-    renotify: true,
-    requireInteraction: false,
-    silent: false,
-    data: { url: "/", ticker: payload && payload.ticker },
-  });
+  // New 15m / TO BEAT must never sound an alarm — silent keepalive only.
+  void payload;
+  void force;
+  await showPushKeepalive("TO BEAT updated");
 }
 
 /**

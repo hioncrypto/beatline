@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.18";
+  const APP_VERSION = "10.19";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4006,7 +4006,10 @@
   }
 
   const BUY_AMOUNT_MIN = 1;
-  const BUY_AMOUNT_MAX = 100;
+  /** Manual slider / chips hard max. */
+  const BUY_AMOUNT_MAX = 250;
+  /** Suggested Best-buy entry stays at or under this — not the full $250 slider. */
+  const SUGGEST_AMOUNT_MAX = 100;
 
   function buyAmountCap() {
     const hard = BUY_AMOUNT_MAX;
@@ -4149,7 +4152,7 @@
       };
     }
     if (follow.followedSuggest) markSuggestTaken(lastTicker, side);
-    // Keep main trade-size slider in sync for Best Side sizing ($1–$100).
+    // Keep main trade-size slider in sync for Best Side sizing ($1–$250).
     if (stake >= BUY_AMOUNT_MIN && stake <= BUY_AMOUNT_MAX) {
       setTradeStake(Math.round(stake));
     }
@@ -5076,34 +5079,9 @@
   }
 
   async function playChime(force) {
-    if (!chimeOn && !force) return false;
-    if (document.visibilityState !== "visible") return false;
-    if (!force && !canPlayTone()) return false;
-    if (force) lastChimeAt = Date.now();
-    let ok = await playHtmlChime("target");
-    if (!ok) {
-      const ctx = await ensureAudioReady();
-      if (ctx && ctx.state === "running") {
-        scheduleOscTones(
-          ctx,
-          [
-            { f: 880, t: 0.0, d: 0.18 },
-            { f: 1174.7, t: 0.14, d: 0.28 },
-          ],
-          "sine",
-          0.35
-        );
-        ok = true;
-      }
-    }
-    if (navigator.vibrate) {
-      try {
-        navigator.vibrate([40, 60, 80]);
-      } catch {
-        // ignore
-      }
-    }
-    return ok;
+    // New 15m / TO BEAT must never alarm — Best-buy uses playEdgeChime instead.
+    void force;
+    return false;
   }
 
   /** C5–E5–G5 upward reward for clear-edge Best-buy. */
@@ -5323,7 +5301,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.26", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.27", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -6418,7 +6396,7 @@
   const STAKE_KEY = "kalshiTradeStake";
   let tradeStake = Number(localStorage.getItem(STAKE_KEY));
   if (!Number.isFinite(tradeStake)) tradeStake = 1;
-  tradeStake = Math.max(1, Math.min(100, Math.round(tradeStake)));
+  tradeStake = Math.max(1, Math.min(BUY_AMOUNT_MAX, Math.round(tradeStake)));
   if (tradeStake < 1) tradeStake = 1;
 
   function dollars(n) {
@@ -6643,11 +6621,12 @@
   const SUGGEST_STEPS = [1, 2, 3, 5, 8, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100];
 
   function snapSuggestStake(n, cap) {
-    const target = Math.max(BUY_AMOUNT_MIN, Math.min(cap, Math.round(n)));
+    const suggestCap = Math.min(cap, SUGGEST_AMOUNT_MAX);
+    const target = Math.max(BUY_AMOUNT_MIN, Math.min(suggestCap, Math.round(n)));
     let best = BUY_AMOUNT_MIN;
     let bestDist = Infinity;
     for (const step of SUGGEST_STEPS) {
-      if (step > cap) break;
+      if (step > suggestCap) break;
       const d = Math.abs(step - target);
       if (d < bestDist || (d === bestDist && step <= target)) {
         best = step;
@@ -6656,22 +6635,23 @@
     }
     // Prefer not rounding *up* past Kelly target when risk-averse.
     if (best > target && bestDist > 0) {
-      const lower = SUGGEST_STEPS.filter((s) => s <= target && s <= cap);
+      const lower = SUGGEST_STEPS.filter((s) => s <= target && s <= suggestCap);
       if (lower.length) best = lower[lower.length - 1];
     }
-    return Math.max(BUY_AMOUNT_MIN, Math.min(cap, best));
+    return Math.max(BUY_AMOUNT_MIN, Math.min(suggestCap, best));
   }
 
   /**
    * Suggest $ for a clear Best Side — Green Spike sizing (Aug 5 / v9.33):
    * fractional Kelly ~22–40%, bank risk ~2.5–12%. No drawdown/streak shrink.
+   * Suggested entries stay ≤ $100 even when the manual slider goes to $250.
    */
   function suggestStakeForEdge(best) {
     if (!best || best.askCents == null) return null;
     const bank = sizingBankroll();
     const hardCap = Math.max(
       BUY_AMOUNT_MIN,
-      Math.min(BUY_AMOUNT_MAX, Math.floor(bank) || BUY_AMOUNT_MIN)
+      Math.min(SUGGEST_AMOUNT_MAX, Math.floor(bank) || BUY_AMOUNT_MIN)
     );
     const unit = roiForStake(best.askCents, Math.min(10, hardCap));
     if (!unit || unit.empty || !(unit.contracts > 0)) return null;
@@ -7470,6 +7450,8 @@
 
   function syncStakeUi() {
     if (el.stakeSlider) {
+      el.stakeSlider.max = String(BUY_AMOUNT_MAX);
+      el.stakeSlider.setAttribute("aria-valuemax", String(BUY_AMOUNT_MAX));
       el.stakeSlider.value = String(tradeStake);
       el.stakeSlider.setAttribute("aria-valuenow", String(tradeStake));
     }
@@ -7567,7 +7549,10 @@
   }
 
   function setTradeStake(n) {
-    tradeStake = Math.max(1, Math.min(100, Math.round(Number(n) || 1)));
+    tradeStake = Math.max(
+      1,
+      Math.min(BUY_AMOUNT_MAX, Math.round(Number(n) || 1))
+    );
     localStorage.setItem(STAKE_KEY, String(tradeStake));
     renderRoi();
   }

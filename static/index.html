@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.18" />
+    <link rel="stylesheet" href="/styles.css?v=10.19" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=10.18" defer></script>
+    <script src="/app.js?v=10.19" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -262,17 +262,17 @@
           class="stake-slider"
           type="range"
           min="1"
-          max="100"
+          max="250"
           step="1"
           value="1"
           aria-valuemin="1"
-          aria-valuemax="100"
+          aria-valuemax="250"
           aria-valuenow="1"
           aria-label="Trade size in dollars"
         />
         <div class="stake-ends">
           <span>$1</span>
-          <span>$100</span>
+          <span>$250</span>
         </div>
       </label>
     </div>
@@ -682,7 +682,7 @@
       <div id="buy-sheet-meta" class="buy-sheet-meta">—</div>
 
       <label class="buy-amount-label" for="buy-amount">
-        Dollar amount ($1–$100)
+        Dollar amount ($1–$250)
         <span id="buy-balance-hint" class="buy-balance-hint"></span>
       </label>
       <div class="buy-amount-row">
@@ -692,7 +692,7 @@
           class="buy-amount-input"
           type="number"
           min="1"
-          max="100"
+          max="250"
           step="1"
           value="1"
           inputmode="numeric"
@@ -714,26 +714,27 @@
         <button type="button" class="buy-chip" data-amt="25">$25</button>
         <button type="button" class="buy-chip" data-amt="50">$50</button>
         <button type="button" class="buy-chip" data-amt="100">$100</button>
+        <button type="button" class="buy-chip" data-amt="250">$250</button>
       </div>
       <div class="buy-range-block">
-        <div class="buy-range-label">Size · drag $1 to $100</div>
+        <div class="buy-range-label">Size · drag $1 to $250</div>
         <input
           id="buy-range"
           class="buy-range"
           type="range"
           min="1"
-          max="100"
+          max="250"
           step="1"
           value="1"
           aria-valuemin="1"
-          aria-valuemax="100"
+          aria-valuemax="250"
           aria-valuenow="1"
-          aria-label="Purchase amount from 1 to 100 dollars"
+          aria-label="Purchase amount from 1 to 250 dollars"
         />
         <div class="buy-range-ends">
           <span>$1</span>
           <span id="buy-range-value">$1</span>
-          <span>$100</span>
+          <span>$250</span>
         </div>
       </div>
       <div id="buy-preview" class="buy-preview">—</div>

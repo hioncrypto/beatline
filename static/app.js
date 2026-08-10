@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.05";
+  const APP_VERSION = "10.06";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4604,10 +4604,11 @@
 
   function getEdgeAudio() {
     if (!edgeChimeUrl) {
+      // C5–E5–G5 upward reward — Best-buy trigger (not the old sharp ding).
       edgeChimeUrl = buildChimeWavUrl([
-        { f: 740, d: 0.12 },
-        { f: 988, d: 0.14 },
-        { f: 1319, d: 0.28 },
+        { f: 523.25, d: 0.16 },
+        { f: 659.25, d: 0.16 },
+        { f: 783.99, d: 0.55 },
       ]);
     }
     if (!edgeAudioEl) {
@@ -4858,7 +4859,7 @@
     return ok;
   }
 
-  /** Distinct ascending chime for clear-edge Best Side. */
+  /** C5–E5–G5 upward reward for clear-edge Best-buy. */
   async function playEdgeChime(force) {
     if (!chimeOn && !force) return false;
     if (document.visibilityState !== "visible") return false;
@@ -4873,12 +4874,12 @@
         scheduleOscTones(
           ctx,
           [
-            { f: 740, t: 0.0, d: 0.12 },
-            { f: 988, t: 0.11, d: 0.14 },
-            { f: 1319, t: 0.24, d: 0.32 },
+            { f: 523.25, t: 0.0, d: 0.16 },
+            { f: 659.25, t: 0.15, d: 0.16 },
+            { f: 783.99, t: 0.3, d: 0.6 },
           ],
-          "triangle",
-          0.4
+          "sine",
+          0.48
         );
         ok = true;
       }

@@ -2652,8 +2652,21 @@ h1 {
   font-weight: 750;
   letter-spacing: -0.02em;
   line-height: 1.15;
-  color: var(--fg);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+.edge-signal.is-checking {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.edge-signal.is-ok {
+  color: var(--accent);
+}
+
+.edge-signal.is-bad {
+  color: var(--down);
 }
 
 .edge-signal[hidden] {
@@ -3294,10 +3307,18 @@ body.has-open-pl.open-pl-collapsed .app-shell > .trade-stack {
   font-weight: 750;
   letter-spacing: -0.02em;
   line-height: 1.15;
-  color: var(--fg);
+  color: var(--muted);
   text-align: center;
   position: relative;
   z-index: 2;
+}
+
+.app-shell > .trade-stack > .edge-signal.is-ok {
+  color: var(--accent);
+}
+
+.app-shell > .trade-stack > .edge-signal.is-bad {
+  color: var(--down);
 }
 
 .app-shell > .trade-stack > .best-side {
@@ -3611,12 +3632,20 @@ body.portrait-app #chart {
   font-weight: 750;
   letter-spacing: -0.02em;
   line-height: 1.15;
-  color: var(--fg);
+  color: var(--muted);
   flex: 0 0 auto;
   flex-shrink: 0;
   position: relative;
   z-index: 1;
   font-variant-numeric: tabular-nums;
+}
+
+.edge-signal.is-ok {
+  color: var(--accent);
+}
+
+.edge-signal.is-bad {
+  color: var(--down);
 }
 
 .edge-signal[hidden] {

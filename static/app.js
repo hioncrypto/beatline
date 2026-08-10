@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.16";
+  const APP_VERSION = "10.17";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5717,10 +5717,16 @@
     if (!bit) {
       el.edgeSignal.hidden = true;
       el.edgeSignal.textContent = "—";
+      el.edgeSignal.classList.remove("is-ok", "is-bad", "is-checking");
       return;
     }
     el.edgeSignal.hidden = false;
     el.edgeSignal.textContent = bit;
+    // Match the top health chip color scheme (green healthy / red bad).
+    const checking = lastHealthOk == null;
+    el.edgeSignal.classList.toggle("is-checking", checking);
+    el.edgeSignal.classList.toggle("is-ok", lastHealthOk === true);
+    el.edgeSignal.classList.toggle("is-bad", lastHealthOk === false);
   }
 
   /** Full Best buy status for the top health chip (includes % / edge). */

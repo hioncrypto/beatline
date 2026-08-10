@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.14";
+  const APP_VERSION = "10.15";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -248,6 +248,7 @@
     stakeStrip: document.getElementById("stake-strip"),
     stakeSlider: document.getElementById("stake-slider"),
     stakeValue: document.getElementById("stake-value"),
+    edgeSignal: document.getElementById("edge-signal"),
     bestSide: document.getElementById("best-side"),
     bestSideLabel: document.getElementById("best-side-label"),
     bestSideAmount: document.getElementById("best-side-amount"),
@@ -5652,6 +5653,77 @@
     return Number(ev) > 0.01 ? "edge ok" : "edge thin";
   }
 
+  /** % + edge thickness — shown large above Best Side (moved off the top chip). */
+  function formatEdgeSignalBit() {
+    const snap = lastBestHealthSnap;
+    if (snap && snap.side) {
+      const conf =
+        snap.pWin != null && Number.isFinite(Number(snap.pWin))
+          ? Math.round(Number(snap.pWin) * 100)
+          : null;
+      const edgeBit = formatEdgeThicknessBit(snap.ev);
+      const parts = [];
+      if (conf != null) {
+        parts.push(
+          !snap.clear && conf < 52 ? `${conf}% (need ≥52%)` : `${conf}%`
+        );
+      } else if (snap.waitWhy) {
+        parts.push(snap.waitWhy);
+      }
+      if (edgeBit) parts.push(edgeBit);
+      return parts.length ? parts.join(" · ") : null;
+    }
+    const pick = lastBestPick;
+    if (pick && pick.side) {
+      const conf =
+        pick.pWin != null && Number.isFinite(Number(pick.pWin))
+          ? Math.round(Number(pick.pWin) * 100)
+          : null;
+      const edgeBit = formatEdgeThicknessBit(pick.ev);
+      const parts = [];
+      if (conf != null) parts.push(`${conf}%`);
+      if (edgeBit) parts.push(edgeBit);
+      return parts.length ? parts.join(" · ") : null;
+    }
+    const edge = lastHealthEdge;
+    if (edge && edge.side) {
+      const conf =
+        edge.p_win != null && Number.isFinite(Number(edge.p_win))
+          ? Math.round(Number(edge.p_win) * 100)
+          : null;
+      let edgeBit = formatEdgeThicknessBit(edge.ev);
+      if (
+        !edgeBit &&
+        (edge.reject === "ev" ||
+          (edge.ev != null && Number(edge.ev) <= 0.01))
+      ) {
+        edgeBit = "edge thin";
+      }
+      const parts = [];
+      if (conf != null) {
+        parts.push(
+          !edge.clear && conf < 52 ? `${conf}% (need ≥52%)` : `${conf}%`
+        );
+      }
+      if (edgeBit) parts.push(edgeBit);
+      return parts.length ? parts.join(" · ") : null;
+    }
+    return null;
+  }
+
+  function paintEdgeSignal() {
+    if (!el.edgeSignal) return;
+    const bit = formatEdgeSignalBit();
+    if (!bit) {
+      el.edgeSignal.hidden = true;
+      el.edgeSignal.textContent = "—";
+      return;
+    }
+    el.edgeSignal.hidden = false;
+    el.edgeSignal.textContent = bit;
+  }
+
+  /** Side-only Best buy status for the top health chip (no % / edge). */
   function formatBestBuyHealthBit() {
     const snap = lastBestHealthSnap;
     if (snap && snap.side) {
@@ -5660,35 +5732,19 @@
         snap.askCents != null && Number.isFinite(Number(snap.askCents))
           ? Math.round(Number(snap.askCents))
           : null;
-      const conf =
-        snap.pWin != null && Number.isFinite(Number(snap.pWin))
-          ? Math.round(Number(snap.pWin) * 100)
-          : null;
       const stake =
         snap.suggestedStake != null &&
         Number.isFinite(Number(snap.suggestedStake))
           ? Math.round(Number(snap.suggestedStake))
           : null;
-      const edgeBit = formatEdgeThicknessBit(snap.ev);
       if (snap.clear) {
         let s = `Buy ${side}`;
         if (ask != null) s += ` @ ${ask}¢`;
-        if (conf != null) s += ` · ${conf}%`;
-        if (edgeBit) s += ` · ${edgeBit}`;
         if (stake != null) s += ` · $${stake}`;
         return s;
       }
-      // Wait: keep % and edge thickness visible as they move.
       let s = `Wait ${side}`;
-      if (conf != null) {
-        s +=
-          conf < 52
-            ? ` · ${conf}% (need ≥52%)`
-            : ` · ${conf}%`;
-      }
-      if (edgeBit) s += ` · ${edgeBit}`;
-      else if (snap.waitWhy && !conf) s += ` · ${snap.waitWhy}`;
-      if (ask != null && conf == null) s += ` @ ${ask}¢`;
+      if (ask != null && snap.waitWhy && !snap.pWin) s += ` @ ${ask}¢`;
       return s;
     }
     const pick = lastBestPick;
@@ -5698,19 +5754,12 @@
         pick.askCents != null && Number.isFinite(Number(pick.askCents))
           ? Math.round(Number(pick.askCents))
           : null;
-      const conf =
-        pick.pWin != null && Number.isFinite(Number(pick.pWin))
-          ? Math.round(Number(pick.pWin) * 100)
-          : null;
       const stake =
         pick.suggestedStake != null && Number.isFinite(Number(pick.suggestedStake))
           ? Math.round(Number(pick.suggestedStake))
           : null;
-      const edgeBit = formatEdgeThicknessBit(pick.ev);
       let s = `Buy ${side}`;
       if (ask != null) s += ` @ ${ask}¢`;
-      if (conf != null) s += ` · ${conf}%`;
-      if (edgeBit) s += ` · ${edgeBit}`;
       if (stake != null) s += ` · $${stake}`;
       return s;
     }
@@ -5721,33 +5770,13 @@
         edge.ask_cents != null && Number.isFinite(Number(edge.ask_cents))
           ? Math.round(Number(edge.ask_cents))
           : null;
-      const conf =
-        edge.p_win != null && Number.isFinite(Number(edge.p_win))
-          ? Math.round(Number(edge.p_win) * 100)
-          : null;
-      const edgeBit = formatEdgeThicknessBit(edge.ev);
       if (edge.clear) {
         let s = `Buy ${side}`;
         if (ask != null) s += ` @ ${ask}¢`;
-        if (conf != null) s += ` · ${conf}%`;
-        if (edgeBit) s += ` · ${edgeBit}`;
         return s;
       }
       let s = `Wait ${side}`;
-      if (conf != null) {
-        s +=
-          conf < 52
-            ? ` · ${conf}% (need ≥52%)`
-            : ` · ${conf}%`;
-      }
-      if (edgeBit) s += ` · ${edgeBit}`;
-      else if (
-        edge.reject === "ev" ||
-        (edge.ev != null && Number(edge.ev) <= 0.01)
-      ) {
-        s += " · edge thin";
-      }
-      if (ask != null && conf == null) s += ` @ ${ask}¢`;
+      if (ask != null && edge.p_win == null) s += ` @ ${ask}¢`;
       return s;
     }
     return "No Best buy yet";
@@ -5761,6 +5790,7 @@
     el.systemHealth.classList.toggle("is-ok", !!healthy);
     el.systemHealth.classList.toggle("is-bad", !healthy);
     const bestBit = formatBestBuyHealthBit();
+    paintEdgeSignal();
     if (healthy) {
       el.systemHealth.textContent = `Healthy · ${bestBit}`;
       el.systemHealth.title =
@@ -5780,7 +5810,10 @@
   }
 
   function refreshSystemHealthBestBuy() {
-    if (!el.systemHealth || lastHealthOk == null) return;
+    if (!el.systemHealth || lastHealthOk == null) {
+      paintEdgeSignal();
+      return;
+    }
     paintSystemHealth(lastHealthOk, lastHealthIssues);
   }
 

@@ -1969,7 +1969,7 @@ h1 {
 
 .buy-quick {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
   margin-top: 10px;
 }

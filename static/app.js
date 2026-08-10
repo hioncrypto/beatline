@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.19";
+  const APP_VERSION = "10.20";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *

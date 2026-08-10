@@ -2711,7 +2711,7 @@ h1 {
   margin: 0 0 8px;
   padding: 2px 10px 0;
   text-align: center;
-  font-size: 2.4rem;
+  font-size: 1.2rem;
   font-weight: 750;
   letter-spacing: -0.02em;
   line-height: 1.1;
@@ -3366,7 +3366,7 @@ body.has-open-pl.open-pl-collapsed .app-shell > .trade-stack {
   flex: 0 0 auto;
   margin: 0 0 4px;
   padding: 0 8px;
-  font-size: 2.4rem;
+  font-size: 1.2rem;
   font-weight: 750;
   letter-spacing: -0.02em;
   line-height: 1.1;
@@ -3691,7 +3691,7 @@ body.portrait-app #chart {
   margin: 0 0 4px;
   padding: 0 8px;
   text-align: center;
-  font-size: 2.4rem;
+  font-size: 1.2rem;
   font-weight: 750;
   letter-spacing: -0.02em;
   line-height: 1.1;

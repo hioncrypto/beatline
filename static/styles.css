@@ -1058,9 +1058,59 @@ h1 {
   line-height: 1.35;
 }
 
+.pl-day-lines-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.2;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.pl-day-lines-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.pl-day-lines-toggle span {
+  color: #b7cfc2;
+}
+
 .pl-chart-stage {
   position: relative;
   width: 100%;
+}
+
+.pl-day-lines {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.pl-day-lines[hidden] {
+  display: none !important;
+}
+
+.pl-day-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(215, 255, 232, 0.55);
+  box-shadow: 0 0 0 0.5px rgba(8, 14, 11, 0.45);
+  transform: translateX(-0.5px);
 }
 
 .pl-chart {

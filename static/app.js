@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.06";
+  const APP_VERSION = "10.07";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -53,7 +53,7 @@
   function loadPlUi() {
     try {
       const raw = localStorage.getItem(PL_UI_KEY);
-      if (!raw) return { optionsOpen: true, range: null, height: 180 };
+      if (!raw) return { optionsOpen: true, range: null, height: 180, dayLines: true };
       const parsed = JSON.parse(raw);
       const range =
         parsed.range &&
@@ -71,9 +71,11 @@
           Number.isFinite(height) && height >= 120 && height <= 420
             ? Math.round(height)
             : 180,
+        // Pacific midnight separators on the Options P/L chart.
+        dayLines: parsed.dayLines == null ? true : !!parsed.dayLines,
       };
     } catch {
-      return { optionsOpen: true, range: null, height: 180 };
+      return { optionsOpen: true, range: null, height: 180, dayLines: true };
     }
   }
 
@@ -85,6 +87,7 @@
           optionsOpen: !!plUi.optionsOpen,
           range: plUi.range || null,
           height: plUi.height || 180,
+          dayLines: plUi.dayLines !== false,
         })
       );
     } catch {
@@ -255,6 +258,8 @@
     plChartBody: document.getElementById("pl-chart-body"),
     plChartToggleMeta: document.getElementById("pl-chart-toggle-meta"),
     plChartStage: document.getElementById("pl-chart-stage"),
+    plDayLines: document.getElementById("pl-day-lines"),
+    plDayLinesCheck: document.getElementById("pl-day-lines-check"),
     plCrosshair: document.getElementById("pl-crosshair"),
     plCrosshairDate: document.getElementById("pl-crosshair-date"),
     plCrosshairPrice: document.getElementById("pl-crosshair-price"),
@@ -2174,10 +2179,174 @@
     try {
       plChart.timeScale().subscribeVisibleLogicalRangeChange(() => {
         capturePlVisibleRange();
+        updatePlDayLines();
       });
     } catch {
       // ignore
     }
+  }
+
+  /** Candle timestamp in ms. */
+  function plCandleAtMs(c) {
+    if (!c) return NaN;
+    const at = Number(c.at);
+    if (Number.isFinite(at) && at > 0) return at;
+    const t = Number(c.time);
+    return Number.isFinite(t) ? t * 1000 : NaN;
+  }
+
+  /**
+   * Screen X for each Pacific midnight between trades.
+   * Prefer exact midnight; fall back to midpoint between day-change candles.
+   */
+  function plDayLineXs() {
+    const candles = plCandlesCache || [];
+    if (!plChart || candles.length < 2) return [];
+    const xs = [];
+    let prevKey = appDateKey(plCandleAtMs(candles[0]));
+    for (let i = 1; i < candles.length; i++) {
+      const ms = plCandleAtMs(candles[i]);
+      const key = appDateKey(ms);
+      if (!key || key === prevKey) continue;
+      prevKey = key;
+      let x = null;
+      // Exact Pacific midnight for this candle's calendar day.
+      try {
+        const midSec = Math.floor(startOfAppDayMs(ms) / 1000);
+        x = plTimeToCoordinate(midSec);
+      } catch {
+        x = null;
+      }
+      // Fallback: halfway between the last prior-day bar and this bar.
+      if (x == null || !Number.isFinite(x)) {
+        try {
+          const xa = plChart.timeScale().timeToCoordinate(candles[i - 1].time);
+          const xb = plChart.timeScale().timeToCoordinate(candles[i].time);
+          if (
+            xa != null &&
+            xb != null &&
+            Number.isFinite(xa) &&
+            Number.isFinite(xb)
+          ) {
+            x = (xa + xb) / 2;
+          }
+        } catch {
+          x = null;
+        }
+      }
+      if (x != null && Number.isFinite(x)) xs.push(x);
+    }
+    return xs;
+  }
+
+  /** Map a unix-sec time onto chart X, interpolating between neighboring bars. */
+  function plTimeToCoordinate(timeSec) {
+    if (!plChart || !Number.isFinite(timeSec)) return null;
+    try {
+      const x = plChart.timeScale().timeToCoordinate(timeSec);
+      if (x != null && Number.isFinite(x)) return x;
+    } catch {
+      // fall through to manual interpolate
+    }
+    const candles = plCandlesCache || [];
+    if (candles.length < 2) return null;
+    if (timeSec <= candles[0].time) {
+      try {
+        return plChart.timeScale().timeToCoordinate(candles[0].time);
+      } catch {
+        return null;
+      }
+    }
+    const last = candles[candles.length - 1];
+    if (timeSec >= last.time) {
+      try {
+        return plChart.timeScale().timeToCoordinate(last.time);
+      } catch {
+        return null;
+      }
+    }
+    for (let i = 1; i < candles.length; i++) {
+      const a = candles[i - 1];
+      const b = candles[i];
+      if (b.time < timeSec) continue;
+      if (b.time === a.time) {
+        try {
+          return plChart.timeScale().timeToCoordinate(a.time);
+        } catch {
+          return null;
+        }
+      }
+      let xa = null;
+      let xb = null;
+      try {
+        xa = plChart.timeScale().timeToCoordinate(a.time);
+        xb = plChart.timeScale().timeToCoordinate(b.time);
+      } catch {
+        return null;
+      }
+      if (xa == null || xb == null || !Number.isFinite(xa) || !Number.isFinite(xb)) {
+        return null;
+      }
+      const t = (timeSec - a.time) / (b.time - a.time);
+      return xa + (xb - xa) * t;
+    }
+    return null;
+  }
+
+  function clearPlDayLines() {
+    if (!el.plDayLines) return;
+    el.plDayLines.innerHTML = "";
+    el.plDayLines.hidden = true;
+  }
+
+  function updatePlDayLines() {
+    if (!el.plDayLines) return;
+    const on = plUi.dayLines !== false;
+    if (el.plDayLinesCheck && el.plDayLinesCheck.checked !== on) {
+      el.plDayLinesCheck.checked = on;
+    }
+    if (
+      !on ||
+      !plChart ||
+      !isPlChartVisible() ||
+      !plCandlesCache ||
+      plCandlesCache.length < 2
+    ) {
+      clearPlDayLines();
+      return;
+    }
+    const xs = plDayLineXs();
+    if (!xs.length) {
+      clearPlDayLines();
+      return;
+    }
+    const chartW = el.plChart ? el.plChart.clientWidth || 0 : 0;
+    // Keep lines off the right price axis gutter (~56–64px in LWC).
+    const maxX = Math.max(0, chartW - 56);
+    const frag = document.createDocumentFragment();
+    let drawn = 0;
+    for (const x of xs) {
+      if (x == null || !Number.isFinite(x)) continue;
+      if (x < 2 || x > maxX) continue;
+      const line = document.createElement("div");
+      line.className = "pl-day-line";
+      line.style.left = `${x}px`;
+      line.title = "Pacific midnight";
+      frag.appendChild(line);
+      drawn += 1;
+    }
+    el.plDayLines.innerHTML = "";
+    if (!drawn) {
+      el.plDayLines.hidden = true;
+      return;
+    }
+    el.plDayLines.appendChild(frag);
+    el.plDayLines.hidden = false;
+  }
+
+  function syncPlDayLinesToggle() {
+    if (!el.plDayLinesCheck) return;
+    el.plDayLinesCheck.checked = plUi.dayLines !== false;
   }
 
   function resizePlChart() {
@@ -2186,6 +2355,7 @@
     const w = el.plChart.clientWidth;
     const h = el.plChart.clientHeight || plUi.height || 180;
     if (w > 0) plChart.applyOptions({ width: w, height: h });
+    updatePlDayLines();
   }
 
   function renderPlChart() {
@@ -2225,6 +2395,7 @@
         }
       }
       plLastBarCount = 0;
+      clearPlDayLines();
       return;
     }
 
@@ -2271,6 +2442,8 @@
         // ignore
       }
     }
+    // After fit/restore so coordinates match the visible range.
+    requestAnimationFrame(() => updatePlDayLines());
   }
 
   function renderTradeHistory() {
@@ -8233,6 +8406,14 @@
     if (el.plChartToggle) {
       el.plChartToggle.addEventListener("click", () => {
         setPlOptionsOpen(!plUi.optionsOpen);
+      });
+    }
+    if (el.plDayLinesCheck) {
+      syncPlDayLinesToggle();
+      el.plDayLinesCheck.addEventListener("change", () => {
+        plUi.dayLines = !!el.plDayLinesCheck.checked;
+        savePlUi();
+        updatePlDayLines();
       });
     }
     if (el.tradeHistoryToggle) {

@@ -1792,8 +1792,7 @@ h1 {
   max-height: min(92dvh, 720px);
   display: flex;
   flex-direction: column;
-  overflow: auto;
-  -webkit-overflow-scrolling: touch;
+  overflow: hidden;
   padding: 10px 16px calc(18px + var(--safe-bottom));
   border-radius: 20px 20px 0 0;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1887,6 +1886,14 @@ h1 {
   position: relative;
   z-index: 6;
   touch-action: manipulation;
+}
+
+.buy-sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
 }
 
 .buy-sheet-kicker {
@@ -2084,7 +2091,9 @@ h1 {
 
 .buy-slide {
   position: relative;
+  flex: 0 0 auto;
   height: 56px;
+  margin-top: 10px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: #0b1210;
@@ -2092,6 +2101,7 @@ h1 {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  z-index: 4;
 }
 
 .buy-sheet.is-below .buy-slide {
@@ -2409,7 +2419,9 @@ h1 {
 }
 
 .buy-slide {
-  height: 52px;
+  height: 56px;
+  flex: 0 0 auto;
+  margin-top: 10px;
 }
 
 .target-panel {

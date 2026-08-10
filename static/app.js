@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.17";
+  const APP_VERSION = "10.18";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4399,6 +4399,10 @@
       return;
     }
     closeOptions();
+    if (buySheetDismissTimer) {
+      clearTimeout(buySheetDismissTimer);
+      buySheetDismissTimer = null;
+    }
     buySheetSide = side;
     buySheetOpen = true;
     buySheetFromBest = !!opts.fromBest;
@@ -4433,10 +4437,14 @@
     setBuyAmountUi(preferred, suggested != null);
     if (el.buySheet) {
       el.buySheet.hidden = false;
+      el.buySheet.removeAttribute("aria-hidden");
       el.buySheet.classList.remove("is-done");
       el.buySheet.classList.toggle("is-below", side === "below");
     }
-    if (el.buyBackdrop) el.buyBackdrop.hidden = false;
+    if (el.buyBackdrop) {
+      el.buyBackdrop.hidden = false;
+      el.buyBackdrop.removeAttribute("aria-hidden");
+    }
     if (el.buySheetTitle) {
       el.buySheetTitle.textContent = adding
         ? side === "above"
@@ -4469,21 +4477,40 @@
     });
   }
 
+  let buySheetDismissTimer = null;
+
   function dismissBuySheet(afterMs) {
     const finish = () => {
+      buySheetDismissTimer = null;
       buySheetOpen = false;
       buySheetSide = null;
       buyConfirming = false;
+      buySlideDragging = false;
+      try {
+        if (document.activeElement && el.buySheet && el.buySheet.contains(document.activeElement)) {
+          document.activeElement.blur();
+        }
+      } catch {
+        // ignore
+      }
       if (el.buySheet) {
         el.buySheet.hidden = true;
+        el.buySheet.setAttribute("aria-hidden", "true");
         el.buySheet.classList.remove("is-done", "is-below");
       }
-      if (el.buyBackdrop) el.buyBackdrop.hidden = true;
+      if (el.buyBackdrop) {
+        el.buyBackdrop.hidden = true;
+        el.buyBackdrop.setAttribute("aria-hidden", "true");
+      }
       resetBuySlide();
     };
+    if (buySheetDismissTimer) {
+      clearTimeout(buySheetDismissTimer);
+      buySheetDismissTimer = null;
+    }
     if (afterMs && el.buySheet && buySheetOpen) {
       el.buySheet.classList.add("is-done");
-      setTimeout(finish, afterMs);
+      buySheetDismissTimer = setTimeout(finish, afterMs);
     } else {
       finish();
     }
@@ -8703,10 +8730,24 @@
       );
     }
     if (el.buySheetX) {
-      el.buySheetX.addEventListener("click", () => dismissBuySheet());
+      const closeBuy = (ev) => {
+        if (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+        }
+        dismissBuySheet();
+      };
+      el.buySheetX.addEventListener("click", closeBuy);
+      el.buySheetX.addEventListener("pointerup", (ev) => {
+        // Capture taps even if a prior drag/focus ate the click.
+        if (ev.pointerType === "touch" || ev.pointerType === "pen") closeBuy(ev);
+      });
     }
     if (el.buyBackdrop) {
-      el.buyBackdrop.addEventListener("click", () => dismissBuySheet());
+      el.buyBackdrop.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        dismissBuySheet();
+      });
     }
     if (el.buyAmount) {
       const syncAmt = () => {

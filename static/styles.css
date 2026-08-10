@@ -1777,12 +1777,23 @@ h1 {
   background: rgba(0, 0, 0, 0.58);
 }
 
+/* Same trap as Options: author display rules can override UA [hidden]. */
+.buy-sheet[hidden],
+.buy-backdrop[hidden] {
+  display: none !important;
+}
+
 .buy-sheet {
   position: fixed;
   z-index: 70;
   left: 0;
   right: 0;
   bottom: 0;
+  max-height: min(92dvh, 720px);
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 10px 16px calc(18px + var(--safe-bottom));
   border-radius: 20px 20px 0 0;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1829,6 +1840,7 @@ h1 {
   margin: 2px auto 12px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.22);
+  flex: 0 0 auto;
 }
 
 .buy-sheet-head {
@@ -1836,6 +1848,45 @@ h1 {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: 0 -4px;
+  padding: 0 4px 8px;
+  background: linear-gradient(
+    180deg,
+    rgba(26, 42, 34, 0.98) 0%,
+    rgba(26, 42, 34, 0.92) 70%,
+    rgba(26, 42, 34, 0)
+  );
+  flex: 0 0 auto;
+}
+
+.buy-sheet.is-below .buy-sheet-head {
+  background: linear-gradient(
+    180deg,
+    rgba(42, 26, 26, 0.98) 0%,
+    rgba(42, 26, 26, 0.92) 70%,
+    rgba(42, 26, 26, 0)
+  );
+}
+
+.buy-sheet-close {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--fg);
+  font-size: 1.2rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  position: relative;
+  z-index: 6;
+  touch-action: manipulation;
 }
 
 .buy-sheet-kicker {

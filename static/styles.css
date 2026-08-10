@@ -43,6 +43,7 @@ body {
   grid-template-columns: minmax(0, 1fr) auto auto;
   grid-template-areas:
     "brand clock actions"
+    "health health health"
     "status status status";
   align-items: center;
   column-gap: 8px;
@@ -116,16 +117,22 @@ h1 {
 }
 
 .system-health {
-  margin: 3px 0 0;
-  font-size: 0.68rem;
+  grid-area: health;
+  margin: 2px 0 0;
+  padding: 0 4px;
+  width: 100%;
+  max-width: 100%;
+  justify-self: center;
+  text-align: center;
+  font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.02em;
-  line-height: 1.2;
+  line-height: 1.35;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
 }
 
 .system-health.is-checking {

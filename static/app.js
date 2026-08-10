@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.08";
+  const APP_VERSION = "10.09";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -8719,7 +8719,8 @@
           "Notification" in window &&
           Notification.permission === "granted"
         ) {
-          subscribePush().catch(() => {});
+          // Re-POST sub every return — Render restarts wipe subscribers.
+          subscribePush({ forceRefresh: true }).catch(() => {});
         }
         setTimeout(() => {
           // Re-read SW state then score — catch-up chime if phone never got it.
@@ -8736,7 +8737,7 @@
           "Notification" in window &&
           Notification.permission === "granted"
         ) {
-          subscribePush().catch(() => {});
+          subscribePush({ forceRefresh: true }).catch(() => {});
         }
         postToSW({
           type: "arm-state",
@@ -8785,7 +8786,7 @@
         "Notification" in window &&
         Notification.permission === "granted"
       ) {
-        const ok = await subscribePush().catch(() => false);
+        const ok = await subscribePush({ forceRefresh: true }).catch(() => false);
         if (ok) localStorage.setItem(BG_ARMED_KEY, "1");
         else {
           localStorage.setItem(BG_ARMED_KEY, "0");

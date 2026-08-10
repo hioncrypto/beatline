@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.04";
+  const APP_VERSION = "10.05";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5075,7 +5075,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.23", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.24", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5975,12 +5975,12 @@
 
       // App in background / locked — phone notification is the chime.
       // Best Side UI stays on live market only (no notify mirroring).
-      markEdgeSounded(best, { ask });
       if (canNotify) {
         const ctrl =
           navigator.serviceWorker && navigator.serviceWorker.controller;
         if (ctrl) {
           postToSW({ type: "edge-notify", force: true, ...edgePayload });
+          markEdgeSounded(best, { ask });
         } else {
           try {
             const title =
@@ -5996,8 +5996,9 @@
               renotify: true,
               silent: false,
             });
+            markEdgeSounded(best, { ask });
           } catch {
-            // ignore
+            // ignore — leave unsounded so a later path can still ring
           }
         }
       }

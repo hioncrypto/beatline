@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.23-deliver-alerts";
+const SW_VERSION = "3.24-bg-focused";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -122,21 +122,16 @@ async function writeState(state) {
 }
 
 /**
- * True when a BeatLine window is visible (user may be looking at it).
- * Prefer visibility over focused — Android often reports unfocused while the
- * PWA is still on screen, and we must FG-chime instead of tray-notify.
+ * True only when a BeatLine window is actually focused (user looking at it).
+ * Do NOT treat visibilityState alone — Android PWAs often keep "visible"
+ * while backgrounded/locked, which drops every Best-buy push if we gate on it.
  */
-async function hasVisibleBeatLineClient() {
+async function hasFocusedClient() {
   const all = await self.clients.matchAll({
     type: "window",
     includeUncontrolled: true,
   });
   for (const client of all) {
-    try {
-      if (client.visibilityState === "visible") return true;
-    } catch {
-      // ignore
-    }
     try {
       if (client.focused) return true;
     } catch {
@@ -146,12 +141,8 @@ async function hasVisibleBeatLineClient() {
   return false;
 }
 
-async function hasFocusedClient() {
-  return hasVisibleBeatLineClient();
-}
-
 async function hasVisibleClient() {
-  return hasVisibleBeatLineClient();
+  return hasFocusedClient();
 }
 
 async function broadcastMarketEdgeAlert(payload) {
@@ -230,35 +221,21 @@ async function showTargetNotification(payload, { force = false } = {}) {
   });
 }
 
+/**
+ * Show Best-buy. Returns true only when the audible tray notify fired.
+ * Focused app: hand off to in-app chime (no edgeAt stamp — page ACKs via
+ * edge-armed chimed:true). Background: phone notification IS the chime.
+ */
 async function showEdgeNotification(payload, { force = false } = {}) {
-  // App visible: deliver in-app Best-buy chime from this market signal.
-  // App backgrounded: phone notification is the audible alert.
-  // Never drop the signal — that caused "no phone notify, dump on open".
-  if (!force && (await hasVisibleBeatLineClient())) {
+  // Gate on focused only — never visibilityState (Android false-visible).
+  if (!force && (await hasFocusedClient())) {
     await broadcastMarketEdgeAlert(payload);
     await showPushKeepalive("Best buy (app open)");
-    try {
-      const state = await readState();
-      const side = payload && payload.side;
-      const ask = Math.round(
-        Number(
-          payload &&
-            (payload.askCents != null ? payload.askCents : payload.ask_cents)
-        ) || 0
-      );
-      const ticker = (payload && payload.ticker) || "";
-      if (side) {
-        state.edgeKey = `${ticker}:${side}`;
-        state.edgeAsk = ask;
-        state.edgeAt = Date.now();
-        await writeState(state);
-      }
-    } catch {
-      // ignore
-    }
-    return;
+    // Do NOT stamp edgeAt here. A silent keepalive must not start the 90s
+    // cooldown or background retries / later pushes get swallowed.
+    return false;
   }
-  // Background / locked: this notification IS the audible chime.
+  // Background / locked / unfocused: this notification IS the audible chime.
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const ask =
     payload && payload.askCents != null
@@ -328,6 +305,7 @@ async function showEdgeNotification(payload, { force = false } = {}) {
   } catch {
     // ignore
   }
+  return true;
 }
 
 async function showProfitNotification(payload, { force = false } = {}) {
@@ -423,6 +401,15 @@ async function checkClearEdge(forceNotify) {
     return;
   }
 
+  // Focused page owns the in-app chime — do not arm/cooldown from SW poll
+  // or we silence a later background push for this sticky.
+  if (!forceNotify && (await hasFocusedClient())) {
+    state.pendingEdgeKey = null;
+    state.pendingEdgeCount = 0;
+    await writeState(state);
+    return;
+  }
+
   const ask = Math.round(Number(data.ask_cents) || 0);
   const ticker = data.ticker || "";
   const sticky = `${ticker}:${data.side}`;
@@ -461,13 +448,17 @@ async function checkClearEdge(forceNotify) {
     beat: data.beat ?? data.price_to_beat,
     ticker: data.ticker,
   };
-  await showEdgeNotification(payload);
-  state.edgeKey = sticky;
-  state.edgeAsk = ask;
-  state.edgeAt = now;
-  state.pendingEdgeKey = null;
-  state.pendingEdgeCount = 0;
-  await writeState(state);
+  const sounded = await showEdgeNotification(payload);
+  // Re-read — showEdgeNotification may have written lastEdgeAlert / edgeAt.
+  const next = await readState();
+  if (sounded) {
+    next.edgeKey = sticky;
+    next.edgeAsk = ask;
+    next.edgeAt = now;
+  }
+  next.pendingEdgeKey = null;
+  next.pendingEdgeCount = 0;
+  await writeState(next);
 }
 
 let pollTimer = null;
@@ -615,11 +606,15 @@ self.addEventListener("message", (event) => {
             return;
           }
         }
-        await showEdgeNotification(msg, { force: !!msg.force });
-        state.edgeKey = sticky;
-        state.edgeAsk = ask;
-        state.edgeAt = now;
-        await writeState(state);
+        const sounded = await showEdgeNotification(msg, { force: !!msg.force });
+        // Stamp cooldown only after an audible tray notify (force always sounds).
+        if (sounded) {
+          const next = await readState();
+          next.edgeKey = sticky;
+          next.edgeAsk = ask;
+          next.edgeAt = now;
+          await writeState(next);
+        }
       })()
     );
   }
@@ -692,7 +687,7 @@ self.addEventListener("push", (event) => {
           return;
         }
 
-        await showEdgeNotification({
+        const sounded = await showEdgeNotification({
           side,
           askCents: ask,
           pWin: payload.p_win ?? payload.pWin,
@@ -700,10 +695,16 @@ self.addEventListener("push", (event) => {
           beat: payload.beat ?? payload.price_to_beat ?? payload.target,
           ticker: payload.ticker,
         });
-        state.edgeKey = sticky;
-        state.edgeAsk = ask;
-        state.edgeAt = now;
-        await writeState(state);
+        // Only cooldown after an audible tray notify. Focused handoff waits
+        // for page edge-armed chimed:true so a missed FG chime can still
+        // ring on the phone if the user backgrounds before it plays.
+        if (sounded) {
+          const next = await readState();
+          next.edgeKey = sticky;
+          next.edgeAsk = ask;
+          next.edgeAt = now;
+          await writeState(next);
+        }
       })()
     );
     return;

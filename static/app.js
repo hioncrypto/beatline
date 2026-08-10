@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.10";
+  const APP_VERSION = "10.11";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5601,6 +5601,11 @@
     refreshSystemHealthBestBuy();
   }
 
+  function formatEdgeThicknessBit(ev) {
+    if (ev == null || !Number.isFinite(Number(ev))) return null;
+    return Number(ev) > 0.01 ? "edge ok" : "edge thin";
+  }
+
   function formatBestBuyHealthBit() {
     const snap = lastBestHealthSnap;
     if (snap && snap.side) {
@@ -5618,18 +5623,27 @@
         Number.isFinite(Number(snap.suggestedStake))
           ? Math.round(Number(snap.suggestedStake))
           : null;
+      const edgeBit = formatEdgeThicknessBit(snap.ev);
       if (snap.clear) {
         let s = `Buy ${side}`;
         if (ask != null) s += ` @ ${ask}¢`;
         if (conf != null) s += ` · ${conf}%`;
+        if (edgeBit) s += ` · ${edgeBit}`;
         if (stake != null) s += ` · $${stake}`;
         return s;
       }
-      if (snap.waitWhy) return `Wait ${side} · ${snap.waitWhy}`;
-      if (conf != null && conf < 52) {
-        return `Wait ${side} · ${conf}% (need ≥52%)`;
+      // Wait: keep % and edge thickness visible as they move.
+      let s = `Wait ${side}`;
+      if (conf != null) {
+        s +=
+          conf < 52
+            ? ` · ${conf}% (need ≥52%)`
+            : ` · ${conf}%`;
       }
-      return ask != null ? `Wait ${side} @ ${ask}¢` : `Wait ${side}`;
+      if (edgeBit) s += ` · ${edgeBit}`;
+      else if (snap.waitWhy && !conf) s += ` · ${snap.waitWhy}`;
+      if (ask != null && conf == null) s += ` @ ${ask}¢`;
+      return s;
     }
     const pick = lastBestPick;
     if (pick && pick.side) {
@@ -5646,9 +5660,11 @@
         pick.suggestedStake != null && Number.isFinite(Number(pick.suggestedStake))
           ? Math.round(Number(pick.suggestedStake))
           : null;
+      const edgeBit = formatEdgeThicknessBit(pick.ev);
       let s = `Buy ${side}`;
       if (ask != null) s += ` @ ${ask}¢`;
       if (conf != null) s += ` · ${conf}%`;
+      if (edgeBit) s += ` · ${edgeBit}`;
       if (stake != null) s += ` · $${stake}`;
       return s;
     }
@@ -5663,19 +5679,30 @@
         edge.p_win != null && Number.isFinite(Number(edge.p_win))
           ? Math.round(Number(edge.p_win) * 100)
           : null;
+      const edgeBit = formatEdgeThicknessBit(edge.ev);
       if (edge.clear) {
         let s = `Buy ${side}`;
         if (ask != null) s += ` @ ${ask}¢`;
         if (conf != null) s += ` · ${conf}%`;
+        if (edgeBit) s += ` · ${edgeBit}`;
         return s;
       }
-      if (conf != null && conf < 52) {
-        return `Wait ${side} · ${conf}% (need ≥52%)`;
+      let s = `Wait ${side}`;
+      if (conf != null) {
+        s +=
+          conf < 52
+            ? ` · ${conf}% (need ≥52%)`
+            : ` · ${conf}%`;
       }
-      if (edge.reject === "ev" || (edge.ev != null && Number(edge.ev) <= 0.01)) {
-        return `Wait ${side} · edge thin`;
+      if (edgeBit) s += ` · ${edgeBit}`;
+      else if (
+        edge.reject === "ev" ||
+        (edge.ev != null && Number(edge.ev) <= 0.01)
+      ) {
+        s += " · edge thin";
       }
-      return ask != null ? `Wait ${side} @ ${ask}¢` : `Wait ${side}`;
+      if (ask != null && conf == null) s += ` @ ${ask}¢`;
+      return s;
     }
     return "No Best buy yet";
   }
@@ -7049,6 +7076,7 @@
         side: best.side,
         askCents: best.askCents,
         pWin: best.pWin,
+        ev: best.ev,
         suggestedStake: null,
         waitWhy,
       });
@@ -7092,6 +7120,7 @@
       side: best.side,
       askCents: best.askCents,
       pWin: best.pWin,
+      ev: best.ev,
       suggestedStake: suggestStake,
       suggestion,
       atRiskCap,
@@ -7101,6 +7130,7 @@
       side: best.side,
       askCents: best.askCents,
       pWin: best.pWin,
+      ev: best.ev,
       suggestedStake: suggestStake,
     });
     const suggestKey = `${lastTicker || "?"}:${best.side}:${Math.round(

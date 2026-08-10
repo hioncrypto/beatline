@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.07";
+  const APP_VERSION = "10.08";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5249,7 +5249,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.24", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.25", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5293,9 +5293,22 @@
     else if (swReg && swReg.active) swReg.active.postMessage(msg);
   }
 
-  /** Page is in front — use visibility, not focus (Android steals focus often). */
+  /**
+   * Page is actively in front. Require focus too — Android PWAs often stay
+   * visibilityState "visible" while backgrounded/locked, which used to take
+   * the in-app path and skip the phone notification.
+   */
   function pageOwnsAlerts() {
-    return document.visibilityState === "visible" && !document.hidden;
+    try {
+      return (
+        document.visibilityState === "visible" &&
+        !document.hidden &&
+        typeof document.hasFocus === "function" &&
+        document.hasFocus()
+      );
+    } catch {
+      return document.visibilityState === "visible" && !document.hidden;
+    }
   }
 
   /**
@@ -8741,7 +8754,7 @@
           postToSW({
             type: "edge-notify",
             force: true,
-            bypassDedupe: wasPending,
+            bypassDedupe: true,
             side: lastBestPick.side,
             askCents: ask || null,
             pWin: lastBestPick.pWin,
@@ -8751,9 +8764,11 @@
             chimeOn,
           });
           if (wasPending) markEdgeSounded(lastBestPick, { ask });
+        } else {
+          // No current sticky — force one SW poll so a fresh clear isn't missed
+          // while Chrome suspends the worker after hide.
+          postToSW({ type: "check-now", forceNotify: true });
         }
-        // Poll for a NEW clear edge while backgrounded (SW + server push).
-        postToSW({ type: "check-now", forceNotify: false });
       }
     });
 

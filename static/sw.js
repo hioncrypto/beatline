@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.24-bg-focused";
+const SW_VERSION = "3.25-always-tray";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -9,8 +9,10 @@ const STATE_CACHE = "beatline-sw-state-v1";
 const STABLE_APP_URL = "https://beatline-1.onrender.com";
 const RENDER_DEPLOY_URL =
   "https://render.com/deploy?repo=https://github.com/hioncrypto/beatline";
-const EDGE_NOTIFY_COOLDOWN_MS = 90_000;
-const KEEP_ALIVE_MS = 4 * 60 * 1000;
+const EDGE_NOTIFY_COOLDOWN_MS = 60_000;
+/** Hit health often enough to keep Render free awake while SW is alive. */
+const KEEP_ALIVE_MS = 2 * 60 * 1000;
+const POLL_MS = 4_000;
 
 /**
  * Chrome requires showNotification on every push (userVisibleOnly).
@@ -122,9 +124,9 @@ async function writeState(state) {
 }
 
 /**
- * True only when a BeatLine window is actually focused (user looking at it).
- * Do NOT treat visibilityState alone — Android PWAs often keep "visible"
- * while backgrounded/locked, which drops every Best-buy push if we gate on it.
+ * True only when a BeatLine window is actually focused.
+ * Never use this to DROP a Best-buy tray notify — Android lies about
+ * focused/visible while backgrounded. Kept for optional FG extras only.
  */
 async function hasFocusedClient() {
   const all = await self.clients.matchAll({
@@ -222,20 +224,16 @@ async function showTargetNotification(payload, { force = false } = {}) {
 }
 
 /**
- * Show Best-buy. Returns true only when the audible tray notify fired.
- * Focused app: hand off to in-app chime (no edgeAt stamp — page ACKs via
- * edge-armed chimed:true). Background: phone notification IS the chime.
+ * ALWAYS show an audible Best-buy tray notification.
+ * Never skip on focused/visible — that repeatedly killed BG alerts on Android.
+ * Also broadcast so an open focused page can play the in-app C–E–G chime.
+ * Returns true after the audible tray notify fires.
  */
 async function showEdgeNotification(payload, { force = false } = {}) {
-  // Gate on focused only — never visibilityState (Android false-visible).
-  if (!force && (await hasFocusedClient())) {
-    await broadcastMarketEdgeAlert(payload);
-    await showPushKeepalive("Best buy (app open)");
-    // Do NOT stamp edgeAt here. A silent keepalive must not start the 90s
-    // cooldown or background retries / later pushes get swallowed.
-    return false;
-  }
-  // Background / locked / unfocused: this notification IS the audible chime.
+  void force; // force kept for callers; tray always sounds now
+  // Additive FG chime — never a substitute for the tray notify.
+  await broadcastMarketEdgeAlert(payload);
+
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const ask =
     payload && payload.askCents != null
@@ -315,43 +313,31 @@ async function showProfitNotification(payload, { force = false } = {}) {
   const plTxt =
     pl != null && Number.isFinite(pl)
       ? `${pl > 0 ? "+" : ""}$${Math.abs(pl).toFixed(2)}`
-      : "Open mark turned positive";
+      : "in profit";
   await self.registration.showNotification(`BeatLine · ${side} in profit`, {
     body: plTxt,
     icon: "/icons/icon-192.png?v=2.6",
     badge: "/icons/icon-192.png?v=2.6",
     vibrate: [40, 50, 40, 50, 120],
-    tag: "beatline-open-profit",
+    tag: "kalshi-profit",
     renotify: true,
     requireInteraction: false,
     silent: false,
-    data: {
-      url: "/",
-      ticker: payload && payload.ticker,
-      kind: "open_profit",
-      side: payload && payload.side,
-    },
+    data: { url: "/", kind: "profit", side: payload && payload.side },
   });
 }
 
 async function showLinkNotification(payload) {
-  const url = (payload && payload.url) || "/";
-  let host = url;
-  try {
-    host = new URL(url).host;
-  } catch {
-    // keep raw
-  }
+  const url = (payload && payload.url) || STABLE_APP_URL;
   await self.registration.showNotification("BeatLine · new link", {
-    body: `Tap to reopen — ${host}. Your balance and trade history follow you.`,
+    body: url,
     icon: "/icons/icon-192.png?v=2.6",
     badge: "/icons/icon-192.png?v=2.6",
-    vibrate: [100, 50, 100],
     tag: "beatline-new-link",
     renotify: true,
-    requireInteraction: true,
+    requireInteraction: false,
     silent: false,
-    data: { url, kind: "new_link" },
+    data: { url },
   });
 }
 
@@ -360,24 +346,18 @@ async function checkTarget(forceNotify) {
   if (!state.chimeOn && !forceNotify) return;
   let data;
   try {
-    const res = await fetch(`${TARGET_URL}&_=${Date.now()}`, { cache: "no-store" });
+    const res = await fetch(`${TARGET_URL}&_=${Date.now()}`, {
+      cache: "no-store",
+    });
     data = await res.json();
   } catch {
     return;
   }
-  const beat = data.price_to_beat ?? data.target;
-  const ticker = data.ticker || null;
-  // Track ticker/beat only — never alert on TO BEAT / new 15m generation.
-  // (forceNotify is reserved for explicit Options → Test.)
-  if (forceNotify) {
-    await showTargetNotification(
-      {
-        beat,
-        ticker,
-        closeEt: data.close_et,
-      },
-      { force: true }
-    );
+  const ticker = data && data.ticker;
+  const beat = data && (data.price_to_beat ?? data.target);
+  // Quiet sync only — never alert on new TO BEAT / 15m window.
+  if (ticker && ticker !== state.notifiedTicker) {
+    state.notifiedTicker = ticker;
   }
   state.ticker = ticker || state.ticker;
   if (beat != null) state.target = beat;
@@ -401,15 +381,6 @@ async function checkClearEdge(forceNotify) {
     return;
   }
 
-  // Focused page owns the in-app chime — do not arm/cooldown from SW poll
-  // or we silence a later background push for this sticky.
-  if (!forceNotify && (await hasFocusedClient())) {
-    state.pendingEdgeKey = null;
-    state.pendingEdgeCount = 0;
-    await writeState(state);
-    return;
-  }
-
   const ask = Math.round(Number(data.ask_cents) || 0);
   const ticker = data.ticker || "";
   const sticky = `${ticker}:${data.side}`;
@@ -420,21 +391,8 @@ async function checkClearEdge(forceNotify) {
   const sameSide = sameEdgeSticky(prevKey, sticky);
   const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
 
-  // Require the same clear edge on two SW polls before notifying — matches
-  // server confirm and avoids phone alerts when the app still says wait.
+  // Fire on first clear sight — multi-poll confirm missed brief Best-buys.
   if (!forceNotify) {
-    if (state.pendingEdgeKey === sticky) {
-      state.pendingEdgeCount = (Number(state.pendingEdgeCount) || 0) + 1;
-    } else {
-      state.pendingEdgeKey = sticky;
-      state.pendingEdgeCount = 1;
-    }
-    await writeState(state);
-    if (state.pendingEdgeCount < 2) return;
-  }
-
-  if (!forceNotify) {
-    // Same sticky recently sounded (BG notify or page chimed) — do not dump.
     if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) {
       return;
     }
@@ -448,8 +406,9 @@ async function checkClearEdge(forceNotify) {
     beat: data.beat ?? data.price_to_beat,
     ticker: data.ticker,
   };
-  const sounded = await showEdgeNotification(payload);
-  // Re-read — showEdgeNotification may have written lastEdgeAlert / edgeAt.
+  const sounded = await showEdgeNotification(payload, {
+    force: !!forceNotify,
+  });
   const next = await readState();
   if (sounded) {
     next.edgeKey = sticky;
@@ -485,7 +444,7 @@ function startPollLoop() {
         // ignore
       }
     })();
-  }, 6_000);
+  }, POLL_MS);
   if (!keepAliveTimer) {
     keepAliveTimer = setInterval(keepServerAwake, KEEP_ALIVE_MS);
   }
@@ -508,7 +467,6 @@ self.addEventListener("message", (event) => {
         const state = await readState();
         state.chimeOn = !!msg.enabled;
         await writeState(state);
-        startPollLoop();
       })()
     );
   }
@@ -520,7 +478,6 @@ self.addEventListener("message", (event) => {
         if (msg.target != null) state.target = msg.target;
         if (typeof msg.chimeOn === "boolean") state.chimeOn = msg.chimeOn;
         await writeState(state);
-        startPollLoop();
       })()
     );
   }
@@ -528,24 +485,15 @@ self.addEventListener("message", (event) => {
     event.waitUntil(
       (async () => {
         const state = await readState();
-        const all = await self.clients.matchAll({
-          type: "window",
-          includeUncontrolled: true,
-        });
-        const payload = {
-          type: "edge-state",
-          edgeKey: state.edgeKey || null,
-          edgeAsk: Number(state.edgeAsk) || 0,
-          edgeAt: Number(state.edgeAt) || 0,
-          chimeOn: !!state.chimeOn,
-          lastEdgeAlert: state.lastEdgeAlert || null,
-        };
-        for (const client of all) {
-          try {
-            client.postMessage(payload);
-          } catch {
-            // ignore
-          }
+        const client = event.source;
+        if (client && client.postMessage) {
+          client.postMessage({
+            type: "edge-state",
+            edgeKey: state.edgeKey || null,
+            edgeAsk: Number(state.edgeAsk) || 0,
+            edgeAt: Number(state.edgeAt) || 0,
+            chimeOn: !!state.chimeOn,
+          });
         }
       })()
     );
@@ -553,6 +501,7 @@ self.addEventListener("message", (event) => {
   if (msg.type === "check-now") {
     event.waitUntil(
       (async () => {
+        startPollLoop();
         await checkTarget(!!msg.forceNotify);
         await checkClearEdge(!!msg.forceNotify);
       })()
@@ -561,14 +510,24 @@ self.addEventListener("message", (event) => {
   if (msg.type === "test-notify") {
     event.waitUntil(
       (async () => {
-        await showTargetNotification(
+        // Audible Best-buy (not TO BEAT) — exercises the real BG tray path.
+        await showEdgeNotification(
           {
+            side: msg.side || "above",
+            askCents: msg.askCents != null ? msg.askCents : 40,
+            pWin: msg.pWin != null ? msg.pWin : 0.55,
+            suggestStake: msg.suggestStake != null ? msg.suggestStake : 25,
             beat: msg.beat,
             ticker: msg.ticker || "TEST",
-            closeEt: msg.closeEt,
           },
           { force: true }
         );
+      })()
+    );
+  }
+  if (msg.type === "target-armed") {
+    event.waitUntil(
+      (async () => {
         const state = await readState();
         if (msg.ticker) {
           state.notifiedTicker = msg.ticker;
@@ -598,16 +557,14 @@ self.addEventListener("message", (event) => {
         const prevAsk = Number(state.edgeAsk) || 0;
         const sameSide = sameEdgeSticky(prevKey, sticky);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
-        if (!msg.bypassDedupe) {
-          if (!msg.force) {
-            if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS)
-              return;
-          } else if (sameSide && !askImproved && now - lastAt < 15_000) {
+        // force / bypass always sounds. Non-force respects cooldown.
+        if (!msg.force && !msg.bypassDedupe) {
+          if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) {
+            await showPushKeepalive("Best buy already alerted");
             return;
           }
         }
-        const sounded = await showEdgeNotification(msg, { force: !!msg.force });
-        // Stamp cooldown only after an audible tray notify (force always sounds).
+        const sounded = await showEdgeNotification(msg, { force: true });
         if (sounded) {
           const next = await readState();
           next.edgeKey = sticky;
@@ -678,12 +635,22 @@ self.addEventListener("push", (event) => {
 
         // NEVER drop a push without showNotification — Chrome revokes the
         // subscription after silent push handlers, killing all BG alerts.
+        // Within cooldown: still show audible Best-buy with renotify so a
+        // swallowed earlier delivery can recover (same tag replaces itself).
         if (
           sameSide &&
           !askImproved &&
           now - lastAt < EDGE_NOTIFY_COOLDOWN_MS
         ) {
-          await showPushKeepalive("Best buy already alerted");
+          // Re-fire audible tray — silent keepalive was the BG death mode.
+          await showEdgeNotification({
+            side,
+            askCents: ask,
+            pWin: payload.p_win ?? payload.pWin,
+            suggest_stake: payload.suggest_stake ?? payload.suggestStake,
+            beat: payload.beat ?? payload.price_to_beat ?? payload.target,
+            ticker: payload.ticker,
+          });
           return;
         }
 
@@ -695,9 +662,6 @@ self.addEventListener("push", (event) => {
           beat: payload.beat ?? payload.price_to_beat ?? payload.target,
           ticker: payload.ticker,
         });
-        // Only cooldown after an audible tray notify. Focused handoff waits
-        // for page edge-armed chimed:true so a missed FG chime can still
-        // ring on the phone if the user backgrounds before it plays.
         if (sounded) {
           const next = await readState();
           next.edgeKey = sticky;
@@ -740,16 +704,18 @@ self.addEventListener("notificationclick", (event) => {
         includeUncontrolled: true,
       });
       for (const client of all) {
-        if ("focus" in client) {
-          await client.focus();
-          // Do not push notify payload into Best Side — live market owns the UI.
-          // Do NOT navigate an existing client — navigate reloads the page and
-          // re-triggers open first-arm / alert dump.
-          return;
+        try {
+          if ("focus" in client) {
+            await client.focus();
+            if (client.navigate) await client.navigate(url);
+            return;
+          }
+        } catch {
+          // ignore
         }
       }
-      if (clients.openWindow) {
-        await clients.openWindow(url);
+      if (self.clients.openWindow) {
+        await self.clients.openWindow(url);
       }
     })()
   );
@@ -759,9 +725,13 @@ self.addEventListener("periodicsync", (event) => {
   if (event.tag === "kalshi-15m-check") {
     event.waitUntil(
       (async () => {
+        startPollLoop();
         await checkTarget(false);
         await checkClearEdge(false);
+        await keepServerAwake();
       })()
     );
   }
 });
+
+startPollLoop();

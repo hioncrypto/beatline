@@ -120,7 +120,7 @@ _clear_edge_latch_ticker: str | None = None
 # shows "wait / no clear edge".
 _edge_confirm_key: str | None = None
 _edge_confirm_count: int = 0
-EDGE_CONFIRM_POLLS = 2
+EDGE_CONFIRM_POLLS = 1
 _vapid_app_server_key: str | None = None
 _vapid_private_path: str | None = None
 TARGET_TTL = 0.75
@@ -128,8 +128,8 @@ CANDLES_TTL = 5.0
 SPOT_TTL = 1.0
 BRTI_TTL = 1.0
 PUSH_POLL_SEC = 2.0
-EDGE_PUSH_COOLDOWN_SEC = 90.0
-EDGE_GONE_RESET_SEC = 90.0
+EDGE_PUSH_COOLDOWN_SEC = 60.0
+EDGE_GONE_RESET_SEC = 60.0
 SETTLE_WINDOW_SEC = 60.0
 KALSHI_SERIES_URL = "https://kalshi.com/markets/kxbtc15m"
 
@@ -1903,7 +1903,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.3.2",
+                    "version": "2.3.3",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

@@ -11,10 +11,9 @@
   const DEMO_KEY = "kalshiDemoState";
   const USER_ID_KEY = "beatlineUserId";
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
-  /** Cap local ledger size — 50k double-writes were blowing Android PWA storage. */
-  const HISTORY_LIMIT = 5000;
+  const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.13";
+  const APP_VERSION = "10.14";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -561,6 +560,7 @@
 
   function persistTradeHistory(list) {
     // Append-only ledger: never write a shorter/empty list over a longer one.
+    // Never trim/overwrite with fewer rows on quota — that wiped history.
     const existing = (() => {
       try {
         const raw = localStorage.getItem(TRADE_HISTORY_KEY);
@@ -573,29 +573,13 @@
     })();
     const merged = mergeTradeHistory(list, existing);
     if (!merged.length && existing.length) return;
-    let keep = merged.slice(0, HISTORY_LIMIT);
-    const write = (rows) => {
-      localStorage.setItem(TRADE_HISTORY_KEY, JSON.stringify(rows));
-    };
     try {
-      write(keep);
-      return;
-    } catch (err) {
-      if (!isQuotaError(err)) return;
-    }
-    // Quota: drop oldest half, then keep last 800 if still tight.
-    try {
-      keep = keep.slice(0, Math.max(200, Math.floor(keep.length / 2)));
-      write(keep);
-      return;
+      localStorage.setItem(
+        TRADE_HISTORY_KEY,
+        JSON.stringify(merged.slice(0, HISTORY_LIMIT))
+      );
     } catch {
-      // fall through
-    }
-    try {
-      keep = keep.slice(0, 800);
-      write(keep);
-    } catch {
-      // keep in-memory only
+      // quota — keep full ledger in memory; do not shrink what is already saved
     }
   }
 
@@ -1146,34 +1130,10 @@
       demo.history = mergeTradeHistory(demo.history, loadTradeHistory());
       demo.updatedAt = Date.now();
       persistTradeHistory(demo.history);
-      // Slim DEMO_KEY: do NOT duplicate the full ledger here. Dual-writing
-      // history was the main reason Android PWA storage filled / got evicted.
-      const slim = {
-        on: !!demo.on,
-        start: demo.start,
-        balance: demo.balance,
-        realizedPl: demo.realizedPl,
-        position: demo.position,
-        lastResult: demo.lastResult,
-        // Tiny recent hint only — full ledger lives in TRADE_HISTORY_KEY.
-        history: (demo.history || []).slice(0, 30),
-        updatedAt: demo.updatedAt,
-      };
-      if (!safeLocalSet(DEMO_KEY, JSON.stringify(slim))) {
-        // Last resort: balance/position only.
-        safeLocalSet(
-          DEMO_KEY,
-          JSON.stringify({
-            on: !!demo.on,
-            start: demo.start,
-            balance: demo.balance,
-            realizedPl: demo.realizedPl,
-            position: demo.position,
-            lastResult: null,
-            history: [],
-            updatedAt: demo.updatedAt,
-          })
-        );
+      // Save the full account including history — never strip the ledger.
+      if (!safeLocalSet(DEMO_KEY, JSON.stringify(demo))) {
+        // Storage full: still keep trying the dedicated history key only.
+        persistTradeHistory(demo.history);
       }
     } catch {
       // ignore quota

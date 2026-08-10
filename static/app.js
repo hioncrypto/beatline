@@ -11,9 +11,10 @@
   const DEMO_KEY = "kalshiDemoState";
   const USER_ID_KEY = "beatlineUserId";
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
-  const HISTORY_LIMIT = 50000;
+  /** Cap local ledger size — 50k double-writes were blowing Android PWA storage. */
+  const HISTORY_LIMIT = 5000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.12";
+  const APP_VERSION = "10.13";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -49,6 +50,63 @@
   const SUGGEST_LOG_LIMIT = 80;
   const VAPID_CACHE_KEY = "beatlineVapidPublic";
   const CHIME_GAP_MS = 4_500;
+
+  function safeLocalGet(key, fallback = null) {
+    try {
+      const v = localStorage.getItem(key);
+      return v == null ? fallback : v;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function isQuotaError(err) {
+    if (!err) return false;
+    const name = String(err.name || "");
+    const msg = String(err.message || err);
+    return (
+      name === "QuotaExceededError" ||
+      name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+      /quota/i.test(msg)
+    );
+  }
+
+  /** localStorage set with one trim-retry on quota. Returns false if still failing. */
+  function safeLocalSet(key, value) {
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch (err) {
+      if (!isQuotaError(err)) return false;
+      try {
+        // Drop bulky non-ledger keys first so the account/ledger can still save.
+        localStorage.removeItem(SUGGEST_LOG_KEY);
+        localStorage.removeItem(DAY_EQUITY_KEY);
+        localStorage.removeItem(PL_UI_KEY);
+        localStorage.setItem(key, value);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  /** Ask Android/Chrome not to evict BeatLine origin data when space is tight. */
+  async function requestPersistentStorage() {
+    try {
+      if (!navigator.storage || typeof navigator.storage.persist !== "function") {
+        return false;
+      }
+      const already =
+        typeof navigator.storage.persisted === "function"
+          ? await navigator.storage.persisted()
+          : false;
+      if (already) return true;
+      return !!(await navigator.storage.persist());
+    } catch {
+      return false;
+    }
+  }
 
   function loadPlUi() {
     try {
@@ -416,7 +474,7 @@
   /** Replay profit C–E–G after the next tap if audio was blocked. */
   let pendingProfitChime = false;
   let pendingProfitPayload = null;
-  let openPlCollapsed = localStorage.getItem(OPEN_PL_COLLAPSE_KEY) === "1";
+  let openPlCollapsed = safeLocalGet(OPEN_PL_COLLAPSE_KEY) === "1";
   let chartHeightPx = loadChartHeightPx();
   let summaryPushPx = loadSummaryPushPx();
   let summaryNaturalH = null;
@@ -444,9 +502,9 @@
   const SPOT_TRAIL_MS = 12 * 60 * 1000;
   let audioCtx = null;
   // Chart candle size only — Price to beat is always Kalshi 15m.
-  let currentTf = localStorage.getItem(TF_KEY) || "15m";
+  let currentTf = safeLocalGet(TF_KEY) || "15m";
   if (!["1m", "5m", "15m"].includes(currentTf)) currentTf = "15m";
-  let chimeOn = localStorage.getItem(CHIME_KEY);
+  let chimeOn = safeLocalGet(CHIME_KEY);
   chimeOn = chimeOn === null ? true : chimeOn === "1";
 
   function money(n) {
@@ -515,13 +573,29 @@
     })();
     const merged = mergeTradeHistory(list, existing);
     if (!merged.length && existing.length) return;
+    let keep = merged.slice(0, HISTORY_LIMIT);
+    const write = (rows) => {
+      localStorage.setItem(TRADE_HISTORY_KEY, JSON.stringify(rows));
+    };
     try {
-      localStorage.setItem(
-        TRADE_HISTORY_KEY,
-        JSON.stringify(merged.slice(0, HISTORY_LIMIT))
-      );
+      write(keep);
+      return;
+    } catch (err) {
+      if (!isQuotaError(err)) return;
+    }
+    // Quota: drop oldest half, then keep last 800 if still tight.
+    try {
+      keep = keep.slice(0, Math.max(200, Math.floor(keep.length / 2)));
+      write(keep);
+      return;
     } catch {
-      // quota — keep what we can in memory
+      // fall through
+    }
+    try {
+      keep = keep.slice(0, 800);
+      write(keep);
+    } catch {
+      // keep in-memory only
     }
   }
 
@@ -1072,7 +1146,35 @@
       demo.history = mergeTradeHistory(demo.history, loadTradeHistory());
       demo.updatedAt = Date.now();
       persistTradeHistory(demo.history);
-      localStorage.setItem(DEMO_KEY, JSON.stringify(demo));
+      // Slim DEMO_KEY: do NOT duplicate the full ledger here. Dual-writing
+      // history was the main reason Android PWA storage filled / got evicted.
+      const slim = {
+        on: !!demo.on,
+        start: demo.start,
+        balance: demo.balance,
+        realizedPl: demo.realizedPl,
+        position: demo.position,
+        lastResult: demo.lastResult,
+        // Tiny recent hint only — full ledger lives in TRADE_HISTORY_KEY.
+        history: (demo.history || []).slice(0, 30),
+        updatedAt: demo.updatedAt,
+      };
+      if (!safeLocalSet(DEMO_KEY, JSON.stringify(slim))) {
+        // Last resort: balance/position only.
+        safeLocalSet(
+          DEMO_KEY,
+          JSON.stringify({
+            on: !!demo.on,
+            start: demo.start,
+            balance: demo.balance,
+            realizedPl: demo.realizedPl,
+            position: demo.position,
+            lastResult: null,
+            history: [],
+            updatedAt: demo.updatedAt,
+          })
+        );
+      }
     } catch {
       // ignore quota
     }
@@ -5233,7 +5335,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.25", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.26", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5919,7 +6021,7 @@
     unlockAudioPlayback();
     await ensureAudioReady();
     chimeOn = true;
-    localStorage.setItem(CHIME_KEY, "1");
+    safeLocalSet(CHIME_KEY, "1");
     postToSW({ type: "set-chime", enabled: true });
     // Fresh enable — allow the next real clear edge to sound.
     lastSoundedEdgeSticky = null;
@@ -5948,7 +6050,7 @@
   async function turnAlertsOff() {
     chimeOn = false;
     pendingEdgeChime = false;
-    localStorage.setItem(CHIME_KEY, "0");
+    safeLocalSet(CHIME_KEY, "0");
     localStorage.setItem(BG_ARMED_KEY, "0");
     postToSW({ type: "set-chime", enabled: false });
     await unsubscribePush();
@@ -8793,6 +8895,8 @@
     ensureServiceWorker().then(async (reg) => {
       swReg = reg;
       postToSW({ type: "set-chime", enabled: chimeOn });
+      // Ask the OS to keep BeatLine data when Android trims other PWAs.
+      requestPersistentStorage().catch(() => {});
       // Always re-register with the server when permission is already granted —
       // Render restarts wipe subscribers and rotate VAPID keys.
       if (
@@ -8800,10 +8904,15 @@
         "Notification" in window &&
         Notification.permission === "granted"
       ) {
-        const ok = await subscribePush({ forceRefresh: true }).catch(() => false);
-        if (ok) localStorage.setItem(BG_ARMED_KEY, "1");
+        let ok = await subscribePush({ forceRefresh: true }).catch(() => false);
+        if (!ok) {
+          // Cleared cache / cold SW — one retry after a beat.
+          await new Promise((r) => setTimeout(r, 800));
+          ok = await subscribePush({ forceRefresh: true }).catch(() => false);
+        }
+        if (ok) safeLocalSet(BG_ARMED_KEY, "1");
         else {
-          localStorage.setItem(BG_ARMED_KEY, "0");
+          // Soft warn only — don't stamp "0" forever on a transient wipe.
           setBgStatus(
             false,
             "Background push not registered — Options → Enable, then Test"

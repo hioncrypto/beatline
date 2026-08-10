@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.25-always-tray";
+const SW_VERSION = "3.26-storage-resilient";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -86,41 +86,54 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
-async function readState() {
-  const cache = await caches.open(STATE_CACHE);
-  const res = await cache.match(STATE_KEY);
-  if (!res) {
-    return {
-      ticker: null,
-      target: null,
-      chimeOn: true,
-      edgeKey: null,
-      edgeAsk: 0,
-      edgeAt: 0,
-    };
-  }
+async function writeState(state) {
+  // Keep a memory copy so poll/push still work if Cache API is evicted.
+  self.__beatlineSwState = state;
   try {
-    return await res.json();
+    const cache = await caches.open(STATE_CACHE);
+    await cache.put(
+      STATE_KEY,
+      new Response(JSON.stringify(state), {
+        headers: { "Content-Type": "application/json" },
+      })
+    );
   } catch {
-    return {
-      ticker: null,
-      target: null,
-      chimeOn: true,
-      edgeKey: null,
-      edgeAsk: 0,
-      edgeAt: 0,
-    };
+    // Quota / cleared cache — do not kill the alert path.
   }
 }
 
-async function writeState(state) {
-  const cache = await caches.open(STATE_CACHE);
-  await cache.put(
-    STATE_KEY,
-    new Response(JSON.stringify(state), {
-      headers: { "Content-Type": "application/json" },
-    })
-  );
+async function readState() {
+  if (self.__beatlineSwState && typeof self.__beatlineSwState === "object") {
+    // Prefer fresh memory, but still try cache below for cold starts.
+  }
+  try {
+    const cache = await caches.open(STATE_CACHE);
+    const res = await cache.match(STATE_KEY);
+    if (res) {
+      try {
+        const parsed = await res.json();
+        if (parsed && typeof parsed === "object") {
+          self.__beatlineSwState = parsed;
+          return parsed;
+        }
+      } catch {
+        // fall through
+      }
+    }
+  } catch {
+    // Cache API unavailable / cleared
+  }
+  if (self.__beatlineSwState && typeof self.__beatlineSwState === "object") {
+    return self.__beatlineSwState;
+  }
+  return {
+    ticker: null,
+    target: null,
+    chimeOn: true,
+    edgeKey: null,
+    edgeAsk: 0,
+    edgeAt: 0,
+  };
 }
 
 /**

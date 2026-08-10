@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.15";
+  const APP_VERSION = "10.16";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5653,7 +5653,7 @@
     return Number(ev) > 0.01 ? "edge ok" : "edge thin";
   }
 
-  /** % + edge thickness — shown large above Best Side (moved off the top chip). */
+  /** % + edge thickness — large duplicate above Best Side. */
   function formatEdgeSignalBit() {
     const snap = lastBestHealthSnap;
     if (snap && snap.side) {
@@ -5723,7 +5723,7 @@
     el.edgeSignal.textContent = bit;
   }
 
-  /** Side-only Best buy status for the top health chip (no % / edge). */
+  /** Full Best buy status for the top health chip (includes % / edge). */
   function formatBestBuyHealthBit() {
     const snap = lastBestHealthSnap;
     if (snap && snap.side) {
@@ -5732,19 +5732,34 @@
         snap.askCents != null && Number.isFinite(Number(snap.askCents))
           ? Math.round(Number(snap.askCents))
           : null;
+      const conf =
+        snap.pWin != null && Number.isFinite(Number(snap.pWin))
+          ? Math.round(Number(snap.pWin) * 100)
+          : null;
       const stake =
         snap.suggestedStake != null &&
         Number.isFinite(Number(snap.suggestedStake))
           ? Math.round(Number(snap.suggestedStake))
           : null;
+      const edgeBit = formatEdgeThicknessBit(snap.ev);
       if (snap.clear) {
         let s = `Buy ${side}`;
         if (ask != null) s += ` @ ${ask}¢`;
+        if (conf != null) s += ` · ${conf}%`;
+        if (edgeBit) s += ` · ${edgeBit}`;
         if (stake != null) s += ` · $${stake}`;
         return s;
       }
       let s = `Wait ${side}`;
-      if (ask != null && snap.waitWhy && !snap.pWin) s += ` @ ${ask}¢`;
+      if (conf != null) {
+        s +=
+          conf < 52
+            ? ` · ${conf}% (need ≥52%)`
+            : ` · ${conf}%`;
+      }
+      if (edgeBit) s += ` · ${edgeBit}`;
+      else if (snap.waitWhy && !conf) s += ` · ${snap.waitWhy}`;
+      if (ask != null && conf == null) s += ` @ ${ask}¢`;
       return s;
     }
     const pick = lastBestPick;
@@ -5754,12 +5769,19 @@
         pick.askCents != null && Number.isFinite(Number(pick.askCents))
           ? Math.round(Number(pick.askCents))
           : null;
+      const conf =
+        pick.pWin != null && Number.isFinite(Number(pick.pWin))
+          ? Math.round(Number(pick.pWin) * 100)
+          : null;
       const stake =
         pick.suggestedStake != null && Number.isFinite(Number(pick.suggestedStake))
           ? Math.round(Number(pick.suggestedStake))
           : null;
+      const edgeBit = formatEdgeThicknessBit(pick.ev);
       let s = `Buy ${side}`;
       if (ask != null) s += ` @ ${ask}¢`;
+      if (conf != null) s += ` · ${conf}%`;
+      if (edgeBit) s += ` · ${edgeBit}`;
       if (stake != null) s += ` · $${stake}`;
       return s;
     }
@@ -5770,13 +5792,33 @@
         edge.ask_cents != null && Number.isFinite(Number(edge.ask_cents))
           ? Math.round(Number(edge.ask_cents))
           : null;
+      const conf =
+        edge.p_win != null && Number.isFinite(Number(edge.p_win))
+          ? Math.round(Number(edge.p_win) * 100)
+          : null;
+      const edgeBit = formatEdgeThicknessBit(edge.ev);
       if (edge.clear) {
         let s = `Buy ${side}`;
         if (ask != null) s += ` @ ${ask}¢`;
+        if (conf != null) s += ` · ${conf}%`;
+        if (edgeBit) s += ` · ${edgeBit}`;
         return s;
       }
       let s = `Wait ${side}`;
-      if (ask != null && edge.p_win == null) s += ` @ ${ask}¢`;
+      if (conf != null) {
+        s +=
+          conf < 52
+            ? ` · ${conf}% (need ≥52%)`
+            : ` · ${conf}%`;
+      }
+      if (edgeBit) s += ` · ${edgeBit}`;
+      else if (
+        edge.reject === "ev" ||
+        (edge.ev != null && Number(edge.ev) <= 0.01)
+      ) {
+        s += " · edge thin";
+      }
+      if (ask != null && conf == null) s += ` @ ${ask}¢`;
       return s;
     }
     return "No Best buy yet";

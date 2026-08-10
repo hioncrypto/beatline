@@ -6040,7 +6040,7 @@
       setStatus("warn", "Could not enable push alerts — try Update now, then Enable again");
       return false;
     }
-    localStorage.setItem(BG_ARMED_KEY, "1");
+    safeLocalSet(BG_ARMED_KEY, "1");
     syncAlertsUi();
     await runChimeTest();
     setStatus("ok", "Alerts on — FG chime when open · BG notification when away");
@@ -6051,7 +6051,7 @@
     chimeOn = false;
     pendingEdgeChime = false;
     safeLocalSet(CHIME_KEY, "0");
-    localStorage.setItem(BG_ARMED_KEY, "0");
+    safeLocalSet(BG_ARMED_KEY, "0");
     postToSW({ type: "set-chime", enabled: false });
     await unsubscribePush();
     syncAlertsUi();

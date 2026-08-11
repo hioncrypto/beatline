@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.29-alert-recheck";
+const SW_VERSION = "3.30-bg-always-audible";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -11,7 +11,7 @@ const RENDER_DEPLOY_URL =
   "https://render.com/deploy?repo=https://github.com/hioncrypto/beatline";
 const EDGE_NOTIFY_COOLDOWN_MS = 60_000;
 /** Hit health often enough to keep Render free awake while SW is alive. */
-const KEEP_ALIVE_MS = 2 * 60 * 1000;
+const KEEP_ALIVE_MS = 60 * 1000;
 const POLL_MS = 4_000;
 
 /**
@@ -318,7 +318,7 @@ async function showEdgeNotification(payload, { force = false } = {}) {
       vibrate: [80, 40, 80, 40, 80, 40, 160],
       tag: "kalshi-clear-edge",
       renotify: true,
-      requireInteraction: false,
+      requireInteraction: true,
       silent: false,
       data: edgeData,
     });
@@ -678,36 +678,12 @@ self.addEventListener("push", (event) => {
         const sameSide = sameEdgeSticky(prevKey, sticky);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
 
-        // Within cooldown:
-        // - Focused app: silent keepalive (FG already owns the chime path)
-        // - Away: audible renotify so a swallowed first tray can recover
-        if (
-          sameSide &&
-          !askImproved &&
-          now - lastAt < EDGE_NOTIFY_COOLDOWN_MS
-        ) {
-          if (await hasFocusedClient()) {
-            await showPushKeepalive("Best buy already alerted");
-            return;
-          }
-          const recovered = await showEdgeNotification({
-            side,
-            askCents: ask,
-            pWin: payload.p_win ?? payload.pWin,
-            suggest_stake: payload.suggest_stake ?? payload.suggestStake,
-            beat: payload.beat ?? payload.price_to_beat ?? payload.target,
-            ticker: payload.ticker,
-          });
-          if (recovered) {
-            const next = await readState();
-            next.edgeKey = sticky;
-            next.edgeAsk = ask;
-            next.edgeAt = now;
-            await writeState(next);
-          }
-          return;
-        }
-
+        // ALWAYS audible for Best-buy pushes. Never gate on hasFocusedClient —
+        // Android often reports focused while backgrounded/locked, which turned
+        // real BG alerts into silent keepalives (FG chime worked; phone stayed quiet).
+        // Same-tag renotify replaces itself instead of stacking spam.
+        void askImproved;
+        void lastAt;
         const sounded = await showEdgeNotification({
           side,
           askCents: ask,
@@ -722,6 +698,9 @@ self.addEventListener("push", (event) => {
           next.edgeAsk = ask;
           next.edgeAt = now;
           await writeState(next);
+        } else {
+          // Still satisfy Chrome userVisibleOnly if tray failed.
+          await showPushKeepalive("Best buy alert");
         }
       })()
     );

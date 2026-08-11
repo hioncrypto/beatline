@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.25";
+  const APP_VERSION = "10.26";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5301,7 +5301,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.29", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.30", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -8970,31 +8970,55 @@
           target: lastFifteenTarget,
           chimeOn,
         });
+        // Always poke the SW poll — Chrome suspends the worker after hide.
+        postToSW({ type: "check-now", forceNotify: true });
         if (chimeOn && lastBestPick && lastBestPick.side) {
           const ask = Math.round(Number(lastBestPick.askCents) || 0);
           const ticker = lastTicker || lastFifteenTicker || "";
-          const sticky = `${ticker}:${lastBestPick.side}`;
           pendingEdgeChime = false;
-          // Backup BG path when leaving on a clear edge — only if not already
-          // sounded. Marking sounded before SW ack was silencing catch-up.
-          if (!sameSoundedSticky(sticky) && !swAlreadySoundedEdge(lastBestPick)) {
-            postToSW({
-              type: "edge-notify",
-              force: true,
-              bypassDedupe: true,
-              side: lastBestPick.side,
-              askCents: ask || null,
-              pWin: lastBestPick.pWin,
-              suggestStake: lastBestPick.suggestedStake,
-              ticker,
-              beat: lastTarget,
-              chimeOn,
-            });
-          }
-        } else {
-          // No current sticky — force one SW poll so a fresh clear isn't missed
-          // while Chrome suspends the worker after hide.
-          postToSW({ type: "check-now", forceNotify: true });
+          // Always fire tray when leaving on a clear edge — FG chime is gone
+          // once the app is away; skipping "already sounded" left the phone quiet.
+          postToSW({
+            type: "edge-notify",
+            force: true,
+            bypassDedupe: true,
+            side: lastBestPick.side,
+            askCents: ask || null,
+            pWin: lastBestPick.pWin,
+            suggestStake: lastBestPick.suggestedStake,
+            ticker,
+            beat: lastTarget,
+            chimeOn,
+          });
+        }
+        // Also ask the server — client lastBestPick can lag / miss while away.
+        if (chimeOn) {
+          fetch(`/api/clear-edge?_=${Date.now()}`, { cache: "no-store" })
+            .then((r) => r.json())
+            .then((edge) => {
+              if (!(edge && edge.clear && edge.side)) return;
+              if (
+                lastBestPick &&
+                lastBestPick.side === edge.side &&
+                Math.round(Number(lastBestPick.askCents) || 0) ===
+                  Math.round(Number(edge.ask_cents) || 0)
+              ) {
+                return; // already notified from lastBestPick above
+              }
+              postToSW({
+                type: "edge-notify",
+                force: true,
+                bypassDedupe: true,
+                side: edge.side,
+                askCents: edge.ask_cents,
+                pWin: edge.p_win,
+                suggestStake: edge.suggest_stake,
+                ticker: edge.ticker || lastTicker || lastFifteenTicker,
+                beat: edge.beat ?? edge.price_to_beat ?? lastTarget,
+                chimeOn,
+              });
+            })
+            .catch(() => {});
         }
       }
     });

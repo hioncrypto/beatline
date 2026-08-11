@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.23";
+  const APP_VERSION = "10.24";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5301,7 +5301,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.27", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.28", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5317,6 +5317,21 @@
               edgeAsk: Number(msg.edgeAsk) || 0,
               edgeAt: Number(msg.edgeAt) || 0,
               chimeOn: !!msg.chimeOn,
+            };
+            return;
+          }
+          if (msg.type === "edge-notified") {
+            // SW confirmed an audible tray — safe to stamp sounded.
+            const side = msg.side === "below" ? "below" : "above";
+            markEdgeSounded(
+              { side, askCents: msg.askCents },
+              { ask: msg.askCents }
+            );
+            swEdgeState = {
+              edgeKey: msg.edgeKey || `${msg.ticker || ""}:${side}`,
+              edgeAsk: Number(msg.askCents) || 0,
+              edgeAt: Number(msg.edgeAt) || Date.now(),
+              chimeOn: swEdgeState ? !!swEdgeState.chimeOn : true,
             };
             return;
           }
@@ -6325,8 +6340,9 @@
         const ctrl =
           navigator.serviceWorker && navigator.serviceWorker.controller;
         if (ctrl) {
+          // Do NOT mark sounded until SW confirms the tray fired — premature
+          // markEdgeSounded silenced catch-up when the message never ran.
           postToSW({ type: "edge-notify", force: true, ...edgePayload });
-          markEdgeSounded(best, { ask });
         } else {
           try {
             const title =
@@ -6587,22 +6603,27 @@
     if (askCents == null || modelProb == null || !Number.isFinite(modelProb)) {
       return null;
     }
-    const sized = roiForStake(askCents, Math.max(1, stakeUsd || 1));
-    if (!sized) return null;
-    const bought = stakeUsd > 0 ? roiForStake(askCents, stakeUsd) : null;
+    const P = askCents / 100;
+    if (!(P > 0 && P < 1)) return null;
+    // Clear-edge EV/score MUST match the server push watcher (1-contract fee).
+    // Using tradeStake here made in-app BUY while /api/clear-edge stayed Wait
+    // — so background Web Push never fired for what the phone needed.
+    const fee = kalshiTakerFee(1, P);
+    const costPer = P + fee;
+    const bought =
+      stakeUsd > 0 ? roiForStake(askCents, stakeUsd) : null;
     const pWin = side === "above" ? modelProb : 1 - modelProb;
-    const costPer = sized.total / Math.max(1, sized.contracts);
     const ev = pWin * 1 - costPer;
     const risk = Math.max(0.04, 1 - pWin);
     return {
       side,
-      askCents: sized.askCents,
+      askCents: Math.round(askCents),
       pWin,
       ev,
       risk,
       score: ev / risk,
       costPer,
-      roiIfWin: bought && !bought.empty ? bought.roiIfWin : sized.roiIfWin,
+      roiIfWin: bought && !bought.empty ? bought.roiIfWin : null,
       contracts: bought && !bought.empty ? bought.contracts : 0,
       total: bought && !bought.empty ? bought.total : 0,
       profitIfWin: bought && !bought.empty ? bought.profitIfWin : 0,
@@ -8931,23 +8952,24 @@
         if (chimeOn && lastBestPick && lastBestPick.side) {
           const ask = Math.round(Number(lastBestPick.askCents) || 0);
           const ticker = lastTicker || lastFifteenTicker || "";
-          const wasPending = !!pendingEdgeChime;
+          const sticky = `${ticker}:${lastBestPick.side}`;
           pendingEdgeChime = false;
-          // Backup BG path when leaving the app on a clear edge — server push
-          // can miss brief windows; SW cooldown still dedupes.
-          postToSW({
-            type: "edge-notify",
-            force: true,
-            bypassDedupe: true,
-            side: lastBestPick.side,
-            askCents: ask || null,
-            pWin: lastBestPick.pWin,
-            suggestStake: lastBestPick.suggestedStake,
-            ticker,
-            beat: lastTarget,
-            chimeOn,
-          });
-          if (wasPending) markEdgeSounded(lastBestPick, { ask });
+          // Backup BG path when leaving on a clear edge — only if not already
+          // sounded. Marking sounded before SW ack was silencing catch-up.
+          if (!sameSoundedSticky(sticky) && !swAlreadySoundedEdge(lastBestPick)) {
+            postToSW({
+              type: "edge-notify",
+              force: true,
+              bypassDedupe: true,
+              side: lastBestPick.side,
+              askCents: ask || null,
+              pWin: lastBestPick.pWin,
+              suggestStake: lastBestPick.suggestedStake,
+              ticker,
+              beat: lastTarget,
+              chimeOn,
+            });
+          }
         } else {
           // No current sticky — force one SW poll so a fresh clear isn't missed
           // while Chrome suspends the worker after hide.

@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.27-no-15m-alarm";
+const SW_VERSION = "3.28-bg-alert-fix";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -103,8 +103,9 @@ async function writeState(state) {
 }
 
 async function readState() {
+  // Prefer in-memory state — cache may be stale after a failed write/eviction.
   if (self.__beatlineSwState && typeof self.__beatlineSwState === "object") {
-    // Prefer fresh memory, but still try cache below for cold starts.
+    return self.__beatlineSwState;
   }
   try {
     const cache = await caches.open(STATE_CACHE);
@@ -122,9 +123,6 @@ async function readState() {
     }
   } catch {
     // Cache API unavailable / cleared
-  }
-  if (self.__beatlineSwState && typeof self.__beatlineSwState === "object") {
-    return self.__beatlineSwState;
   }
   return {
     ticker: null,
@@ -225,6 +223,40 @@ async function showTargetNotification(payload, { force = false } = {}) {
  * Also broadcast so an open focused page can play the in-app C–E–G chime.
  * Returns true after the audible tray notify fires.
  */
+async function broadcastEdgeNotified(payload) {
+  const ask =
+    payload && payload.askCents != null
+      ? Math.round(Number(payload.askCents))
+      : payload && payload.ask_cents != null
+        ? Math.round(Number(payload.ask_cents))
+        : null;
+  const ticker = (payload && payload.ticker) || "";
+  const side = payload && payload.side === "below" ? "below" : "above";
+  const msg = {
+    type: "edge-notified",
+    side,
+    askCents: ask,
+    ticker,
+    edgeKey: `${ticker}:${side}`,
+    edgeAt: Date.now(),
+  };
+  try {
+    const all = await clients.matchAll({
+      type: "window",
+      includeUncontrolled: true,
+    });
+    for (const client of all) {
+      try {
+        client.postMessage(msg);
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 async function showEdgeNotification(payload, { force = false } = {}) {
   void force; // force kept for callers; tray always sounds now
   // Additive FG chime — never a substitute for the tray notify.
@@ -299,6 +331,7 @@ async function showEdgeNotification(payload, { force = false } = {}) {
   } catch {
     // ignore
   }
+  await broadcastEdgeNotified(payload);
   return true;
 }
 
@@ -371,9 +404,11 @@ async function checkClearEdge(forceNotify) {
     return;
   }
   if (!data || !data.clear || !data.side) {
-    state.pendingEdgeKey = null;
-    state.pendingEdgeCount = 0;
-    await writeState(state);
+    // Re-read so we don't clobber a concurrent push's edgeAt / chimeOn.
+    const fresh = await readState();
+    fresh.pendingEdgeKey = null;
+    fresh.pendingEdgeCount = 0;
+    await writeState(fresh);
     return;
   }
 
@@ -417,6 +452,7 @@ async function checkClearEdge(forceNotify) {
 }
 
 let pollTimer = null;
+let pollInFlight = false;
 let keepAliveTimer = null;
 
 async function keepServerAwake() {
@@ -429,29 +465,37 @@ async function keepServerAwake() {
 
 function startPollLoop() {
   if (pollTimer) return;
-  // Serialize writes — parallel checkTarget + checkClearEdge used to wipe
-  // pendingEdgeCount and stall the poll confirm path.
+  // Serialize writes — overlapping polls raced sticky edgeAt / chimeOn.
   pollTimer = setInterval(() => {
+    if (pollInFlight) return;
+    pollInFlight = true;
     (async () => {
       try {
         await checkTarget(false);
         await checkClearEdge(false);
       } catch {
         // ignore
+      } finally {
+        pollInFlight = false;
       }
     })();
   }, POLL_MS);
   if (!keepAliveTimer) {
     keepAliveTimer = setInterval(keepServerAwake, KEEP_ALIVE_MS);
   }
-  (async () => {
-    try {
-      await checkTarget(false);
-      await checkClearEdge(false);
-    } catch {
-      // ignore
-    }
-  })();
+  if (!pollInFlight) {
+    pollInFlight = true;
+    (async () => {
+      try {
+        await checkTarget(false);
+        await checkClearEdge(false);
+      } catch {
+        // ignore
+      } finally {
+        pollInFlight = false;
+      }
+    })();
+  }
   keepServerAwake();
 }
 
@@ -629,24 +673,15 @@ self.addEventListener("push", (event) => {
         const sameSide = sameEdgeSticky(prevKey, sticky);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
 
-        // NEVER drop a push without showNotification — Chrome revokes the
-        // subscription after silent push handlers, killing all BG alerts.
-        // Within cooldown: still show audible Best-buy with renotify so a
-        // swallowed earlier delivery can recover (same tag replaces itself).
+        // Within cooldown: silent keepalive only (still satisfies Chrome
+        // userVisibleOnly). Audible re-fire here caused spam and also skipped
+        // updating edgeAt so every push kept taking this branch.
         if (
           sameSide &&
           !askImproved &&
           now - lastAt < EDGE_NOTIFY_COOLDOWN_MS
         ) {
-          // Re-fire audible tray — silent keepalive was the BG death mode.
-          await showEdgeNotification({
-            side,
-            askCents: ask,
-            pWin: payload.p_win ?? payload.pWin,
-            suggest_stake: payload.suggest_stake ?? payload.suggestStake,
-            beat: payload.beat ?? payload.price_to_beat ?? payload.target,
-            ticker: payload.ticker,
-          });
+          await showPushKeepalive("Best buy already alerted");
           return;
         }
 

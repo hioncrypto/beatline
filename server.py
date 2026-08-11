@@ -373,11 +373,8 @@ def brti_settlement_snapshot(
         for t in ticks
         if window_start <= float(t["time_ms"]) <= end_ms
     ]
-    # One sample per second bucket if we somehow get duplicates.
-    if not samples and ticks:
-        # Fall back to last ≤60 ticks before end.
-        prior = [t for t in ticks if float(t["time_ms"]) <= end_ms]
-        samples = [float(t["value"]) for t in prior[-60:]]
+    # Prefer in-window samples only — prior[-60] without a window filter can
+    # invent a settlement side from stale ticks and fire false clear edges.
     out["settlement_samples"] = len(samples)
     if not samples:
         return out
@@ -1399,6 +1396,35 @@ def evaluate_clear_edge(
     below_ask = _usable_ask_cents(data.get("no_ask_pct"))
     yes = data.get("yes_pct")
     no = data.get("no_pct")
+
+    def _mid_ok(pct) -> bool:
+        try:
+            n = int(round(float(pct)))
+        except (TypeError, ValueError):
+            return False
+        return 5 <= n <= 95
+
+    # Match client updateRoi: replace locked ~1–2¢ asks with mid % when sane.
+    if (
+        above_ask is not None
+        and above_ask <= 2
+        and yes is not None
+        and _mid_ok(yes)
+    ):
+        try:
+            above_ask = _usable_ask_cents(max(2, min(98, round(float(yes)))))
+        except (TypeError, ValueError):
+            pass
+    if (
+        below_ask is not None
+        and below_ask <= 2
+        and no is not None
+        and _mid_ok(no)
+    ):
+        try:
+            below_ask = _usable_ask_cents(max(2, min(98, round(float(no)))))
+        except (TypeError, ValueError):
+            pass
     if above_ask is None and yes is not None:
         try:
             above_ask = _usable_ask_cents(max(2, min(98, round(float(yes)))))

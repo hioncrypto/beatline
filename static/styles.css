@@ -400,6 +400,72 @@ h1 {
   accent-color: var(--accent);
 }
 
+.kalshi-live-section {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  margin: 4px 0 8px;
+}
+
+.kalshi-live-head {
+  padding-bottom: 0;
+}
+
+.kalshi-live-form {
+  display: grid;
+  gap: 10px;
+}
+
+.kalshi-field {
+  display: grid;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.kalshi-field input,
+.kalshi-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--fg);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 0.82rem;
+  resize: vertical;
+}
+
+.kalshi-field textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.kalshi-live-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kalshi-live-hint {
+  margin: 0;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.kalshi-live-status.is-live {
+  color: var(--accent);
+}
+
+.kalshi-live-status.is-warn {
+  color: #f0b429;
+}
+
 .demo-account {
   margin-top: 4px;
   padding-top: 4px;

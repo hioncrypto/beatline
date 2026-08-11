@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.27";
+  const APP_VERSION = "10.28";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -401,6 +401,12 @@
     buySlideFill: document.getElementById("buy-slide-fill"),
     buySlideLabel: document.getElementById("buy-slide-label"),
     buySlideThumb: document.getElementById("buy-slide-thumb"),
+    kalshiLiveStatus: document.getElementById("kalshi-live-status"),
+    kalshiLiveToggle: document.getElementById("kalshi-live-toggle"),
+    kalshiApiKeyId: document.getElementById("kalshi-api-key-id"),
+    kalshiPrivateKey: document.getElementById("kalshi-private-key"),
+    kalshiConnect: document.getElementById("kalshi-connect"),
+    kalshiDisconnect: document.getElementById("kalshi-disconnect"),
     kalshiLink: null,
   };
 
@@ -427,6 +433,15 @@
   let lastTicker = null;
   let lastTarget = null;
   let lastFifteenTarget = null;
+  /** Live Kalshi account (real money) — separate from demo paper state. */
+  let kalshiLive = {
+    connected: false,
+    liveEnabled: false,
+    fromEnv: false,
+    balance: null,
+    keyHint: null,
+    error: null,
+  };
   let lastFifteenTicker = null;
   /** While > now, sync 15m ticker quietly — no open-from-background chime dump. */
   let suppressTargetChimeUntil = 0;
@@ -3896,27 +3911,36 @@
       const bestLocked =
         !bestSide || (demo.position ? !canBuySide(bestSide) : false);
       // Keep clickable when locked so we can explain "close first to flip".
-      el.demoBuyBest.disabled = !demo.on;
-      el.demoBuyBest.classList.toggle("is-locked", !!demo.on && bestLocked);
+      el.demoBuyBest.disabled = !tradingArmed();
+      el.demoBuyBest.classList.toggle(
+        "is-locked",
+        tradingArmed() && bestLocked
+      );
       el.demoBuyBest.setAttribute(
         "aria-disabled",
-        !demo.on || bestLocked ? "true" : "false"
+        !tradingArmed() || bestLocked ? "true" : "false"
       );
     }
     if (el.demoBuyAbove) {
-      el.demoBuyAbove.disabled = !demo.on;
-      el.demoBuyAbove.classList.toggle("is-locked", !!demo.on && busyAbove);
+      el.demoBuyAbove.disabled = !tradingArmed();
+      el.demoBuyAbove.classList.toggle(
+        "is-locked",
+        tradingArmed() && busyAbove
+      );
       el.demoBuyAbove.setAttribute(
         "aria-disabled",
-        !demo.on || busyAbove ? "true" : "false"
+        !tradingArmed() || busyAbove ? "true" : "false"
       );
     }
     if (el.demoBuyBelow) {
-      el.demoBuyBelow.disabled = !demo.on;
-      el.demoBuyBelow.classList.toggle("is-locked", !!demo.on && busyBelow);
+      el.demoBuyBelow.disabled = !tradingArmed();
+      el.demoBuyBelow.classList.toggle(
+        "is-locked",
+        tradingArmed() && busyBelow
+      );
       el.demoBuyBelow.setAttribute(
         "aria-disabled",
-        !demo.on || busyBelow ? "true" : "false"
+        !tradingArmed() || busyBelow ? "true" : "false"
       );
     }
     if (el.demoClose) el.demoClose.disabled = !pos || !mark || mark.bidCents == null;
@@ -3978,9 +4002,197 @@
 
   function setDemoOn(on) {
     demo.on = !!on;
+    if (demo.on && isLiveKalshi()) {
+      // Prefer one mode at a time — live stays connected but buys go paper.
+      void setKalshiLiveEnabled(false, { quiet: true });
+    }
     saveDemoState();
     renderDemoUi();
     setStatus("ok", demo.on ? "Demo on" : "Demo off");
+  }
+
+  function isLiveKalshi() {
+    return !!(kalshiLive.connected && kalshiLive.liveEnabled);
+  }
+
+  function tradingArmed() {
+    return !!demo.on || isLiveKalshi();
+  }
+
+  function applyKalshiAccountStatus(status) {
+    if (!status || typeof status !== "object") return;
+    kalshiLive.connected = !!status.connected;
+    kalshiLive.liveEnabled = !!status.live_enabled;
+    kalshiLive.fromEnv = !!status.from_env;
+    kalshiLive.balance =
+      status.balance != null && Number.isFinite(Number(status.balance))
+        ? Number(status.balance)
+        : null;
+    kalshiLive.keyHint = status.key_hint || null;
+    kalshiLive.error = status.error || null;
+    renderKalshiLiveUi();
+    renderDemoUi();
+  }
+
+  function renderKalshiLiveUi() {
+    if (el.kalshiLiveToggle) {
+      el.kalshiLiveToggle.checked = !!kalshiLive.liveEnabled;
+      el.kalshiLiveToggle.disabled = !kalshiLive.connected;
+    }
+    if (el.kalshiLiveStatus) {
+      el.kalshiLiveStatus.classList.remove("is-live", "is-warn");
+      if (!kalshiLive.connected) {
+        el.kalshiLiveStatus.textContent =
+          "Not connected — buys stay paper/demo";
+      } else if (kalshiLive.error) {
+        el.kalshiLiveStatus.textContent = `Connected · ${kalshiLive.error}`;
+        el.kalshiLiveStatus.classList.add("is-warn");
+      } else if (kalshiLive.liveEnabled) {
+        const bal =
+          kalshiLive.balance != null ? money(kalshiLive.balance) : "—";
+        el.kalshiLiveStatus.textContent = `LIVE · bal ${bal}${
+          kalshiLive.keyHint ? ` · key ${kalshiLive.keyHint}` : ""
+        }`;
+        el.kalshiLiveStatus.classList.add("is-live");
+      } else {
+        const bal =
+          kalshiLive.balance != null ? money(kalshiLive.balance) : "—";
+        el.kalshiLiveStatus.textContent = `Connected · bal ${bal} · live buys off`;
+      }
+    }
+    if (el.kalshiDisconnect) {
+      el.kalshiDisconnect.disabled = !kalshiLive.connected || !!kalshiLive.fromEnv;
+    }
+    if (el.kalshiApiKeyId && kalshiLive.fromEnv && !el.kalshiApiKeyId.value) {
+      el.kalshiApiKeyId.placeholder = "Set via server env KALSHI_API_KEY_ID";
+    }
+  }
+
+  async function refreshKalshiAccountStatus() {
+    try {
+      const res = await fetch("/api/kalshi/account", { cache: "no-store" });
+      const data = await res.json();
+      applyKalshiAccountStatus(data);
+      return data;
+    } catch (err) {
+      kalshiLive.error = "Could not reach server";
+      renderKalshiLiveUi();
+      return null;
+    }
+  }
+
+  async function connectKalshiAccount() {
+    const apiKeyId = (el.kalshiApiKeyId && el.kalshiApiKeyId.value) || "";
+    const privateKey = (el.kalshiPrivateKey && el.kalshiPrivateKey.value) || "";
+    if (!apiKeyId.trim() || !privateKey.trim()) {
+      setStatus("warn", "Paste Kalshi API Key ID + private key");
+      return;
+    }
+    setStatus("ok", "Connecting Kalshi…");
+    try {
+      const res = await fetch("/api/kalshi/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key_id: apiKeyId.trim(),
+          private_key_pem: privateKey.trim(),
+        }),
+      });
+      const data = await res.json();
+      applyKalshiAccountStatus(data);
+      if (data && data.ok && data.connected) {
+        if (el.kalshiPrivateKey) el.kalshiPrivateKey.value = "";
+        setStatus(
+          "ok",
+          data.balance != null
+            ? `Kalshi connected · ${money(data.balance)}`
+            : "Kalshi connected"
+        );
+      } else {
+        setStatus("warn", (data && data.error) || "Kalshi connect failed");
+      }
+    } catch (err) {
+      setStatus("warn", "Kalshi connect failed");
+    }
+  }
+
+  async function disconnectKalshiAccount() {
+    try {
+      const res = await fetch("/api/kalshi/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const data = await res.json();
+      applyKalshiAccountStatus(data);
+      if (el.kalshiApiKeyId) el.kalshiApiKeyId.value = "";
+      if (el.kalshiPrivateKey) el.kalshiPrivateKey.value = "";
+      setStatus("ok", "Kalshi disconnected");
+    } catch (err) {
+      setStatus("warn", "Disconnect failed");
+    }
+  }
+
+  async function setKalshiLiveEnabled(on, opts = {}) {
+    const quiet = !!(opts && opts.quiet);
+    try {
+      const res = await fetch("/api/kalshi/live", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !!on }),
+      });
+      const data = await res.json();
+      applyKalshiAccountStatus(data);
+      if (!(data && data.ok === false && data.error && !data.connected)) {
+        if (data && data.live_enabled) {
+          if (demo.on) {
+            demo.on = false;
+            saveDemoState();
+            renderDemoUi();
+          }
+          if (!quiet) setStatus("ok", "Live Kalshi buys ON — real money");
+        } else if (!quiet) {
+          setStatus(
+            data && data.error ? "warn" : "ok",
+            (data && data.error) || "Live Kalshi buys off"
+          );
+        }
+      } else if (!quiet) {
+        setStatus("warn", (data && data.error) || "Could not enable live buys");
+      }
+      return data;
+    } catch (err) {
+      if (!quiet) setStatus("warn", "Could not update live buys");
+      return null;
+    }
+  }
+
+  async function placeLiveKalshiBuy(side, sized) {
+    if (!sized || !(sized.contracts > 0)) {
+      return { ok: false, error: "Need contracts to buy" };
+    }
+    try {
+      const res = await fetch("/api/kalshi/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: lastTicker,
+          side,
+          contracts: sized.contracts,
+          ask_cents: sized.askCents,
+        }),
+      });
+      const data = await res.json();
+      if (data && data.balance != null && Number.isFinite(Number(data.balance))) {
+        kalshiLive.balance = Number(data.balance);
+        renderKalshiLiveUi();
+      }
+      return data && typeof data === "object"
+        ? data
+        : { ok: false, error: "Bad order response" };
+    } catch (err) {
+      return { ok: false, error: "Order request failed" };
+    }
   }
 
   function resetDemoAccount() {
@@ -4048,7 +4260,8 @@
     )}${fills}`;
   }
 
-  function demoBuy(side, amountUsd) {
+  function demoBuy(side, amountUsd, opts = {}) {
+    const liveKalshi = !!(opts && opts.liveKalshi);
     const existing = demo.position;
     if (existing && existing.side !== side) {
       setStatus(
@@ -4072,9 +4285,11 @@
       setStatus("warn", "Need a live ask");
       return false;
     }
-    const accounted = existing
-      ? existing.accounted !== false && demo.on
-      : !!demo.on;
+    const accounted = liveKalshi
+      ? false
+      : existing
+        ? existing.accounted !== false && demo.on
+        : !!demo.on;
     if (accounted && sized.total > demo.balance + 1e-9) {
       setStatus("warn", "Not enough demo balance");
       return false;
@@ -4087,6 +4302,7 @@
     const entrySpot =
       spotN != null && Number.isFinite(spotN) ? spotN : null;
     const follow = followMetaForSide(side);
+    const liveOrder = (opts && opts.order) || null;
 
     if (existing) {
       const nextContracts = existing.contracts + sized.contracts;
@@ -4128,10 +4344,17 @@
         fills: (existing.fills || 1) + 1,
         lastAddedAt: Date.now(),
         accounted: existing.accounted !== false ? accounted : false,
+        liveKalshi: !!(existing.liveKalshi || liveKalshi),
+        kalshiOrderId:
+          (liveOrder && (liveOrder.order_id || liveOrder.orderId)) ||
+          existing.kalshiOrderId ||
+          null,
         followedSuggest:
           !!existing.followedSuggest || !!follow.followedSuggest,
         suggestSide: follow.suggestSide || existing.suggestSide || null,
-        entrySource: follow.entrySource || existing.entrySource || "own",
+        entrySource: liveKalshi
+          ? "kalshi"
+          : follow.entrySource || existing.entrySource || "own",
       };
     } else {
       demo.position = {
@@ -4147,9 +4370,12 @@
         openedAt: Date.now(),
         fills: 1,
         accounted,
+        liveKalshi: !!liveKalshi,
+        kalshiOrderId:
+          (liveOrder && (liveOrder.order_id || liveOrder.orderId)) || null,
         followedSuggest: !!follow.followedSuggest,
         suggestSide: follow.suggestSide,
-        entrySource: follow.entrySource,
+        entrySource: liveKalshi ? "kalshi" : follow.entrySource,
         profitChimed: false,
       };
     }
@@ -4173,25 +4399,30 @@
       pl: null,
       won: null,
       accounted: !!accounted,
+      liveKalshi: !!liveKalshi,
+      kalshiOrderId:
+        (liveOrder && (liveOrder.order_id || liveOrder.orderId)) || null,
       followedSuggest: !!follow.followedSuggest,
       suggestSide: follow.suggestSide,
-      entrySource: follow.entrySource,
+      entrySource: liveKalshi ? "kalshi" : follow.entrySource,
     });
     saveDemoState();
     refreshBestSide();
     renderDemoUi();
     renderStrategyReport();
     const sideLabel = side === "above" ? "Above" : "Below";
-    setStatus(
-      "ok",
-      accounted
-        ? `${added ? "Added to" : "Demo bought"} ${sideLabel} · ${sized.contracts} cts${
-            added ? ` · now ${demo.position.contracts}` : ""
-          }${follow.followedSuggest ? " · Best Side" : ""}`
-        : `${added ? "Added to" : "Paper bought"} ${sideLabel} · ${sized.contracts} cts${
-            added ? ` · now ${demo.position.contracts}` : ""
-          }${follow.followedSuggest ? " · Best Side" : ""}`
-    );
+    if (!liveKalshi) {
+      setStatus(
+        "ok",
+        accounted
+          ? `${added ? "Added to" : "Demo bought"} ${sideLabel} · ${sized.contracts} cts${
+              added ? ` · now ${demo.position.contracts}` : ""
+            }${follow.followedSuggest ? " · Best Side" : ""}`
+          : `${added ? "Added to" : "Paper bought"} ${sideLabel} · ${sized.contracts} cts${
+              added ? ` · now ${demo.position.contracts}` : ""
+            }${follow.followedSuggest ? " · Best Side" : ""}`
+      );
+    }
     return true;
   }
 
@@ -4235,9 +4466,16 @@
     const ask = side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
     const sized = roiForStake(ask, amount);
     if (el.buyBalanceHint) {
-      el.buyBalanceHint.textContent = demo.on
-        ? `Bal ${money(demo.balance)}`
-        : "Paper · rolling P/L";
+      if (isLiveKalshi()) {
+        el.buyBalanceHint.textContent =
+          kalshiLive.balance != null
+            ? `Kalshi ${money(kalshiLive.balance)}`
+            : "Kalshi live";
+      } else {
+        el.buyBalanceHint.textContent = demo.on
+          ? `Bal ${money(demo.balance)}`
+          : "Paper · rolling P/L";
+      }
     }
     if (el.buySheetMeta) {
       const askTxt = ask != null ? `${Math.round(ask)}¢ ask` : "ask —";
@@ -4461,18 +4699,26 @@
     }
     const kicker = document.querySelector(".buy-sheet-kicker");
     if (kicker) {
-      kicker.textContent =
-        suggested != null
-          ? demo.on
-            ? `Suggested $${suggested} · high ROI / low risk`
-            : `Suggested $${suggested} · high ROI / low risk`
+      if (isLiveKalshi()) {
+        kicker.textContent = suggested != null
+          ? `Live Kalshi · suggested $${suggested}`
           : adding
+            ? "Live Kalshi add · real money"
+            : "Live Kalshi order · real money";
+      } else {
+        kicker.textContent =
+          suggested != null
             ? demo.on
-              ? "Demo add · averages into open position"
-              : "Paper add · averages into open position"
-            : demo.on
-              ? "Demo order"
-              : "Paper order · rolling P/L";
+              ? `Suggested $${suggested} · high ROI / low risk`
+              : `Suggested $${suggested} · high ROI / low risk`
+            : adding
+              ? demo.on
+                ? "Demo add · averages into open position"
+                : "Paper add · averages into open position"
+              : demo.on
+                ? "Demo order"
+                : "Paper order · rolling P/L";
+      }
     }
     resetBuySlide();
     requestAnimationFrame(() => {
@@ -4521,7 +4767,7 @@
     }
   }
 
-  function confirmBuyFromSheet() {
+  async function confirmBuyFromSheet() {
     if (buyConfirming || !buySheetSide) return;
     buyConfirming = true;
     if (el.buySlide) el.buySlide.classList.add("is-complete");
@@ -4530,7 +4776,51 @@
         demo.position && demo.position.side === buySheetSide ? "Added" : "Bought";
     }
     setBuySlideProgress(1);
-    const ok = demoBuy(buySheetSide, readBuyAmount());
+    const amount = readBuyAmount();
+    const side = buySheetSide;
+
+    if (isLiveKalshi()) {
+      const ask = side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
+      const sized = roiForStake(ask, amount);
+      if (!sized || sized.empty) {
+        buyConfirming = false;
+        if (el.buySlide) el.buySlide.classList.remove("is-complete");
+        resetBuySlide();
+        setStatus("warn", "Need a live ask");
+        return;
+      }
+      if (el.buySlideLabel) el.buySlideLabel.textContent = "Sending…";
+      const live = await placeLiveKalshiBuy(side, sized);
+      if (!live || !live.ok) {
+        buyConfirming = false;
+        if (el.buySlide) el.buySlide.classList.remove("is-complete");
+        resetBuySlide();
+        setStatus("warn", (live && live.error) || "Kalshi order failed");
+        return;
+      }
+      // Track locally for open P/L UI without debiting demo bankroll.
+      const ok = demoBuy(side, amount, { liveKalshi: true, order: live });
+      if (!ok) {
+        buyConfirming = false;
+        if (el.buySlide) el.buySlide.classList.remove("is-complete");
+        resetBuySlide();
+        setStatus(
+          "warn",
+          "Kalshi filled but local track failed — check Kalshi positions"
+        );
+        return;
+      }
+      setStatus(
+        "ok",
+        `Kalshi filled ${Math.round(live.fill_count || sized.contracts)} cts · ${
+          side === "above" ? "Above" : "Below"
+        }`
+      );
+      dismissBuySheet(380);
+      return;
+    }
+
+    const ok = demoBuy(side, amount);
     if (!ok) {
       buyConfirming = false;
       if (el.buySlide) el.buySlide.classList.remove("is-complete");
@@ -8624,6 +8914,21 @@
         setDemoOn(el.demoToggle.checked);
       });
     }
+    if (el.kalshiLiveToggle) {
+      el.kalshiLiveToggle.addEventListener("change", () => {
+        void setKalshiLiveEnabled(!!el.kalshiLiveToggle.checked);
+      });
+    }
+    if (el.kalshiConnect) {
+      el.kalshiConnect.addEventListener("click", () => {
+        void connectKalshiAccount();
+      });
+    }
+    if (el.kalshiDisconnect) {
+      el.kalshiDisconnect.addEventListener("click", () => {
+        void disconnectKalshiAccount();
+      });
+    }
     if (el.demoReset) {
       el.demoReset.addEventListener("click", () => {
         resetDemoAccount();
@@ -8835,9 +9140,9 @@
       el.bestSide.addEventListener("click", () => {
         if (lastBestPick && lastBestPick.side) {
           openBuySheet(lastBestPick.side, { useSuggest: true, fromBest: true });
-        } else if (demo.on) setStatus("warn", "No clear Best Side yet");
+        } else if (tradingArmed()) setStatus("warn", "No clear Best Side yet");
         else {
-          setStatus("warn", "Turn on Demo in Options");
+          setStatus("warn", "Turn on Demo or Live Kalshi in Options");
           openOptions();
         }
       });
@@ -9085,7 +9390,11 @@
     wireAccountShareUi();
     setupEphemeralBanner();
     restoreEdgeAlertKeyFromSession();
-    Promise.all([hydrateDemoFromServer(), ensureServiceWorker()]).finally(() => {
+    Promise.all([
+      hydrateDemoFromServer(),
+      ensureServiceWorker(),
+      refreshKalshiAccountStatus(),
+    ]).finally(() => {
       refreshTarget()
         .then(() => refreshCandles())
         .then(refreshSpot);

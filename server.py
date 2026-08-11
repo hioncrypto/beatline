@@ -16,6 +16,8 @@ import os
 import re
 import threading
 import time
+import uuid
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -30,13 +32,19 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 PUSH_SUBS_FILE = DATA_DIR / "push_subscriptions.json"
 DEMO_ACCOUNT_FILE = DATA_DIR / "demo_account.json"
 ACCOUNTS_DIR = DATA_DIR / "accounts"
+KALSHI_CREDS_FILE = DATA_DIR / "kalshi_credentials.json"
 SEED_TRADE_HISTORY_FILE = STATIC_DIR / "seed-trade-history.json"
 VAPID_PRIVATE = DATA_DIR / "vapid_private.pem"
 VAPID_PUBLIC_RAW = DATA_DIR / "vapid_public_raw.txt"
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:kalshi-btc-target@localhost")
+# Production Trade API (same host as public markets). Override for Kalshi demo.
+KALSHI_API_BASE = os.environ.get(
+    "KALSHI_API_BASE", "https://api.elections.kalshi.com/trade-api/v2"
+).rstrip("/")
 DEMO_HISTORY_LIMIT = 50000
 _USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _demo_lock = threading.Lock()
+_kalshi_creds_lock = threading.Lock()
 
 
 def _normalize_user_id(raw) -> str | None:
@@ -1701,6 +1709,382 @@ def push_watcher_loop() -> None:
         time.sleep(PUSH_POLL_SEC)
 
 
+def _normalize_pem(raw: str) -> str:
+    pem = (raw or "").strip().replace("\\n", "\n")
+    if "BEGIN" not in pem and pem:
+        # Allow pasted key body without headers.
+        body = "".join(pem.split())
+        pem = (
+            "-----BEGIN RSA PRIVATE KEY-----\n"
+            + "\n".join(body[i : i + 64] for i in range(0, len(body), 64))
+            + "\n-----END RSA PRIVATE KEY-----"
+        )
+    return pem.strip() + ("\n" if pem.strip() else "")
+
+
+def _load_kalshi_creds_file() -> dict:
+    if not KALSHI_CREDS_FILE.exists():
+        return {}
+    try:
+        raw = json.loads(KALSHI_CREDS_FILE.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_kalshi_creds_file(data: dict) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = KALSHI_CREDS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, KALSHI_CREDS_FILE)
+    try:
+        os.chmod(KALSHI_CREDS_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def get_kalshi_credentials() -> dict | None:
+    """Resolve API key id + PEM from env (preferred) or data/kalshi_credentials.json."""
+    env_id = (os.environ.get("KALSHI_API_KEY_ID") or "").strip()
+    env_pem = _normalize_pem(os.environ.get("KALSHI_PRIVATE_KEY") or "")
+    with _kalshi_creds_lock:
+        file_creds = _load_kalshi_creds_file()
+    file_id = str(file_creds.get("api_key_id") or "").strip()
+    file_pem = _normalize_pem(str(file_creds.get("private_key_pem") or ""))
+    api_key_id = env_id or file_id
+    private_key_pem = env_pem or file_pem
+    if not api_key_id or not private_key_pem:
+        return None
+    return {
+        "api_key_id": api_key_id,
+        "private_key_pem": private_key_pem,
+        "live_enabled": bool(file_creds.get("live_enabled")),
+        "from_env": bool(env_id and env_pem),
+        "key_hint": api_key_id[:8] + "…" if len(api_key_id) > 8 else api_key_id,
+    }
+
+
+def set_kalshi_live_enabled(enabled: bool) -> dict:
+    with _kalshi_creds_lock:
+        data = _load_kalshi_creds_file()
+        data["live_enabled"] = bool(enabled)
+        data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _save_kalshi_creds_file(data)
+    return kalshi_account_status(fetch_balance=True)
+
+
+def save_kalshi_credentials(api_key_id: str, private_key_pem: str, live_enabled=None) -> dict:
+    api_key_id = (api_key_id or "").strip()
+    private_key_pem = _normalize_pem(private_key_pem or "")
+    if not api_key_id or not private_key_pem:
+        raise ValueError("api_key_id and private_key_pem required")
+    # Validate PEM parses before saving.
+    _load_private_key(private_key_pem)
+    with _kalshi_creds_lock:
+        data = _load_kalshi_creds_file()
+        data["api_key_id"] = api_key_id
+        data["private_key_pem"] = private_key_pem
+        if live_enabled is not None:
+            data["live_enabled"] = bool(live_enabled)
+        data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _save_kalshi_creds_file(data)
+    return kalshi_account_status(fetch_balance=True)
+
+
+def clear_kalshi_credentials() -> dict:
+    with _kalshi_creds_lock:
+        data = _load_kalshi_creds_file()
+        data.pop("api_key_id", None)
+        data.pop("private_key_pem", None)
+        data["live_enabled"] = False
+        data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _save_kalshi_creds_file(data)
+    return kalshi_account_status(fetch_balance=False)
+
+
+def _load_private_key(pem: str):
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import serialization
+
+    return serialization.load_pem_private_key(
+        pem.encode("utf-8"), password=None, backend=default_backend()
+    )
+
+
+def _kalshi_sign(private_key, timestamp: str, method: str, path: str) -> str:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    path_without_query = path.split("?", 1)[0]
+    message = f"{timestamp}{method}{path_without_query}".encode("utf-8")
+    signature = private_key.sign(
+        message,
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.DIGEST_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
+    return base64.b64encode(signature).decode("utf-8")
+
+
+def kalshi_authed_request(
+    method: str,
+    rel_path: str,
+    body: dict | None = None,
+    creds: dict | None = None,
+) -> tuple[int, dict | list | str]:
+    """
+    Authenticated Kalshi Trade API call.
+    rel_path is under /trade-api/v2, e.g. "/portfolio/balance".
+    """
+    creds = creds or get_kalshi_credentials()
+    if not creds:
+        return 401, {"error": "Kalshi credentials not configured"}
+
+    method = method.upper()
+    rel = rel_path if rel_path.startswith("/") else f"/{rel_path}"
+    url = f"{KALSHI_API_BASE}{rel}"
+    # Sign the full path from host root (includes /trade-api/v2/...).
+    sign_path = urllib.parse.urlparse(url).path
+    timestamp = str(int(time.time() * 1000))
+    private_key = _load_private_key(creds["private_key_pem"])
+    signature = _kalshi_sign(private_key, timestamp, method, sign_path)
+    headers = {
+        "KALSHI-ACCESS-KEY": creds["api_key_id"],
+        "KALSHI-ACCESS-SIGNATURE": signature,
+        "KALSHI-ACCESS-TIMESTAMP": timestamp,
+        "Accept": "application/json",
+        "User-Agent": UA,
+    }
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode("utf-8")
+            code = resp.getcode()
+            try:
+                return code, json.loads(raw) if raw else {}
+            except Exception:
+                return code, raw
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(raw) if raw else {"error": str(exc)}
+        except Exception:
+            payload = {"error": raw or str(exc)}
+        return exc.code, payload
+    except Exception as exc:
+        return 502, {"error": str(exc)}
+
+
+def kalshi_fetch_balance(creds: dict | None = None) -> dict:
+    code, payload = kalshi_authed_request("GET", "/portfolio/balance", creds=creds)
+    if code != 200 or not isinstance(payload, dict):
+        err = (
+            payload.get("error")
+            or payload.get("message")
+            or (payload if isinstance(payload, str) else "balance failed")
+        )
+        return {"ok": False, "error": err, "status": code}
+    # balance is in cents
+    bal_cents = payload.get("balance")
+    try:
+        bal_cents = int(bal_cents)
+    except (TypeError, ValueError):
+        bal_cents = None
+    return {
+        "ok": True,
+        "balance_cents": bal_cents,
+        "balance": (bal_cents / 100.0) if bal_cents is not None else None,
+        "portfolio_value": payload.get("portfolio_value"),
+        "updated_ts": payload.get("updated_ts"),
+        "raw": payload,
+    }
+
+
+def kalshi_account_status(fetch_balance: bool = True) -> dict:
+    creds = get_kalshi_credentials()
+    if not creds:
+        return {
+            "ok": True,
+            "connected": False,
+            "live_enabled": False,
+            "from_env": False,
+            "balance": None,
+            "key_hint": None,
+            "error": None,
+        }
+    out = {
+        "ok": True,
+        "connected": True,
+        "live_enabled": bool(creds.get("live_enabled")),
+        "from_env": bool(creds.get("from_env")),
+        "key_hint": creds.get("key_hint"),
+        "balance": None,
+        "balance_cents": None,
+        "error": None,
+    }
+    if fetch_balance:
+        bal = kalshi_fetch_balance(creds)
+        if bal.get("ok"):
+            out["balance"] = bal.get("balance")
+            out["balance_cents"] = bal.get("balance_cents")
+        else:
+            out["error"] = bal.get("error") or "Could not read Kalshi balance"
+            out["ok"] = False
+    return out
+
+
+def place_kalshi_buy(
+    *,
+    ticker: str,
+    side: str,
+    contracts: int,
+    ask_cents: int,
+    client_order_id: str | None = None,
+) -> dict:
+    """
+    Place a marketable buy on the current KXBTC15M window.
+    side: "above" (YES) or "below" (NO).
+    """
+    creds = get_kalshi_credentials()
+    if not creds:
+        return {"ok": False, "error": "Connect your Kalshi API key first"}
+    if not creds.get("live_enabled") and not os.environ.get("KALSHI_LIVE_FORCE"):
+        return {"ok": False, "error": "Turn on Live Kalshi buys in Options first"}
+    ticker = (ticker or "").strip()
+    if not ticker:
+        return {"ok": False, "error": "Missing market ticker"}
+    if side not in ("above", "below"):
+        return {"ok": False, "error": "side must be above or below"}
+    try:
+        contracts = int(contracts)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Invalid contract count"}
+    if contracts < 1:
+        return {"ok": False, "error": "Need at least 1 contract"}
+    try:
+        ask_cents = int(ask_cents)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Invalid ask"}
+    if ask_cents < 1 or ask_cents > 99:
+        return {"ok": False, "error": "Ask must be 1–99¢"}
+
+    client_order_id = (client_order_id or "").strip() or str(uuid.uuid4())
+    yes_no = "yes" if side == "above" else "no"
+    price_dollars = f"{ask_cents / 100:.4f}"
+
+    # Prefer legacy yes/no order shape (clear for binary markets).
+    legacy_body = {
+        "ticker": ticker,
+        "client_order_id": client_order_id,
+        "action": "buy",
+        "side": yes_no,
+        "count": contracts,
+        "type": "limit",
+        "time_in_force": "immediate_or_cancel",
+    }
+    if yes_no == "yes":
+        legacy_body["yes_price"] = ask_cents
+    else:
+        legacy_body["no_price"] = ask_cents
+
+    code, payload = kalshi_authed_request(
+        "POST", "/portfolio/orders", body=legacy_body, creds=creds
+    )
+    used = "legacy"
+
+    # Fall back to V2 event-market book (YES-leg only: bid=buy YES, ask=sell YES≈buy NO).
+    if code >= 400:
+        if side == "above":
+            v2_side = "bid"
+            v2_price = price_dollars
+        else:
+            v2_side = "ask"
+            v2_price = f"{(100 - ask_cents) / 100:.4f}"
+        v2_body = {
+            "ticker": ticker,
+            "client_order_id": client_order_id,
+            "side": v2_side,
+            "count": f"{contracts:.2f}",
+            "price": v2_price,
+            "time_in_force": "immediate_or_cancel",
+            "self_trade_prevention_type": "taker_at_cross",
+        }
+        code, payload = kalshi_authed_request(
+            "POST", "/portfolio/events/orders", body=v2_body, creds=creds
+        )
+        used = "v2"
+
+    if code not in (200, 201) or not isinstance(payload, dict):
+        err = None
+        if isinstance(payload, dict):
+            err = payload.get("error") or payload.get("message") or payload.get("code")
+            details = payload.get("details")
+            if details and err:
+                err = f"{err}: {details}"
+            elif details:
+                err = str(details)
+        if not err:
+            err = payload if isinstance(payload, str) else f"Order failed ({code})"
+        return {
+            "ok": False,
+            "error": err,
+            "status": code,
+            "api": used,
+            "client_order_id": client_order_id,
+            "raw": payload,
+        }
+
+    order = payload.get("order") if isinstance(payload.get("order"), dict) else payload
+    fill_count = order.get("fill_count") or order.get("filled_count") or 0
+    try:
+        fill_n = float(fill_count)
+    except (TypeError, ValueError):
+        fill_n = 0.0
+    remaining = order.get("remaining_count")
+    try:
+        rem_n = float(remaining) if remaining is not None else None
+    except (TypeError, ValueError):
+        rem_n = None
+
+    if fill_n <= 0 and (rem_n is None or rem_n <= 0):
+        # IOC with zero fill
+        return {
+            "ok": False,
+            "error": "Order did not fill (ask may have moved) — try again",
+            "status": code,
+            "api": used,
+            "client_order_id": client_order_id,
+            "order": order,
+            "raw": payload,
+        }
+
+    bal = kalshi_fetch_balance(creds)
+    return {
+        "ok": True,
+        "api": used,
+        "client_order_id": client_order_id,
+        "order_id": order.get("order_id") or order.get("id"),
+        "fill_count": fill_n,
+        "remaining_count": rem_n,
+        "average_fill_price": order.get("average_fill_price")
+        or order.get("yes_price")
+        or order.get("no_price"),
+        "side": side,
+        "ticker": ticker,
+        "contracts": contracts,
+        "ask_cents": ask_cents,
+        "balance": bal.get("balance") if bal.get("ok") else None,
+        "order": order,
+        "raw": payload,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "KalshiBtcTarget/2.0"
 
@@ -1825,6 +2209,67 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "state": saved, "userId": user_id})
             return
 
+        if path == "/api/kalshi/credentials":
+            api_key_id = str(body.get("api_key_id") or body.get("apiKeyId") or "").strip()
+            private_key_pem = str(
+                body.get("private_key_pem")
+                or body.get("privateKeyPem")
+                or body.get("private_key")
+                or body.get("privateKey")
+                or ""
+            )
+            try:
+                status = save_kalshi_credentials(api_key_id, private_key_pem)
+            except ValueError as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
+            except Exception as exc:
+                self._send_json(400, {"ok": False, "error": f"Invalid key: {exc}"})
+                return
+            self._send_json(200 if status.get("ok") else 502, status)
+            return
+
+        if path == "/api/kalshi/disconnect":
+            status = clear_kalshi_credentials()
+            self._send_json(200, status)
+            return
+
+        if path == "/api/kalshi/live":
+            enabled = body.get("enabled")
+            if enabled is None:
+                enabled = body.get("live_enabled") or body.get("liveEnabled")
+            if enabled is None:
+                self._send_json(400, {"ok": False, "error": "enabled required"})
+                return
+            if not get_kalshi_credentials():
+                self._send_json(
+                    400,
+                    {"ok": False, "error": "Connect your Kalshi API key first"},
+                )
+                return
+            status = set_kalshi_live_enabled(bool(enabled))
+            self._send_json(200 if status.get("ok") else 502, status)
+            return
+
+        if path == "/api/kalshi/order":
+            side = str(body.get("side") or "").strip().lower()
+            if side in ("yes", "y"):
+                side = "above"
+            elif side in ("no", "n"):
+                side = "below"
+            result = place_kalshi_buy(
+                ticker=str(body.get("ticker") or "").strip(),
+                side=side,
+                contracts=body.get("contracts") or body.get("count"),
+                ask_cents=body.get("ask_cents")
+                if body.get("ask_cents") is not None
+                else body.get("askCents") or body.get("price_cents") or body.get("price"),
+                client_order_id=body.get("client_order_id")
+                or body.get("clientOrderId"),
+            )
+            self._send_json(200 if result.get("ok") else 400, result)
+            return
+
         self._send_json(404, {"ok": False, "error": "not found"})
 
     def do_GET(self):
@@ -1893,6 +2338,10 @@ class Handler(BaseHTTPRequestHandler):
                     "subscribers": len(_push_subs),
                 },
             )
+            return
+
+        if path in ("/api/kalshi/account", "/api/kalshi/status"):
+            self._send_json(200, kalshi_account_status(fetch_balance=True))
             return
 
         if path in ("/api/demo-account", "/api/account"):

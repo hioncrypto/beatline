@@ -35,6 +35,19 @@ Cursor tunnels die when the agent dies. Deploy once:
 
 Balance + trade history sync to `data/demo_account.json` on the server. Use ⋮ → **Export backup**.
 
+## Live Kalshi buys (optional)
+
+BeatLine can place **real** Above/Below buys on your Kalshi account when you slide to confirm.
+
+1. On Kalshi: **Account & security → API Keys → Create Key** (save Key ID + `.key` file).
+2. In BeatLine ⋮ Options → **My Kalshi account** → paste Key ID + private key → **Save & connect**.
+3. Turn on **Live Kalshi buys**.
+4. Buy Above / Best / Below → slide to confirm → order hits your Kalshi balance (IOC at the live ask).
+
+Or set server env vars (Render): `KALSHI_API_KEY_ID` + `KALSHI_PRIVATE_KEY` (PEM, use `\n` for newlines). Credentials file is `data/kalshi_credentials.json` (gitignored).
+
+**Demo mode and Live buys are separate** — live mode turns demo off so you don’t double-count.
+
 ## Optional
 
 Chrome / Firefox TradingView overlay lives under [`extras/tradingview-extension/`](./extras/tradingview-extension/) (desktop). The Android PWA is the main app.

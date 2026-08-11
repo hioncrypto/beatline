@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.28-bg-alert-fix";
+const SW_VERSION = "3.29-alert-recheck";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -310,17 +310,22 @@ async function showEdgeNotification(payload, { force = false } = {}) {
     suggestStake: stake,
     beat: payload && (payload.beat ?? payload.price_to_beat ?? payload.target),
   };
-  await self.registration.showNotification(title, {
-    body,
-    icon: "/icons/icon-192.png?v=2.6",
-    badge: "/icons/icon-192.png?v=2.6",
-    vibrate: [80, 40, 80, 40, 80, 40, 160],
-    tag: "kalshi-clear-edge",
-    renotify: true,
-    requireInteraction: false,
-    silent: false,
-    data: edgeData,
-  });
+  try {
+    await self.registration.showNotification(title, {
+      body,
+      icon: "/icons/icon-192.png?v=2.6",
+      badge: "/icons/icon-192.png?v=2.6",
+      vibrate: [80, 40, 80, 40, 80, 40, 160],
+      tag: "kalshi-clear-edge",
+      renotify: true,
+      requireInteraction: false,
+      silent: false,
+      data: edgeData,
+    });
+  } catch {
+    // Tray failed — do not stamp sounded / edgeAt.
+    return false;
+  }
   try {
     const state = await readState();
     state.lastEdgeAlert = { ...edgeData, at: Date.now() };
@@ -673,15 +678,33 @@ self.addEventListener("push", (event) => {
         const sameSide = sameEdgeSticky(prevKey, sticky);
         const askImproved = sameSide && prevAsk > 0 && prevAsk - ask >= 5;
 
-        // Within cooldown: silent keepalive only (still satisfies Chrome
-        // userVisibleOnly). Audible re-fire here caused spam and also skipped
-        // updating edgeAt so every push kept taking this branch.
+        // Within cooldown:
+        // - Focused app: silent keepalive (FG already owns the chime path)
+        // - Away: audible renotify so a swallowed first tray can recover
         if (
           sameSide &&
           !askImproved &&
           now - lastAt < EDGE_NOTIFY_COOLDOWN_MS
         ) {
-          await showPushKeepalive("Best buy already alerted");
+          if (await hasFocusedClient()) {
+            await showPushKeepalive("Best buy already alerted");
+            return;
+          }
+          const recovered = await showEdgeNotification({
+            side,
+            askCents: ask,
+            pWin: payload.p_win ?? payload.pWin,
+            suggest_stake: payload.suggest_stake ?? payload.suggestStake,
+            beat: payload.beat ?? payload.price_to_beat ?? payload.target,
+            ticker: payload.ticker,
+          });
+          if (recovered) {
+            const next = await readState();
+            next.edgeKey = sticky;
+            next.edgeAsk = ask;
+            next.edgeAt = now;
+            await writeState(next);
+          }
           return;
         }
 

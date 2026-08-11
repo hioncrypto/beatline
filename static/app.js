@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.24";
+  const APP_VERSION = "10.25";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5301,7 +5301,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.28", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.29", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -5438,6 +5438,23 @@
         quietArmClearEdge(best, { chimed: true, ticker });
       } else {
         pendingEdgeChime = true;
+        // Autoplay blocked while focused — still fire phone tray.
+        if (
+          "Notification" in window &&
+          Notification.permission === "granted"
+        ) {
+          postToSW({
+            type: "edge-notify",
+            force: true,
+            side,
+            askCents: ask || null,
+            pWin: best.pWin,
+            suggestStake: best.suggestedStake,
+            ticker,
+            beat: lastTarget,
+            chimeOn,
+          });
+        }
       }
     });
   }
@@ -6238,8 +6255,6 @@
   function alertClearEdge(best) {
     if (!best || !best.side) return false;
     if (!chimeOn) return false;
-    // Waiting for unlock tap to replay — don't re-enter every poll.
-    if (pendingEdgeChime) return false;
     // Flat: always alert. Same-side open: still alert (add decision).
     // Opposite open: skip — that used to spam BUY while already long the other way.
     if (demo.position && demo.position.side !== best.side) return false;
@@ -6300,6 +6315,8 @@
     };
 
     // Foreground (focused): in-app chime (+ vibrate). Background: system notification.
+    // NOTE: do NOT gate this whole function on pendingEdgeChime — that blocked
+    // every later clear after one failed autoplay and left FG/BG silent.
     ensureAudioReady().then(async () => {
       if (visible) {
         const played = await playEdgeChime(true);
@@ -6309,10 +6326,7 @@
         } catch {
           // ignore
         }
-        if (!played) {
-          // Autoplay blocked — retry on the next tap. Do not mark sounded.
-          pendingEdgeChime = true;
-        } else {
+        if (played) {
           pendingEdgeChime = false;
           markEdgeSounded(best, { ask });
           postToSW({
@@ -6330,6 +6344,13 @@
           swEdgeState.edgeKey = `${t}:${side}`;
           swEdgeState.edgeAsk = ask || 0;
           swEdgeState.edgeAt = Date.now();
+          return;
+        }
+        // Autoplay blocked — keep pending for tap-replay, AND fire phone tray
+        // so the user still gets an alert while the app is open.
+        pendingEdgeChime = true;
+        if (canNotify) {
+          postToSW({ type: "edge-notify", force: true, ...edgePayload });
         }
         return;
       }

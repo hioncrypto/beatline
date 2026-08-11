@@ -460,7 +460,7 @@
    */
   let lastSoundedEdgeSticky = null; // `${ticker}:${side}`
   let lastSoundedAsk = 0;
-  const EDGE_ALERT_COOLDOWN_MS = 90_000;
+  const EDGE_ALERT_COOLDOWN_MS = 60_000;
   const EDGE_GONE_RESET_MS = 45_000;
   let edgeAlertsArmed = false;
   /** Last SW edge sticky/timestamp — used to avoid re-chiming what BG already rang. */

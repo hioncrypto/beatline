@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.26";
+  const APP_VERSION = "10.27";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -3245,9 +3245,10 @@
     if (el.strategyVerdict) el.strategyVerdict.textContent = report.verdict;
     if (el.strategyToday) {
       if (report.day) {
-        el.strategyToday.textContent = `Today ${formatDayPct(report.day.pct)} · start ${money(
-          report.day.start
-        )} → ${money(report.day.now)} (PT day)`;
+        const dayPl = report.day.now - report.day.start;
+        el.strategyToday.textContent = `Today ${formatDayPct(report.day.pct)} (${formatPl(
+          dayPl
+        )}) · start ${money(report.day.start)} → ${money(report.day.now)} (PT day)`;
         el.strategyToday.classList.toggle("is-up", report.day.pct > 0);
         el.strategyToday.classList.toggle("is-down", report.day.pct < 0);
       } else {
@@ -3812,9 +3813,10 @@
       const equity = demo.on ? accountEquityNow(markForDay) : null;
       const day = equity != null ? dayChangePct(equity) : null;
       if (day) {
-        el.demoDayPct.textContent = `Day ${formatDayPct(day.pct)} · from ${money(
-          day.start
-        )}`;
+        const dayPl = day.now - day.start;
+        el.demoDayPct.textContent = `Day ${formatDayPct(day.pct)} (${formatPl(
+          dayPl
+        )}) · from ${money(day.start)}`;
         el.demoDayPct.classList.toggle("is-up", day.pct > 0);
         el.demoDayPct.classList.toggle("is-down", day.pct < 0);
       } else {

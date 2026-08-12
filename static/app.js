@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.51";
+  const APP_VERSION = "10.52";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4404,7 +4404,20 @@
       lastAutoTradeKey = status.last_auto_trade_key;
     }
     if (status.last_auto_trade_note) {
-      lastAutoTradeNote = String(status.last_auto_trade_note);
+      const note = String(status.last_auto_trade_note);
+      const armingErr = /live kalshi buys off|auto-trade off|not connected/i.test(
+        note
+      );
+      // Never keep an arming-error note when we are actually armed — that made
+      // Options show "ARMED · Live Kalshi buys off" with the toggle ON.
+      if (!(kalshiLive.serverArmed && armingErr)) {
+        lastAutoTradeNote = note;
+      } else if (
+        !lastAutoTradeNote ||
+        /live kalshi buys off|auto-trade off|not connected/i.test(lastAutoTradeNote)
+      ) {
+        lastAutoTradeNote = "armed · waiting for clear Best Side";
+      }
     }
     renderKalshiLiveUi();
     renderDemoUi();
@@ -4623,6 +4636,18 @@
     }
   }
 
+  function autoTradeDisplayNote() {
+    const note = (lastAutoTradeNote || "").trim();
+    if (!note) return "waiting for clear Best Side";
+    const armingErr = /live kalshi buys off|auto-trade off|not connected/i.test(
+      note
+    );
+    if (kalshiLive.serverArmed && armingErr) {
+      return "waiting for clear Best Side";
+    }
+    return note;
+  }
+
   function renderAutoTradeVerify() {
     if (!el.autoTradeVerify) return;
     el.autoTradeVerify.classList.remove("is-armed", "is-warn");
@@ -4649,7 +4674,7 @@
       el.autoTradeVerify.classList.add("is-warn");
       return;
     }
-    const note = lastAutoTradeNote || "waiting for next clear Best Side";
+    const note = autoTradeDisplayNote();
     const n = kalshiLive.autoAttemptCount || 0;
     el.autoTradeVerify.textContent = `Server auto: ARMED · ${note}${
       n ? ` · ${n} attempt${n === 1 ? "" : "s"} logged` : " · no attempts yet"
@@ -7503,14 +7528,18 @@
           "On · enable Demo or Live Kalshi buys to arm";
         el.autoTradeStatus.classList.add("is-warn");
       } else if (isLiveKalshi()) {
-        el.autoTradeStatus.textContent = lastAutoTradeNote
-          ? `LIVE auto · ${lastAutoTradeNote}`
-          : "LIVE auto · waiting for clear Best Side (≤1% bal)";
+        const note = autoTradeDisplayNote();
+        el.autoTradeStatus.textContent =
+          note && note !== "waiting for clear Best Side"
+            ? `LIVE auto · ${note}`
+            : "LIVE auto · waiting for clear Best Side (≤1% bal)";
         el.autoTradeStatus.classList.add("is-live");
       } else {
-        el.autoTradeStatus.textContent = lastAutoTradeNote
-          ? `Demo auto · ${lastAutoTradeNote}`
-          : "Demo auto · waiting for clear Best Side (≤1% bal)";
+        const note = autoTradeDisplayNote();
+        el.autoTradeStatus.textContent =
+          note && note !== "waiting for clear Best Side"
+            ? `Demo auto · ${note}`
+            : "Demo auto · waiting for clear Best Side (≤1% bal)";
       }
     }
   }

@@ -248,21 +248,32 @@ def log_auto_trade_attempt(entry: dict) -> dict:
 
 def auto_trade_status() -> dict:
     """Armed flags + recent attempts — used to verify the auto trader."""
+    global _last_auto_trade_note
     creds = get_kalshi_credentials()
     attempts = _load_auto_trade_log()
     live_on = bool(creds and creds.get("live_enabled"))
     auto_on = bool(creds and creds.get("auto_trade"))
     connected = bool(creds)
+    armed = bool(connected and live_on and auto_on)
+    note = _last_auto_trade_note or None
+    # Don't keep contradictory arming errors once the server is actually armed.
+    if armed and note and re.search(
+        r"live kalshi buys off|auto-trade off|not connected|kalshi not connected",
+        str(note),
+        re.I,
+    ):
+        note = "armed · waiting for clear Best Side"
+        _last_auto_trade_note = note
     return {
         "ok": True,
         "connected": connected,
         "live_enabled": live_on,
         "auto_trade": auto_on,
         "auto_flip": bool(creds and creds.get("auto_flip")),
-        "server_armed": bool(connected and live_on and auto_on),
+        "server_armed": armed,
         "last_auto_trade_key": _last_auto_trade_key,
         "last_auto_trade_at": _last_auto_trade_at or None,
-        "last_auto_trade_note": _last_auto_trade_note or None,
+        "last_auto_trade_note": note,
         "last_auto_position": _last_auto_position,
         "attempts": attempts[-12:],
         "attempt_count": len(attempts),
@@ -1978,11 +1989,20 @@ def get_kalshi_credentials() -> dict | None:
 
 
 def set_kalshi_live_enabled(enabled: bool) -> dict:
+    global _last_auto_trade_note
     with _kalshi_creds_lock:
         data = _load_kalshi_creds_file()
         data["live_enabled"] = bool(enabled)
         data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _save_kalshi_creds_file(data)
+    if enabled:
+        # Drop stale "Live buys off" so Options stops contradicting the toggle.
+        if not _last_auto_trade_note or re.search(
+            r"live kalshi buys off|not connected|auto-trade off",
+            str(_last_auto_trade_note),
+            re.I,
+        ):
+            _last_auto_trade_note = "Live buys ON · waiting for clear Best Side"
     return kalshi_account_status(fetch_balance=True)
 
 
@@ -1990,6 +2010,7 @@ def set_kalshi_auto_trade(
     *, auto_trade: bool | None = None, auto_flip: bool | None = None
 ) -> dict:
     """Persist Auto-trade / Auto-flip so the push watcher can fill in background."""
+    global _last_auto_trade_note
     with _kalshi_creds_lock:
         data = _load_kalshi_creds_file()
         if auto_trade is not None:
@@ -2002,6 +2023,22 @@ def set_kalshi_auto_trade(
             )
         data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _save_kalshi_creds_file(data)
+    # If we just armed, replace stale arming-error notes.
+    creds = get_kalshi_credentials()
+    if (
+        creds
+        and creds.get("live_enabled")
+        and creds.get("auto_trade")
+        and (
+            not _last_auto_trade_note
+            or re.search(
+                r"live kalshi buys off|not connected|auto-trade off",
+                str(_last_auto_trade_note),
+                re.I,
+            )
+        )
+    ):
+        _last_auto_trade_note = "armed · waiting for clear Best Side"
     return kalshi_account_status(fetch_balance=False)
 
 
@@ -2192,6 +2229,7 @@ def kalshi_fetch_balance(creds: dict | None = None) -> dict:
 
 def kalshi_account_status(fetch_balance: bool = True) -> dict:
     creds = get_kalshi_credentials()
+    auto = auto_trade_status()
     if not creds:
         return {
             "ok": True,
@@ -2204,9 +2242,9 @@ def kalshi_account_status(fetch_balance: bool = True) -> dict:
             "balance": None,
             "key_hint": None,
             "error": None,
-            "last_auto_trade_key": _last_auto_trade_key,
-            "last_auto_trade_note": _last_auto_trade_note or None,
-            "auto_attempt_count": len(_load_auto_trade_log()),
+            "last_auto_trade_key": auto.get("last_auto_trade_key"),
+            "last_auto_trade_note": auto.get("last_auto_trade_note"),
+            "auto_attempt_count": auto.get("attempt_count") or 0,
         }
     out = {
         "ok": True,
@@ -2214,9 +2252,7 @@ def kalshi_account_status(fetch_balance: bool = True) -> dict:
         "live_enabled": bool(creds.get("live_enabled")),
         "auto_trade": bool(creds.get("auto_trade")),
         "auto_flip": bool(creds.get("auto_flip")),
-        "server_armed": bool(
-            creds.get("live_enabled") and creds.get("auto_trade")
-        ),
+        "server_armed": bool(auto.get("server_armed")),
         "from_env": bool(creds.get("from_env")),
         "key_hint": creds.get("key_hint"),
         "balance": None,
@@ -2224,9 +2260,9 @@ def kalshi_account_status(fetch_balance: bool = True) -> dict:
         "error": None,
         "authenticated": None,
         "auth_failed": False,
-        "last_auto_trade_key": _last_auto_trade_key,
-        "last_auto_trade_note": _last_auto_trade_note or None,
-        "auto_attempt_count": len(_load_auto_trade_log()),
+        "last_auto_trade_key": auto.get("last_auto_trade_key"),
+        "last_auto_trade_note": auto.get("last_auto_trade_note"),
+        "auto_attempt_count": auto.get("attempt_count") or 0,
     }
     if fetch_balance:
         bal = kalshi_fetch_balance(creds)
@@ -3205,7 +3241,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.3.7",
+                    "version": "2.3.8",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

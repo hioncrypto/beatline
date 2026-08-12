@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.43" />
+    <link rel="stylesheet" href="/styles.css?v=10.44" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=10.43" defer></script>
+    <script src="/app.js?v=10.44" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -414,9 +414,17 @@
         </span>
         <input id="auto-trade-toggle" type="checkbox" />
       </label>
+      <label class="options-row toggle-row auto-flip-row" for="auto-flip-toggle" id="auto-flip-row">
+        <span>
+          <strong>Auto-flip opposite</strong>
+          <em>If Best Side reverses, close and open the other way</em>
+        </span>
+        <input id="auto-flip-toggle" type="checkbox" />
+      </label>
       <p id="auto-trade-how" class="auto-trade-how">
         To arm live auto-trading: <strong>1)</strong> Save &amp; connect Kalshi below →
         <strong>2)</strong> turn on Live Kalshi buys → <strong>3)</strong> turn on Auto-trade.
+        Green <strong>Saved &amp; connected · bal $…</strong> means it really worked.
       </p>
 
       <section class="kalshi-live-section" aria-label="Kalshi live account">
@@ -464,10 +472,12 @@
           </div>
           <p id="kalshi-connect-confirm" class="kalshi-connect-confirm" hidden></p>
           <p class="kalshi-live-hint">
-            Create a key at kalshi.com → Account &amp; security → API Keys. After a
-            successful Save &amp; connect, keys stay on this BeatLine server — you
-            do not need to paste them again unless you Disconnect or the server
-            redeploys.
+            At kalshi.com → Account &amp; security → API Keys: copy the full
+            <strong>API Key ID</strong> and download/open the matching
+            <strong>.key</strong> file. Paste both, then Save &amp; connect. You
+            need the matching pair — a short “abcd…” hint is not enough. After it
+            works you’ll see green <strong>Saved &amp; connected · bal $…</strong>,
+            then Live Kalshi buys unlocks.
           </p>
         </div>
       </section>
@@ -619,11 +629,17 @@
         >
           <span>
             <strong>Strategy report</strong>
-            <em>Can you trust Best Side? Wins vs losses</em>
+            <em id="strategy-scope-em">Can you trust Best Side? · pick Live / Demo above</em>
           </span>
           <span id="strategy-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
         </button>
         <div id="strategy-body" class="strategy-body">
+
+          <div class="analytics-scope" role="group" aria-label="Analytics source">
+            <button type="button" class="analytics-scope-btn" data-scope="live" id="analytics-scope-live">Live Kalshi</button>
+            <button type="button" class="analytics-scope-btn" data-scope="demo" id="analytics-scope-demo">Demo</button>
+            <button type="button" class="analytics-scope-btn" data-scope="all" id="analytics-scope-all">All</button>
+          </div>
           <div id="strategy-chart-caption" class="strategy-chart-caption">
             Green = wins · Red = losses · taller = more trades
           </div>
@@ -677,6 +693,7 @@
           <span id="trade-history-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
         </button>
         <div id="trade-history-body" class="trade-history-body" hidden>
+          <p id="analytics-scope-note" class="analytics-scope-note">Showing Live Kalshi trades only</p>
           <div class="trade-history-backup">
             <div class="account-share-card">
               <div class="demo-label">Private account</div>

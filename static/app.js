@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.43";
+  const APP_VERSION = "10.44";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -418,6 +418,13 @@
     kalshiConnectConfirm: document.getElementById("kalshi-connect-confirm"),
     autoTradeToggle: document.getElementById("auto-trade-toggle"),
     autoTradeStatus: document.getElementById("auto-trade-status"),
+    autoFlipToggle: document.getElementById("auto-flip-toggle"),
+    autoFlipRow: document.getElementById("auto-flip-row"),
+    analyticsScopeLive: document.getElementById("analytics-scope-live"),
+    analyticsScopeDemo: document.getElementById("analytics-scope-demo"),
+    analyticsScopeAll: document.getElementById("analytics-scope-all"),
+    analyticsScopeNote: document.getElementById("analytics-scope-note"),
+    strategyScopeEm: document.getElementById("strategy-scope-em"),
     kalshiLink: null,
   };
 
@@ -455,17 +462,32 @@
     authFailed: false,
   };
   const AUTO_TRADE_KEY = "beatlineAutoTrade";
+  const AUTO_FLIP_KEY = "beatlineAutoFlip";
+  const ANALYTICS_SCOPE_KEY = "beatlineAnalyticsScope";
   let autoTradeOn = false;
+  let autoFlipOn = false;
   try {
     autoTradeOn = localStorage.getItem(AUTO_TRADE_KEY) === "1";
   } catch {
     autoTradeOn = false;
+  }
+  try {
+    autoFlipOn = localStorage.getItem(AUTO_FLIP_KEY) === "1";
+  } catch {
+    autoFlipOn = false;
   }
   let autoTradeBusy = false;
   /** Dedupe: one auto entry per ticker+side until window rolls. */
   let lastAutoTradeKey = null;
   let lastAutoTradeAt = 0;
   let lastAutoTradeNote = "";
+  let analyticsScope = "all";
+  try {
+    const raw = localStorage.getItem(ANALYTICS_SCOPE_KEY);
+    if (raw === "live" || raw === "demo" || raw === "all") analyticsScope = raw;
+  } catch {
+    // ignore
+  }
   let lastFifteenTicker = null;
   /** While > now, sync 15m ticker quietly — no open-from-background chime dump. */
   let suppressTargetChimeUntil = 0;
@@ -1408,7 +1430,64 @@
     }
   }
 
-  /** Closed settle/close rows with a real P/L, oldest → newest (all-time). */
+  function tradeIsLiveKalshi(t) {
+    if (!t || typeof t !== "object") return false;
+    return !!(t.liveKalshi || t.entrySource === "kalshi");
+  }
+
+  function preferredAnalyticsScope() {
+    if (isLiveKalshi()) return "live";
+    if (demo.on) return "demo";
+    return analyticsScope || "all";
+  }
+
+  function setAnalyticsScope(scope, { persist = true } = {}) {
+    if (scope !== "live" && scope !== "demo" && scope !== "all") return;
+    analyticsScope = scope;
+    if (persist) {
+      try {
+        localStorage.setItem(ANALYTICS_SCOPE_KEY, scope);
+      } catch {
+        // ignore
+      }
+    }
+    paintAnalyticsScopeUi();
+    renderStrategyReport();
+    renderTradeHistory();
+  }
+
+  function paintAnalyticsScopeUi() {
+    const scope = analyticsScope;
+    document.querySelectorAll(".analytics-scope-btn").forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.scope === scope);
+    });
+    const label =
+      scope === "live"
+        ? "Live Kalshi"
+        : scope === "demo"
+          ? "Demo / paper"
+          : "All trades";
+    if (el.analyticsScopeNote) {
+      el.analyticsScopeNote.textContent =
+        scope === "live"
+          ? "Showing Live Kalshi trades only (demo history hidden)"
+          : scope === "demo"
+            ? "Showing Demo / paper trades only"
+            : "Showing all trades (Live + Demo)";
+    }
+    if (el.strategyScopeEm) {
+      el.strategyScopeEm.textContent = `Wins vs losses · ${label}`;
+    }
+  }
+
+  function filterTradesByScope(list, scope = analyticsScope) {
+    const rows = Array.isArray(list) ? list : [];
+    if (scope === "live") return rows.filter(tradeIsLiveKalshi);
+    if (scope === "demo") return rows.filter((t) => !tradeIsLiveKalshi(t));
+    return rows;
+  }
+
+  /** Closed settle/close rows with a real P/L, oldest → newest (scoped). */
   function closedPlTrades() {
     // Merge demo state + dedicated trade-history key so Options charts never
     // drop older days after a partial server sync.
@@ -1420,7 +1499,7 @@
       demo.history = list;
       persistTradeHistory(list);
     }
-    return list
+    return filterTradesByScope(list)
       .filter((t) => {
         if (!t || typeof t !== "object") return false;
         if (t.kind !== "settle" && t.kind !== "close") return false;
@@ -4511,6 +4590,25 @@
       setStatus("warn", "Paste Kalshi API Key ID + private key");
       return;
     }
+    if (/[…]|\.\.\.$/.test(apiKeyId.trim()) || apiKeyId.trim().endsWith("…")) {
+      setKalshiConnectConfirm(
+        "warn",
+        "That Key ID looks truncated — paste the FULL API Key ID from Kalshi (not the short hint)"
+      );
+      setStatus("warn", "Paste the full API Key ID");
+      return;
+    }
+    if (
+      privateKey.trim().length < 80 ||
+      (!/BEGIN/i.test(privateKey) && privateKey.replace(/\s+/g, "").length < 80)
+    ) {
+      setKalshiConnectConfirm(
+        "warn",
+        "Private key looks too short — paste the full .key / PEM including BEGIN and END"
+      );
+      setStatus("warn", "Paste the full private key");
+      return;
+    }
     if (el.kalshiConnect) {
       el.kalshiConnect.disabled = true;
       el.kalshiConnect.textContent = "Saving…";
@@ -4548,8 +4646,16 @@
           el.kalshiPrivateKey.placeholder =
             "Saved on server — paste again only to replace";
         }
-        if (el.kalshiApiKeyId && data.key_hint) {
-          el.kalshiApiKeyId.value = data.key_hint;
+        // Never put a truncated key_hint into the Key ID field — that breaks
+        // the next Save & connect (authentication_error).
+        if (el.kalshiApiKeyId) {
+          const fullId = apiKeyId.trim();
+          if (fullId && !fullId.includes("…") && !fullId.includes("...")) {
+            el.kalshiApiKeyId.value = fullId;
+          }
+          el.kalshiApiKeyId.placeholder = data.key_hint
+            ? `Connected · key ${data.key_hint} — paste full ID only to replace`
+            : "from kalshi.com → Account → API Keys";
         }
         const bal =
           data.balance != null && Number.isFinite(Number(data.balance))
@@ -4569,11 +4675,21 @@
           formatKalshiErr(data && data.error) ||
           formatKalshiErr(data && data.message) ||
           "Kalshi connect failed";
-        const tip = /authentication/i.test(err)
-          ? " — API Key ID and private key must be the matching pair from Kalshi"
-          : "";
-        setKalshiConnectConfirm("warn", `Not connected · ${err}${tip}`);
+        const saved = !!(data && data.saved);
+        let tip = "";
+        if (/authentication|unauthorized/i.test(err)) {
+          tip =
+            " — use the Key ID and the .key file from the SAME Kalshi API key (re-copy both)";
+        } else if (/private key|PEM|Invalid key/i.test(err)) {
+          tip =
+            " — paste the entire private key including BEGIN and END lines";
+        }
+        const head = saved
+          ? "Key file saved, but Kalshi login failed"
+          : "Not connected";
+        setKalshiConnectConfirm("warn", `${head} · ${err}${tip}`);
         setStatus("warn", err);
+        // Keep what they typed so they can fix without re-pasting everything.
         if (el.kalshiConnect) el.kalshiConnect.textContent = "Save & connect";
       }
     } catch (err) {

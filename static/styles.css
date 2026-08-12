@@ -4502,3 +4502,44 @@ body.portrait-app #chart {
 .live-account-line[hidden] {
   display: none !important;
 }
+
+.auto-flip-row {
+  margin: -4px 0 8px;
+  padding: 8px 0 8px 12px;
+  border-left: 2px solid rgba(240, 193, 75, 0.45);
+  opacity: 0.95;
+}
+.auto-flip-row.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.analytics-scope {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+}
+.analytics-scope-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.75);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+.analytics-scope-btn.is-active {
+  color: #1a1208;
+  background: linear-gradient(180deg, #f0c14b, #d4a017);
+  border-color: rgba(255, 220, 120, 0.55);
+}
+.analytics-scope-note {
+  margin: 0 0 10px;
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: #f0c14b;
+}

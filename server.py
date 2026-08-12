@@ -1752,16 +1752,27 @@ def push_watcher_loop() -> None:
 
 
 def _normalize_pem(raw: str) -> str:
-    pem = (raw or "").strip().replace("\\n", "\n")
-    if "BEGIN" not in pem and pem:
-        # Allow pasted key body without headers.
+    """Normalize pasted Kalshi private keys (RSA or PKCS#8)."""
+    import re as _re
+
+    pem = (raw or "").strip()
+    pem = pem.replace("\r\n", "\n").replace("\r", "\n")
+    pem = pem.replace("\\n", "\n")
+    for ch in ("\u201c", "\u201d", "\u2018", "\u2019", "\ufeff"):
+        pem = pem.replace(ch, '"' if ch in ("\u201c", "\u201d") else ("'" if ch in ("\u2018", "\u2019") else ""))
+    pem = pem.strip().strip('"').strip("'").strip()
+    if not pem:
+        return ""
+    if "BEGIN" not in pem:
         body = "".join(pem.split())
+        body = _re.sub(r"[^A-Za-z0-9+/=]", "", body)
+        wrapped = "\n".join(body[i : i + 64] for i in range(0, len(body), 64))
         pem = (
-            "-----BEGIN RSA PRIVATE KEY-----\n"
-            + "\n".join(body[i : i + 64] for i in range(0, len(body), 64))
-            + "\n-----END RSA PRIVATE KEY-----"
+            "-----BEGIN PRIVATE KEY-----\n"
+            + wrapped
+            + "\n-----END PRIVATE KEY-----"
         )
-    return pem.strip() + ("\n" if pem.strip() else "")
+    return pem.strip() + "\n"
 
 
 def _load_kalshi_creds_file() -> dict:
@@ -1848,9 +1859,35 @@ def _load_private_key(pem: str):
     from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
 
-    return serialization.load_pem_private_key(
-        pem.encode("utf-8"), password=None, backend=default_backend()
-    )
+    pem = _normalize_pem(pem)
+    data = pem.encode("utf-8")
+    try:
+        return serialization.load_pem_private_key(
+            data, password=None, backend=default_backend()
+        )
+    except Exception as first:
+        if "BEGIN PRIVATE KEY" in pem and "BEGIN RSA PRIVATE KEY" not in pem:
+            body = (
+                pem.replace("-----BEGIN PRIVATE KEY-----", "")
+                .replace("-----END PRIVATE KEY-----", "")
+            )
+            body = "".join(body.split())
+            wrapped = "\n".join(body[i : i + 64] for i in range(0, len(body), 64))
+            alt = (
+                "-----BEGIN RSA PRIVATE KEY-----\n"
+                + wrapped
+                + "\n-----END RSA PRIVATE KEY-----\n"
+            )
+            try:
+                return serialization.load_pem_private_key(
+                    alt.encode("utf-8"), password=None, backend=default_backend()
+                )
+            except Exception:
+                pass
+        raise ValueError(
+            "Could not read private key — paste the full .key / PEM from Kalshi "
+            "(include the BEGIN and END lines)"
+        ) from first
 
 
 def _kalshi_sign(private_key, timestamp: str, method: str, path: str) -> str:
@@ -2306,12 +2343,22 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 status = save_kalshi_credentials(api_key_id, private_key_pem)
             except ValueError as exc:
-                self._send_json(400, {"ok": False, "error": str(exc)})
+                self._send_json(400, {"ok": False, "error": str(exc), "saved": False})
                 return
             except Exception as exc:
-                self._send_json(400, {"ok": False, "error": f"Invalid key: {exc}"})
+                self._send_json(
+                    400,
+                    {
+                        "ok": False,
+                        "saved": False,
+                        "error": f"Invalid private key format: {exc}",
+                    },
+                )
                 return
-            self._send_json(200 if status.get("ok") else 502, status)
+            # Always 200 if the PEM was saved — auth_failed is a separate problem.
+            status = dict(status or {})
+            status["saved"] = True
+            self._send_json(200, status)
             return
 
         if path == "/api/kalshi/disconnect":
@@ -2342,16 +2389,33 @@ class Handler(BaseHTTPRequestHandler):
                 side = "above"
             elif side in ("no", "n"):
                 side = "below"
-            result = place_kalshi_buy(
-                ticker=str(body.get("ticker") or "").strip(),
-                side=side,
-                contracts=body.get("contracts") or body.get("count"),
-                ask_cents=body.get("ask_cents")
-                if body.get("ask_cents") is not None
-                else body.get("askCents") or body.get("price_cents") or body.get("price"),
-                client_order_id=body.get("client_order_id")
-                or body.get("clientOrderId"),
-            )
+            action = str(body.get("action") or "buy").strip().lower()
+            if action in ("sell", "close", "exit"):
+                result = place_kalshi_sell(
+                    ticker=str(body.get("ticker") or "").strip(),
+                    side=side,
+                    contracts=body.get("contracts") or body.get("count"),
+                    bid_cents=body.get("bid_cents")
+                    if body.get("bid_cents") is not None
+                    else body.get("bidCents")
+                    or body.get("ask_cents")
+                    or body.get("askCents")
+                    or body.get("price_cents")
+                    or body.get("price"),
+                    client_order_id=body.get("client_order_id")
+                    or body.get("clientOrderId"),
+                )
+            else:
+                result = place_kalshi_buy(
+                    ticker=str(body.get("ticker") or "").strip(),
+                    side=side,
+                    contracts=body.get("contracts") or body.get("count"),
+                    ask_cents=body.get("ask_cents")
+                    if body.get("ask_cents") is not None
+                    else body.get("askCents") or body.get("price_cents") or body.get("price"),
+                    client_order_id=body.get("client_order_id")
+                    or body.get("clientOrderId"),
+                )
             self._send_json(200 if result.get("ok") else 400, result)
             return
 
@@ -2614,6 +2678,122 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self, "_sending_head", False):
             return
         self.wfile.write(data)
+
+
+def place_kalshi_sell(
+    *,
+    ticker: str,
+    side: str,
+    contracts: int,
+    bid_cents: int,
+    client_order_id: str | None = None,
+) -> dict:
+    """
+    Sell (close) contracts on the current window at the bid.
+    side: "above" (YES) or "below" (NO) — the contracts you hold.
+    """
+    creds = get_kalshi_credentials()
+    if not creds:
+        return {"ok": False, "error": "Connect your Kalshi API key first"}
+    if not creds.get("live_enabled") and not os.environ.get("KALSHI_LIVE_FORCE"):
+        return {"ok": False, "error": "Turn on Live Kalshi buys in Options first"}
+    ticker = (ticker or "").strip()
+    if not ticker:
+        return {"ok": False, "error": "Missing market ticker"}
+    if side not in ("above", "below"):
+        return {"ok": False, "error": "side must be above or below"}
+    try:
+        contracts = int(contracts)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Invalid contract count"}
+    if contracts < 1:
+        return {"ok": False, "error": "Need at least 1 contract"}
+    try:
+        bid_cents = int(bid_cents)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Invalid bid"}
+    if bid_cents < 1 or bid_cents > 99:
+        return {"ok": False, "error": "Bid must be 1–99¢"}
+
+    client_order_id = (client_order_id or "").strip() or str(uuid.uuid4())
+    yes_no = "yes" if side == "above" else "no"
+
+    legacy_body = {
+        "ticker": ticker,
+        "client_order_id": client_order_id,
+        "action": "sell",
+        "side": yes_no,
+        "count": contracts,
+        "type": "limit",
+        "time_in_force": "immediate_or_cancel",
+    }
+    if yes_no == "yes":
+        legacy_body["yes_price"] = bid_cents
+    else:
+        legacy_body["no_price"] = bid_cents
+
+    code, payload = kalshi_authed_request(
+        "POST", "/portfolio/orders", body=legacy_body, creds=creds
+    )
+    used = "legacy"
+
+    if code >= 400:
+        # V2: sell YES = ask, sell NO ≈ bid on YES-leg book
+        price_dollars = f"{bid_cents / 100:.4f}"
+        if side == "above":
+            v2_side = "ask"
+            v2_price = price_dollars
+        else:
+            v2_side = "bid"
+            v2_price = f"{(100 - bid_cents) / 100:.4f}"
+        v2_body = {
+            "ticker": ticker,
+            "client_order_id": client_order_id,
+            "side": v2_side,
+            "count": f"{contracts:.2f}",
+            "price": v2_price,
+            "time_in_force": "immediate_or_cancel",
+            "self_trade_prevention_type": "taker_at_cross",
+        }
+        code, payload = kalshi_authed_request(
+            "POST", "/portfolio/events/orders", body=v2_body, creds=creds
+        )
+        used = "v2"
+
+    if code not in (200, 201) or not isinstance(payload, dict):
+        err = None
+        if isinstance(payload, dict):
+            err = _kalshi_err_text(
+                payload.get("error") or payload.get("message") or payload.get("code")
+            )
+        if not err:
+            err = payload if isinstance(payload, str) else f"Sell failed ({code})"
+        return {
+            "ok": False,
+            "error": err,
+            "status": code,
+            "api": used,
+            "client_order_id": client_order_id,
+            "raw": payload,
+        }
+
+    order = payload.get("order") if isinstance(payload.get("order"), dict) else payload
+    fill_count = order.get("fill_count") or order.get("filled_count") or 0
+    try:
+        fill_n = float(fill_count)
+    except (TypeError, ValueError):
+        fill_n = 0.0
+    bal = kalshi_fetch_balance(creds)
+    return {
+        "ok": True,
+        "order_id": order.get("order_id") or order.get("id"),
+        "client_order_id": client_order_id,
+        "fill_count": fill_n,
+        "api": used,
+        "balance": bal.get("balance") if bal.get("ok") else None,
+        "raw": payload,
+    }
+
 
 
 def main():

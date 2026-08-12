@@ -2398,6 +2398,100 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/api/accounts":
+            # Read-only inventory of demo accounts (ids + sizes). Used to pull
+            # full trade history for analysis without the phone's localStorage userId.
+            out = []
+            for uid in _list_account_ids():
+                state = load_demo_account(uid) or {}
+                hist = state.get("history") if isinstance(state.get("history"), list) else []
+                ats = [t.get("at") for t in hist if isinstance(t, dict) and t.get("at")]
+                closed = [
+                    t
+                    for t in hist
+                    if isinstance(t, dict) and t.get("kind") in ("close", "settle")
+                ]
+                out.append(
+                    {
+                        "userId": uid,
+                        "balance": state.get("balance"),
+                        "start": state.get("start"),
+                        "history_count": len(hist),
+                        "closed_count": len(closed),
+                        "first_at": min(ats) if ats else None,
+                        "last_at": max(ats) if ats else None,
+                        "updatedAt": state.get("updatedAt"),
+                    }
+                )
+            # Legacy single-file account (pre multi-user), if present.
+            if DEMO_ACCOUNT_FILE.is_file():
+                legacy = load_demo_account(None) or {}
+                hist = legacy.get("history") if isinstance(legacy.get("history"), list) else []
+                if hist and not any(a.get("history_count") for a in out):
+                    ats = [t.get("at") for t in hist if isinstance(t, dict) and t.get("at")]
+                    out.append(
+                        {
+                            "userId": None,
+                            "legacy": True,
+                            "balance": legacy.get("balance"),
+                            "start": legacy.get("start"),
+                            "history_count": len(hist),
+                            "closed_count": sum(
+                                1
+                                for t in hist
+                                if isinstance(t, dict)
+                                and t.get("kind") in ("close", "settle")
+                            ),
+                            "first_at": min(ats) if ats else None,
+                            "last_at": max(ats) if ats else None,
+                            "updatedAt": legacy.get("updatedAt"),
+                        }
+                    )
+            self._send_json(200, {"ok": True, "accounts": out, "count": len(out)})
+            return
+
+        if path == "/api/accounts/history":
+            # Full merged trade history across accounts (chronological).
+            merged = []
+            seen = set()
+            for uid in _list_account_ids():
+                state = load_demo_account(uid) or {}
+                hist = state.get("history") if isinstance(state.get("history"), list) else []
+                for t in hist:
+                    if not isinstance(t, dict):
+                        continue
+                    tid = t.get("id") or f"{t.get('at')}-{t.get('kind')}-{t.get('ticker')}"
+                    if tid in seen:
+                        continue
+                    seen.add(tid)
+                    row = dict(t)
+                    row["_userId"] = uid
+                    merged.append(row)
+            if DEMO_ACCOUNT_FILE.is_file():
+                legacy = load_demo_account(None) or {}
+                hist = legacy.get("history") if isinstance(legacy.get("history"), list) else []
+                for t in hist:
+                    if not isinstance(t, dict):
+                        continue
+                    tid = t.get("id") or f"{t.get('at')}-{t.get('kind')}-{t.get('ticker')}"
+                    if tid in seen:
+                        continue
+                    seen.add(tid)
+                    row = dict(t)
+                    row["_userId"] = None
+                    row["_legacy"] = True
+                    merged.append(row)
+            merged.sort(key=lambda t: t.get("at") or 0)
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "count": len(merged),
+                    "history": merged,
+                },
+            )
+            return
+
         if path == "/api/clear-edge":
             self._send_json(200, current_clear_edge())
             return

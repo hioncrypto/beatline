@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.50";
+  const APP_VERSION = "10.51";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4237,8 +4237,12 @@
     syncBuyDock();
   }
 
+  let closePositionBusy = false;
   async function closeDemoPosition(opts = {}) {
     const quiet = !!(opts && opts.quiet);
+    if (closePositionBusy) {
+      return { ok: false, error: "Close already in progress" };
+    }
     const pos = demo.position;
     if (!pos) return { ok: false, error: "No open position" };
     const mark = markOpenPosition(pos);
@@ -4246,68 +4250,97 @@
       if (!quiet) setStatus("warn", "No live bid to close against");
       return { ok: false, error: "No live bid" };
     }
-    const livePos = !!(pos.liveKalshi || (isLiveKalshi() && pos.entrySource === "kalshi"));
-    if (livePos && isLiveKalshi()) {
-      const sold = await placeLiveKalshiSell(
-        pos.side,
-        pos.contracts,
-        mark.bidCents,
-        pos.ticker,
-        { slipCents: quiet ? 3 : 0 }
-      );
-      if (!sold || !sold.ok) {
-        const err = (sold && sold.error) || "Kalshi close failed";
-        if (!quiet) setStatus("warn", err);
-        return { ok: false, error: err };
-      }
-    }
-    const pl = mark.unrealized;
-    const accounted = pos.accounted !== false && demo.on;
-    if (accounted) {
-      demo.balance = Math.round((demo.balance + mark.proceeds) * 100) / 100;
-      demo.realizedPl = Math.round((demo.realizedPl + pl) * 100) / 100;
-    }
-    const sideLabel = pos.side === "above" ? "Above" : "Below";
-    const won = pl >= 0;
-    demo.lastResult = {
-      won,
-      pl,
-      side: pos.side,
-      ticker: pos.ticker,
-      text: accounted
-        ? `CLOSED ${sideLabel} @ ${mark.bidCents}¢ · ${formatPl(pl)} · bal ${money(
-            demo.balance
-          )}`
-        : livePos
-          ? `CLOSED ${sideLabel} @ ${mark.bidCents}¢ · ${formatPl(pl)} · Kalshi`
-          : `CLOSED ${sideLabel} @ ${mark.bidCents}¢ · ${formatPl(pl)} · paper`,
-    };
-    pushTradeHistory({
-      id: `${Date.now()}-${pos.ticker || "x"}`,
-      at: Date.now(),
-      kind: "close",
-      side: pos.side,
-      ticker: pos.ticker || null,
-      contracts: pos.contracts,
-      askCents: pos.askCents,
-      total: pos.total,
-      fills: pos.fills || 1,
-      exitCents: mark.bidCents,
-      pl,
-      won,
-      accounted: !!accounted,
-      liveKalshi: !!livePos,
-      followedSuggest:
-        pos.followedSuggest == null ? null : !!pos.followedSuggest,
-      suggestSide: pos.suggestSide || null,
-      entrySource: pos.entrySource || null,
+    const livePos = !!(
+      pos.liveKalshi ||
+      pos.entrySource === "auto" ||
+      pos.entrySource === "kalshi" ||
+      (isLiveKalshi() && !!pos.liveKalshi)
+    );
+    closePositionBusy = true;
+    const closeBtns = [el.openPlClose, el.demoClose, el.demoLiveClose].filter(
+      Boolean
+    );
+    const prevLabels = closeBtns.map((b) => b.textContent);
+    closeBtns.forEach((b) => {
+      b.disabled = true;
+      b.textContent = "Closing…";
     });
-    demo.position = null;
-    saveDemoState();
-    renderDemoUi();
-    renderStrategyReport();
-    if (!quiet) setStatus(won ? "ok" : "warn", demo.lastResult.text);
-    return { ok: true, pl, won };
+    if (!quiet) setStatus("ok", "Closing at bid…");
+    try {
+      if (livePos && (isLiveKalshi() || kalshiLive.connected)) {
+        // Server does escalating IOC (bid−8 → bid−18 → 1¢) so the button fills.
+        const sold = await placeLiveKalshiSell(
+          pos.side,
+          pos.contracts,
+          mark.bidCents,
+          pos.ticker,
+          { aggressive: true }
+        );
+        if (!sold || !sold.ok) {
+          const err = (sold && sold.error) || "Kalshi close failed";
+          if (!quiet) setStatus("warn", err);
+          return { ok: false, error: err };
+        }
+        if (sold.balance != null && Number.isFinite(Number(sold.balance))) {
+          kalshiLive.balance = Number(sold.balance);
+          renderKalshiLiveUi();
+        }
+      }
+      const pl = mark.unrealized;
+      const accounted = pos.accounted !== false && demo.on;
+      if (accounted) {
+        demo.balance = Math.round((demo.balance + mark.proceeds) * 100) / 100;
+        demo.realizedPl = Math.round((demo.realizedPl + pl) * 100) / 100;
+      }
+      const sideLabel = pos.side === "above" ? "Above" : "Below";
+      const won = pl >= 0;
+      demo.lastResult = {
+        won,
+        pl,
+        side: pos.side,
+        ticker: pos.ticker,
+        text: accounted
+          ? `CLOSED ${sideLabel} @ ${mark.bidCents}¢ · ${formatPl(pl)} · bal ${money(
+              demo.balance
+            )}`
+          : livePos
+            ? `CLOSED ${sideLabel} @ ${mark.bidCents}¢ · ${formatPl(pl)} · Kalshi`
+            : `CLOSED ${sideLabel} @ ${mark.bidCents}¢ · ${formatPl(pl)} · paper`,
+      };
+      pushTradeHistory({
+        id: `${Date.now()}-${pos.ticker || "x"}`,
+        at: Date.now(),
+        kind: "close",
+        side: pos.side,
+        ticker: pos.ticker || null,
+        contracts: pos.contracts,
+        askCents: pos.askCents,
+        total: pos.total,
+        fills: pos.fills || 1,
+        exitCents: mark.bidCents,
+        pl,
+        won,
+        accounted: !!accounted,
+        liveKalshi: !!livePos,
+        followedSuggest:
+          pos.followedSuggest == null ? null : !!pos.followedSuggest,
+        suggestSide: pos.suggestSide || null,
+        entrySource: pos.entrySource || null,
+      });
+      demo.position = null;
+      saveDemoState();
+      renderDemoUi();
+      renderStrategyReport();
+      if (!quiet) setStatus(won ? "ok" : "warn", demo.lastResult.text);
+      return { ok: true, pl, won };
+    } finally {
+      closePositionBusy = false;
+      closeBtns.forEach((b, i) => {
+        b.disabled = false;
+        if (prevLabels[i] != null) b.textContent = prevLabels[i];
+      });
+      renderDemoUi();
+    }
   }
 
   function setDemoOn(on) {
@@ -4879,14 +4912,18 @@
     if (!(contracts > 0)) {
       return { ok: false, error: "Need contracts to sell" };
     }
-    if (!(bidCents > 0)) {
+    if (!(bidCents > 0) && !(opts && opts.aggressive)) {
       return { ok: false, error: "Need a live bid to close" };
     }
+    const aggressive = !!(opts && opts.aggressive);
     const slip =
       opts && Number.isFinite(Number(opts.slipCents))
         ? Math.max(0, Math.round(Number(opts.slipCents)))
         : 0;
-    const limitBid = Math.max(1, Math.min(99, Math.round(bidCents) - slip));
+    const limitBid = Math.max(
+      1,
+      Math.min(99, Math.round(Number(bidCents) || 1) - slip)
+    );
     try {
       const res = await fetch("/api/kalshi/order", {
         method: "POST",
@@ -4897,6 +4934,7 @@
           side,
           contracts,
           bid_cents: limitBid,
+          aggressive,
         }),
       });
       const data = await res.json();

@@ -2480,7 +2480,7 @@ def try_server_auto_trade(
                 kind="need_flip",
             )
 
-        # Close opposite at bid − slip so IOC sells fill.
+        # Close opposite with escalating IOC aggression (same miss pattern as buys).
         opp_bid = _usable_bid_cents(opposite_bid_cents)
         if opp_bid is None:
             opp_bid = _usable_bid_cents(bid_cents)
@@ -2493,21 +2493,26 @@ def try_server_auto_trade(
                 opp_bid = max(1, min(99, 100 - ask_i))
             except (TypeError, ValueError):
                 opp_bid = None
-        if opp_bid is None:
-            note = "auto-flip blocked · no live bid to close opposite"
-            _last_auto_trade_note = note
-            return finish({"ok": False, "error": note, "key": key}, kind="flip_no_bid")
 
-        limit_bid = max(1, opp_bid - AUTO_FILL_SLIP_CENTS)
-        print(
-            f"[kalshi-btc-target] auto-flip CLOSE {ticker}:{held_side} "
-            f"{held_contracts} cts @≥{limit_bid}¢"
+        log_auto_trade_attempt(
+            {
+                "kind": "flip_closing",
+                "ticker": ticker,
+                "side": side,
+                "ok": None,
+                "note": (
+                    f"auto-flip closing {'Above' if held_side == 'above' else 'Below'} "
+                    f"{held_contracts} cts"
+                ),
+                "key": key,
+                "flipped": False,
+            }
         )
-        sold = place_kalshi_sell(
+        sold = aggressive_kalshi_sell(
             ticker=ticker,
             side=held_side,
             contracts=held_contracts,
-            bid_cents=limit_bid,
+            bid_cents=opp_bid,
         )
         if not sold.get("ok") or float(sold.get("fill_count") or 0) <= 0:
             err = (sold and sold.get("error")) or "opposite close did not fill"
@@ -3041,20 +3046,38 @@ class Handler(BaseHTTPRequestHandler):
                 side = "below"
             action = str(body.get("action") or "buy").strip().lower()
             if action in ("sell", "close", "exit"):
-                result = place_kalshi_sell(
-                    ticker=str(body.get("ticker") or "").strip(),
-                    side=side,
-                    contracts=body.get("contracts") or body.get("count"),
-                    bid_cents=body.get("bid_cents")
-                    if body.get("bid_cents") is not None
-                    else body.get("bidCents")
-                    or body.get("ask_cents")
-                    or body.get("askCents")
-                    or body.get("price_cents")
-                    or body.get("price"),
-                    client_order_id=body.get("client_order_id")
-                    or body.get("clientOrderId"),
-                )
+                # Default to aggressive close so Close-at-bid actually fills.
+                use_aggr = body.get("aggressive")
+                if use_aggr is None:
+                    use_aggr = True
+                if use_aggr:
+                    result = aggressive_kalshi_sell(
+                        ticker=str(body.get("ticker") or "").strip(),
+                        side=side,
+                        contracts=body.get("contracts") or body.get("count"),
+                        bid_cents=body.get("bid_cents")
+                        if body.get("bid_cents") is not None
+                        else body.get("bidCents")
+                        or body.get("ask_cents")
+                        or body.get("askCents")
+                        or body.get("price_cents")
+                        or body.get("price"),
+                    )
+                else:
+                    result = place_kalshi_sell(
+                        ticker=str(body.get("ticker") or "").strip(),
+                        side=side,
+                        contracts=body.get("contracts") or body.get("count"),
+                        bid_cents=body.get("bid_cents")
+                        if body.get("bid_cents") is not None
+                        else body.get("bidCents")
+                        or body.get("ask_cents")
+                        or body.get("askCents")
+                        or body.get("price_cents")
+                        or body.get("price"),
+                        client_order_id=body.get("client_order_id")
+                        or body.get("clientOrderId"),
+                    )
             else:
                 result = place_kalshi_buy(
                     ticker=str(body.get("ticker") or "").strip(),
@@ -3182,7 +3205,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.3.6",
+                    "version": "2.3.7",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
@@ -3344,14 +3367,13 @@ def place_kalshi_sell(
     client_order_id: str | None = None,
 ) -> dict:
     """
-    Sell (close) contracts on the current window at the bid.
+    Sell (close) contracts on the current window at/under the bid.
     side: "above" (YES) or "below" (NO) — the contracts you hold.
+    Closing is allowed even when Live buys is off — you must be able to exit.
     """
     creds = get_kalshi_credentials()
     if not creds:
         return {"ok": False, "error": "Connect your Kalshi API key first"}
-    if not creds.get("live_enabled") and not os.environ.get("KALSHI_LIVE_FORCE"):
-        return {"ok": False, "error": "Turn on Live Kalshi buys in Options first"}
     ticker = (ticker or "").strip()
     if not ticker:
         return {"ok": False, "error": "Missing market ticker"}
@@ -3433,9 +3455,13 @@ def place_kalshi_sell(
         }
 
     order = payload.get("order") if isinstance(payload.get("order"), dict) else payload
-    fill_count = order.get("fill_count") or order.get("filled_count") or 0
+    fill_count = (
+        order.get("fill_count")
+        if order.get("fill_count") is not None
+        else order.get("filled_count")
+    )
     try:
-        fill_n = float(fill_count)
+        fill_n = float(fill_count or 0)
     except (TypeError, ValueError):
         fill_n = 0.0
     remaining = order.get("remaining_count")
@@ -3443,17 +3469,21 @@ def place_kalshi_sell(
         rem_n = float(remaining) if remaining is not None else None
     except (TypeError, ValueError):
         rem_n = None
-    if fill_n <= 0 and (rem_n is None or rem_n <= 0):
-        return {
-            "ok": False,
-            "error": "Sell did not fill (bid may have moved) — try again",
-            "status": code,
-            "api": used,
-            "client_order_id": client_order_id,
-            "order": order,
-            "raw": payload,
-            "fill_count": 0,
-        }
+    status = str(order.get("status") or "").lower()
+    if fill_n <= 0:
+        if status in ("executed", "filled") and contracts >= 1:
+            fill_n = float(contracts)
+        else:
+            return {
+                "ok": False,
+                "error": "Sell did not fill (bid may have moved) — try again",
+                "status": code,
+                "api": used,
+                "client_order_id": client_order_id,
+                "order": order,
+                "raw": payload,
+                "fill_count": 0,
+            }
     bal = kalshi_fetch_balance(creds)
     return {
         "ok": True,
@@ -3463,8 +3493,69 @@ def place_kalshi_sell(
         "remaining_count": rem_n,
         "api": used,
         "balance": bal.get("balance") if bal.get("ok") else None,
+        "bid_cents": bid_cents,
         "raw": payload,
     }
+
+
+def aggressive_kalshi_sell(
+    *,
+    ticker: str,
+    side: str,
+    contracts: int,
+    bid_cents: int | None = None,
+) -> dict:
+    """
+    Close a live position with escalating IOC aggression.
+    Refreshes the live bid, then sells at bid−8¢, bid−18¢, then 1¢.
+    """
+    remaining = int(contracts)
+    if remaining < 1:
+        return {"ok": False, "error": "Need contracts to sell", "fill_count": 0}
+    total_filled = 0.0
+    last = None
+    bid = _usable_bid_cents(bid_cents)
+    for slip in (AUTO_FILL_SLIP_CENTS, AUTO_FILL_RETRY_SLIP_CENTS, 98):
+        fresh = _fresh_side_bid_cents(ticker, side)
+        if fresh is not None:
+            bid = fresh if bid is None else min(bid, fresh)
+        if bid is None:
+            bid = 50
+        if slip >= 98:
+            limit_bid = 1
+        else:
+            limit_bid = max(1, int(bid) - int(slip))
+        print(
+            f"[kalshi-btc-target] aggressive SELL {ticker}:{side} "
+            f"{remaining} cts @≥{limit_bid}¢ (bid~{bid})"
+        )
+        last = place_kalshi_sell(
+            ticker=ticker,
+            side=side,
+            contracts=remaining,
+            bid_cents=limit_bid,
+        )
+        filled = float((last or {}).get("fill_count") or 0)
+        if last and last.get("ok") and filled > 0:
+            total_filled += filled
+            remaining = max(0, remaining - int(filled))
+            if remaining <= 0:
+                out = dict(last)
+                out["ok"] = True
+                out["fill_count"] = total_filled
+                out["aggressive"] = True
+                return out
+        err_l = str((last or {}).get("error") or "").lower()
+        if last and not last.get("ok") and "did not fill" not in err_l:
+            break
+    out = dict(last or {})
+    out["ok"] = total_filled > 0 and remaining <= 0
+    out["fill_count"] = total_filled
+    out["remaining_contracts"] = remaining
+    out["aggressive"] = True
+    if not out.get("ok") and not out.get("error"):
+        out["error"] = "Sell did not fill (bid may have moved) — try again"
+    return out
 
 
 

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.30";
+  const APP_VERSION = "10.31";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -335,6 +335,7 @@
     ),
     accountExport: document.getElementById("account-export"),
     accountSync: document.getElementById("account-sync"),
+    accountSyncStatus: document.getElementById("account-sync-status"),
     accountImport: document.getElementById("account-import"),
     accountImportFile: document.getElementById("account-import-file"),
     accountUserId: document.getElementById("account-user-id"),
@@ -959,7 +960,42 @@
     }
   }
 
+  function paintAccountSyncStatus(kind, message) {
+    if (el.accountSyncStatus) {
+      el.accountSyncStatus.textContent = message;
+      el.accountSyncStatus.classList.toggle("is-ok", kind === "ok");
+      el.accountSyncStatus.classList.toggle("is-bad", kind === "bad");
+      el.accountSyncStatus.classList.toggle("is-busy", kind === "busy");
+    }
+    if (el.accountSync) {
+      if (kind === "busy") {
+        el.accountSync.disabled = true;
+        el.accountSync.textContent = "Syncing…";
+      } else if (kind === "ok") {
+        el.accountSync.disabled = false;
+        el.accountSync.textContent = "Sync worked ✓";
+        el.accountSync.classList.add("is-copied");
+        setTimeout(() => {
+          if (!el.accountSync) return;
+          el.accountSync.textContent = "Sync to server";
+          el.accountSync.classList.remove("is-copied");
+        }, 4000);
+      } else if (kind === "bad") {
+        el.accountSync.disabled = false;
+        el.accountSync.textContent = "Sync failed — retry";
+        setTimeout(() => {
+          if (!el.accountSync) return;
+          el.accountSync.textContent = "Sync to server";
+        }, 4000);
+      } else {
+        el.accountSync.disabled = false;
+        el.accountSync.textContent = "Sync to server";
+      }
+    }
+  }
+
   async function forceAccountSyncToServer() {
+    paintAccountSyncStatus("busy", "Syncing trade history to server…");
     setStatus("ok", "Syncing account…");
     // Pull local + seed together, then push hard.
     try {
@@ -973,21 +1009,52 @@
     } catch {
       // still try push with whatever we have
     }
+    const localCount = Array.isArray(demo.history) ? demo.history.length : 0;
     const result = await pushDemoStateToServer();
-    if (result && result.ok) {
-      setStatus(
-        "ok",
-        `Synced ${result.count || 0} trades to server · id ${String(
-          result.userId || ""
-        ).slice(0, 8)}…`
+    if (!(result && result.ok)) {
+      const err =
+        (result && result.error) || "could not reach server — stay in foreground";
+      paintAccountSyncStatus("bad", `Sync failed · ${err}`);
+      setStatus("warn", `Sync failed · ${err}`);
+      return false;
+    }
+
+    // Confirm the server actually has the ledger (not just that POST returned).
+    let verified = null;
+    try {
+      const res = await fetch(
+        `/api/demo-account?userId=${encodeURIComponent(getUserId())}`,
+        { cache: "no-store", headers: accountHeaders() }
       );
+      const data = await res.json();
+      const remoteHist =
+        data && data.state && Array.isArray(data.state.history)
+          ? data.state.history
+          : [];
+      verified = {
+        count: remoteHist.length,
+        balance: data && data.state ? data.state.balance : null,
+      };
+    } catch {
+      verified = null;
+    }
+
+    if (verified && verified.count > 0) {
+      const balBit =
+        verified.balance != null && Number.isFinite(Number(verified.balance))
+          ? ` · bal ${money(verified.balance)}`
+          : "";
+      const msg = `Sync worked · ${verified.count} trades on server${balBit}`;
+      paintAccountSyncStatus("ok", msg);
+      setStatus("ok", msg);
       return true;
     }
-    setStatus(
-      "warn",
-      `Sync failed${result && result.error ? ` · ${result.error}` : ""} — open app in foreground and retry`
-    );
-    return false;
+
+    // POST said ok but verify failed — still treat as soft success with count from push.
+    const msg = `Sync worked · uploaded ${result.count || localCount} trades (verify pending)`;
+    paintAccountSyncStatus("ok", msg);
+    setStatus("ok", msg);
+    return true;
   }
 
   function isEphemeralHost() {

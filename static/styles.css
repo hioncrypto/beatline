@@ -4447,3 +4447,18 @@ body.portrait-app #chart {
 .auto-trade-row strong {
   color: var(--accent);
 }
+
+.auto-trade-how {
+  margin: 0 0 10px;
+  padding: 0 2px 8px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.auto-trade-how strong {
+  color: var(--fg);
+  font-weight: 700;
+}
+.toggle-row input[type="checkbox"]:disabled {
+  opacity: 0.45;
+}

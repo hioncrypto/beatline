@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.37" />
+    <link rel="stylesheet" href="/styles.css?v=10.38" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=10.37" defer></script>
+    <script src="/app.js?v=10.38" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -413,6 +413,10 @@
         </span>
         <input id="auto-trade-toggle" type="checkbox" />
       </label>
+      <p id="auto-trade-how" class="auto-trade-how">
+        To arm live auto-trading: <strong>1)</strong> Save &amp; connect Kalshi below →
+        <strong>2)</strong> turn on Live Kalshi buys → <strong>3)</strong> turn on Auto-trade.
+      </p>
 
       <section class="kalshi-live-section" aria-label="Kalshi live account">
         <div class="options-row kalshi-live-head">
@@ -424,7 +428,7 @@
         <label class="options-row toggle-row" for="kalshi-live-toggle">
           <span>
             <strong>Live Kalshi buys</strong>
-            <em>Slide-to-buy places real orders on your Kalshi balance</em>
+            <em id="kalshi-live-toggle-hint">Connect API keys below first — then flip this on</em>
           </span>
           <input id="kalshi-live-toggle" type="checkbox" />
         </label>

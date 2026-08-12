@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.37";
+  const APP_VERSION = "10.38";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -408,6 +408,8 @@
     buySlideThumb: document.getElementById("buy-slide-thumb"),
     kalshiLiveStatus: document.getElementById("kalshi-live-status"),
     kalshiLiveToggle: document.getElementById("kalshi-live-toggle"),
+    kalshiLiveToggleHint: document.getElementById("kalshi-live-toggle-hint"),
+    autoTradeHow: document.getElementById("auto-trade-how"),
     kalshiApiKeyId: document.getElementById("kalshi-api-key-id"),
     kalshiPrivateKey: document.getElementById("kalshi-private-key"),
     kalshiConnect: document.getElementById("kalshi-connect"),
@@ -4231,13 +4233,29 @@
   function renderKalshiLiveUi() {
     if (el.kalshiLiveToggle) {
       el.kalshiLiveToggle.checked = !!kalshiLive.liveEnabled;
+      // Still block until connected — otherwise a flip would just fail.
       el.kalshiLiveToggle.disabled = !kalshiLive.connected;
+      el.kalshiLiveToggle.title = kalshiLive.connected
+        ? "Place real Kalshi orders from BeatLine"
+        : "Save & connect your Kalshi API key first";
+    }
+    if (el.kalshiLiveToggleHint) {
+      if (!kalshiLive.connected) {
+        el.kalshiLiveToggleHint.textContent =
+          "Grayed out until you Save & connect API keys below";
+      } else if (kalshiLive.liveEnabled) {
+        el.kalshiLiveToggleHint.textContent =
+          "ON — slide-to-buy and Auto-trade use real Kalshi money";
+      } else {
+        el.kalshiLiveToggleHint.textContent =
+          "Connected — flip this ON to arm live / auto-trade";
+      }
     }
     if (el.kalshiLiveStatus) {
       el.kalshiLiveStatus.classList.remove("is-live", "is-warn");
       if (!kalshiLive.connected) {
         el.kalshiLiveStatus.textContent =
-          "Not connected — buys stay paper/demo";
+          "Not connected — paste key below → Save & connect";
       } else if (kalshiLive.error) {
         el.kalshiLiveStatus.textContent = `Connected · ${kalshiLive.error}`;
         el.kalshiLiveStatus.classList.add("is-warn");
@@ -4251,7 +4269,7 @@
       } else {
         const bal =
           kalshiLive.balance != null ? money(kalshiLive.balance) : "—";
-        el.kalshiLiveStatus.textContent = `Connected · bal ${bal} · live buys off`;
+        el.kalshiLiveStatus.textContent = `Connected · bal ${bal} · turn Live ON to trade`;
       }
     }
     if (el.kalshiDisconnect) {
@@ -6850,11 +6868,22 @@
   function renderAutoTradeUi() {
     if (el.autoTradeToggle) el.autoTradeToggle.checked = !!autoTradeOn;
     paintLiveKalshiBadge();
+    if (el.autoTradeHow) {
+      el.autoTradeHow.hidden = !!(autoTradeOn && tradingArmed());
+    }
     if (el.autoTradeStatus) {
       el.autoTradeStatus.classList.remove("is-live", "is-warn");
       if (!autoTradeOn) {
         el.autoTradeStatus.textContent =
           "Off — BeatLine will not place buys for you";
+      } else if (!kalshiLive.connected && !demo.on) {
+        el.autoTradeStatus.textContent =
+          "On · next: Save & connect Kalshi, then Live Kalshi buys";
+        el.autoTradeStatus.classList.add("is-warn");
+      } else if (kalshiLive.connected && !kalshiLive.liveEnabled && !demo.on) {
+        el.autoTradeStatus.textContent =
+          "On · next: flip Live Kalshi buys ON (it was grayed until connect)";
+        el.autoTradeStatus.classList.add("is-warn");
       } else if (!tradingArmed()) {
         el.autoTradeStatus.textContent =
           "On · enable Demo or Live Kalshi buys to arm";
@@ -9407,9 +9436,37 @@
     }
     if (el.kalshiLiveToggle) {
       el.kalshiLiveToggle.addEventListener("change", () => {
+        if (!kalshiLive.connected) {
+          el.kalshiLiveToggle.checked = false;
+          setStatus(
+            "warn",
+            "Save & connect your Kalshi API key first — then Live Kalshi buys unlocks"
+          );
+          return;
+        }
         void setKalshiLiveEnabled(!!el.kalshiLiveToggle.checked).then(() =>
           renderAutoTradeUi()
         );
+      });
+      el.kalshiLiveToggle.addEventListener("click", (ev) => {
+        if (!kalshiLive.connected) {
+          ev.preventDefault();
+          setStatus(
+            "warn",
+            "Save & connect Kalshi below first — Live buys stays locked until then"
+          );
+        }
+      });
+    }
+    const liveRow = document.querySelector('label[for="kalshi-live-toggle"]');
+    if (liveRow) {
+      liveRow.addEventListener("click", (ev) => {
+        if (!kalshiLive.connected && ev.target !== el.kalshiLiveToggle) {
+          setStatus(
+            "warn",
+            "Save & connect Kalshi below first — then you can turn on Live buys"
+          );
+        }
       });
     }
     if (el.autoTradeToggle) {

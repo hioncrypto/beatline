@@ -4462,3 +4462,22 @@ body.portrait-app #chart {
 .toggle-row input[type="checkbox"]:disabled {
   opacity: 0.45;
 }
+
+.kalshi-connect-confirm {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.kalshi-connect-confirm.is-ok {
+  color: #0d2f1a;
+  background: rgba(61, 214, 140, 0.22);
+  border: 1px solid rgba(61, 214, 140, 0.45);
+}
+.kalshi-connect-confirm.is-warn {
+  color: #3a2200;
+  background: rgba(240, 180, 41, 0.2);
+  border: 1px solid rgba(240, 180, 41, 0.45);
+}

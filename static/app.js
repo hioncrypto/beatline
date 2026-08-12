@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.38";
+  const APP_VERSION = "10.39";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -414,6 +414,7 @@
     kalshiPrivateKey: document.getElementById("kalshi-private-key"),
     kalshiConnect: document.getElementById("kalshi-connect"),
     kalshiDisconnect: document.getElementById("kalshi-disconnect"),
+    kalshiConnectConfirm: document.getElementById("kalshi-connect-confirm"),
     autoTradeToggle: document.getElementById("auto-trade-toggle"),
     autoTradeStatus: document.getElementById("auto-trade-status"),
     kalshiLink: null,
@@ -4228,6 +4229,25 @@
     kalshiLive.error = status.error || null;
     renderKalshiLiveUi();
     renderDemoUi();
+    if (
+      kalshiLive.connected &&
+      el.kalshiConnectConfirm &&
+      el.kalshiConnectConfirm.hidden
+    ) {
+      const bal =
+        kalshiLive.balance != null ? money(kalshiLive.balance) : null;
+      setKalshiConnectConfirm(
+        "ok",
+        bal
+          ? `Saved on server · connected · bal ${bal}`
+          : "Saved on server · connected"
+      );
+    } else if (!kalshiLive.connected && el.kalshiConnectConfirm) {
+      // Don't wipe a fresh error from a failed connect attempt.
+      if (el.kalshiConnectConfirm.classList.contains("is-ok")) {
+        setKalshiConnectConfirm(null, "");
+      }
+    }
   }
 
   function renderKalshiLiveUi() {
@@ -4372,14 +4392,35 @@
     }
   }
 
+
+  function setKalshiConnectConfirm(kind, message) {
+    if (!el.kalshiConnectConfirm) return;
+    if (!message) {
+      el.kalshiConnectConfirm.hidden = true;
+      el.kalshiConnectConfirm.textContent = "";
+      el.kalshiConnectConfirm.classList.remove("is-ok", "is-warn");
+      return;
+    }
+    el.kalshiConnectConfirm.hidden = false;
+    el.kalshiConnectConfirm.textContent = message;
+    el.kalshiConnectConfirm.classList.toggle("is-ok", kind === "ok");
+    el.kalshiConnectConfirm.classList.toggle("is-warn", kind === "warn");
+  }
+
   async function connectKalshiAccount() {
     const apiKeyId = (el.kalshiApiKeyId && el.kalshiApiKeyId.value) || "";
     const privateKey = (el.kalshiPrivateKey && el.kalshiPrivateKey.value) || "";
     if (!apiKeyId.trim() || !privateKey.trim()) {
+      setKalshiConnectConfirm("warn", "Paste API Key ID + private key, then tap Save & connect");
       setStatus("warn", "Paste Kalshi API Key ID + private key");
       return;
     }
-    setStatus("ok", "Connecting Kalshi…");
+    if (el.kalshiConnect) {
+      el.kalshiConnect.disabled = true;
+      el.kalshiConnect.textContent = "Saving…";
+    }
+    setKalshiConnectConfirm(null, "");
+    setStatus("ok", "Saving & connecting Kalshi…");
     try {
       const res = await fetch("/api/kalshi/credentials", {
         method: "POST",
@@ -4392,18 +4433,44 @@
       const data = await res.json();
       applyKalshiAccountStatus(data);
       if (data && data.ok && data.connected) {
-        if (el.kalshiPrivateKey) el.kalshiPrivateKey.value = "";
-        setStatus(
-          "ok",
-          data.balance != null
-            ? `Kalshi connected · ${money(data.balance)}`
-            : "Kalshi connected"
-        );
+        // Private key is stored on the server — clear it from the phone.
+        if (el.kalshiPrivateKey) {
+          el.kalshiPrivateKey.value = "";
+          el.kalshiPrivateKey.placeholder =
+            "Saved on server — paste again only to replace";
+        }
+        if (el.kalshiApiKeyId && data.key_hint) {
+          el.kalshiApiKeyId.value = data.key_hint;
+        }
+        const bal =
+          data.balance != null && Number.isFinite(Number(data.balance))
+            ? money(Number(data.balance))
+            : null;
+        const confirmMsg = bal
+          ? `Saved & connected · balance ${bal} · next: turn on Live Kalshi buys`
+          : "Saved & connected · next: turn on Live Kalshi buys";
+        setKalshiConnectConfirm("ok", confirmMsg);
+        setStatus("ok", confirmMsg);
+        if (el.kalshiConnect) el.kalshiConnect.textContent = "Saved ✓";
+        setTimeout(() => {
+          if (el.kalshiConnect && !el.kalshiConnect.disabled) {
+            el.kalshiConnect.textContent = "Save & connect";
+          } else if (el.kalshiConnect) {
+            el.kalshiConnect.textContent = "Save & connect";
+          }
+        }, 2500);
       } else {
-        setStatus("warn", (data && data.error) || "Kalshi connect failed");
+        const err = (data && data.error) || "Kalshi connect failed";
+        setKalshiConnectConfirm("warn", `Not connected · ${err}`);
+        setStatus("warn", err);
+        if (el.kalshiConnect) el.kalshiConnect.textContent = "Save & connect";
       }
     } catch (err) {
+      setKalshiConnectConfirm("warn", "Not connected · could not reach server");
       setStatus("warn", "Kalshi connect failed");
+      if (el.kalshiConnect) el.kalshiConnect.textContent = "Save & connect";
+    } finally {
+      if (el.kalshiConnect) el.kalshiConnect.disabled = false;
     }
   }
 
@@ -4417,8 +4484,12 @@
       const data = await res.json();
       applyKalshiAccountStatus(data);
       if (el.kalshiApiKeyId) el.kalshiApiKeyId.value = "";
-      if (el.kalshiPrivateKey) el.kalshiPrivateKey.value = "";
-      setStatus("ok", "Kalshi disconnected");
+      if (el.kalshiPrivateKey) {
+        el.kalshiPrivateKey.value = "";
+        el.kalshiPrivateKey.placeholder = "-----BEGIN RSA PRIVATE KEY-----";
+      }
+      setKalshiConnectConfirm(null, "");
+      setStatus("ok", "Kalshi disconnected — keys cleared from this server");
     } catch (err) {
       setStatus("warn", "Disconnect failed");
     }

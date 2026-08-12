@@ -1923,10 +1923,34 @@ def kalshi_authed_request(
         return 502, {"error": str(exc)}
 
 
+def _kalshi_err_text(err) -> str:
+    """Flatten Kalshi error payloads (often nested dicts) to a short string."""
+    if err is None:
+        return "unknown error"
+    if isinstance(err, str):
+        return err
+    if isinstance(err, (int, float, bool)):
+        return str(err)
+    if isinstance(err, dict):
+        for key in ("message", "error", "detail", "code", "msg"):
+            val = err.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+            if isinstance(val, dict):
+                nested = _kalshi_err_text(val)
+                if nested and nested != "unknown error":
+                    return nested
+        try:
+            return json.dumps(err)[:200]
+        except Exception:
+            return "Kalshi error"
+    return str(err)
+
+
 def kalshi_fetch_balance(creds: dict | None = None) -> dict:
     code, payload = kalshi_authed_request("GET", "/portfolio/balance", creds=creds)
     if code != 200 or not isinstance(payload, dict):
-        err = (
+        err = _kalshi_err_text(
             payload.get("error")
             or payload.get("message")
             or (payload if isinstance(payload, str) else "balance failed")

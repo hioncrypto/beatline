@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.41";
+  const APP_VERSION = "10.42";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4230,24 +4230,21 @@
     kalshiLive.error = status.error || null;
     renderKalshiLiveUi();
     renderDemoUi();
-    if (
-      kalshiLive.connected &&
-      el.kalshiConnectConfirm &&
-      el.kalshiConnectConfirm.hidden
-    ) {
+    // Keep the Options banner in sync with real connection state (never leave
+    // a stale "Not connected · [object Object]" over a live session).
+    if (kalshiLive.connected) {
       const bal =
         kalshiLive.balance != null ? money(kalshiLive.balance) : null;
+      const hint = kalshiLive.keyHint ? ` · key ${kalshiLive.keyHint}` : "";
+      const liveBit = kalshiLive.liveEnabled ? " · Live buys ON" : " · turn Live buys ON";
       setKalshiConnectConfirm(
         "ok",
         bal
-          ? `Saved on server · connected · bal ${bal}`
-          : "Saved on server · connected"
+          ? `Saved & connected · bal ${bal}${hint}${liveBit}`
+          : `Saved & connected${hint}${liveBit}`
       );
-    } else if (!kalshiLive.connected && el.kalshiConnectConfirm) {
-      // Don't wipe a fresh error from a failed connect attempt.
-      if (el.kalshiConnectConfirm.classList.contains("is-ok")) {
-        setKalshiConnectConfirm(null, "");
-      }
+    } else if (el.kalshiConnectConfirm && el.kalshiConnectConfirm.classList.contains("is-ok")) {
+      setKalshiConnectConfirm(null, "");
     }
   }
 
@@ -4278,7 +4275,9 @@
         el.kalshiLiveStatus.textContent =
           "Not connected — paste key below → Save & connect";
       } else if (kalshiLive.error) {
-        el.kalshiLiveStatus.textContent = `Connected · ${kalshiLive.error}`;
+        el.kalshiLiveStatus.textContent = `Connected · ${
+          formatKalshiErr(kalshiLive.error) || "warning"
+        }`;
         el.kalshiLiveStatus.classList.add("is-warn");
       } else if (kalshiLive.liveEnabled) {
         const bal =
@@ -4444,6 +4443,32 @@
   }
 
 
+  function formatKalshiErr(err) {
+    if (err == null || err === "") return null;
+    if (typeof err === "string") return err;
+    if (typeof err === "number" || typeof err === "boolean") return String(err);
+    if (typeof err === "object") {
+      const msg =
+        err.message ||
+        err.error ||
+        err.detail ||
+        err.code ||
+        err.msg ||
+        null;
+      if (typeof msg === "string" && msg.trim()) return msg.trim();
+      if (msg && typeof msg === "object") {
+        const nested = formatKalshiErr(msg);
+        if (nested) return nested;
+      }
+      try {
+        return JSON.stringify(err);
+      } catch {
+        return "Kalshi error";
+      }
+    }
+    return String(err);
+  }
+
   function setKalshiConnectConfirm(kind, message) {
     if (!el.kalshiConnectConfirm) return;
     if (!message) {
@@ -4453,7 +4478,7 @@
       return;
     }
     el.kalshiConnectConfirm.hidden = false;
-    el.kalshiConnectConfirm.textContent = message;
+    el.kalshiConnectConfirm.textContent = String(message);
     el.kalshiConnectConfirm.classList.toggle("is-ok", kind === "ok");
     el.kalshiConnectConfirm.classList.toggle("is-warn", kind === "warn");
   }
@@ -4511,7 +4536,10 @@
           }
         }, 2500);
       } else {
-        const err = (data && data.error) || "Kalshi connect failed";
+        const err =
+          formatKalshiErr(data && data.error) ||
+          formatKalshiErr(data && data.message) ||
+          "Kalshi connect failed";
         setKalshiConnectConfirm("warn", `Not connected · ${err}`);
         setStatus("warn", err);
         if (el.kalshiConnect) el.kalshiConnect.textContent = "Save & connect";

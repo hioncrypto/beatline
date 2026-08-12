@@ -4896,8 +4896,17 @@
             renderDemoUi();
           }
           if (!quiet) setStatus("ok", "Live Kalshi buys ON — real money");
+          if (
+            !lastAutoTradeNote ||
+            /live kalshi buys off|not connected|auto-trade off/i.test(
+              lastAutoTradeNote
+            )
+          ) {
+            lastAutoTradeNote = "Live buys ON · waiting for clear Best Side";
+          }
           // Live buys just unlocked — push Auto-trade preference to server.
           void syncAutoTradeToServer();
+          renderAutoTradeUi();
         } else if (!quiet) {
           setStatus(
             data && data.error ? "warn" : "ok",

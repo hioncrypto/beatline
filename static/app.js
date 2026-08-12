@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.33";
+  const APP_VERSION = "10.35";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -197,7 +197,7 @@
     },
     {
       title: "Demo & alerts",
-      body: "⋮ Options → Demo mode turns on a paper bankroll and session P/L. The bell enables automatic alerts for clear-edge Best Side moments.",
+      body: "⋮ Options → Demo mode for paper trades, Live Kalshi for real buys, and Auto-trade Best Side to let BeatLine take clear-edge entries at ≤2% of balance. The bell enables alerts.",
     },
   ];
 
@@ -411,6 +411,8 @@
     kalshiPrivateKey: document.getElementById("kalshi-private-key"),
     kalshiConnect: document.getElementById("kalshi-connect"),
     kalshiDisconnect: document.getElementById("kalshi-disconnect"),
+    autoTradeToggle: document.getElementById("auto-trade-toggle"),
+    autoTradeStatus: document.getElementById("auto-trade-status"),
     kalshiLink: null,
   };
 
@@ -446,6 +448,18 @@
     keyHint: null,
     error: null,
   };
+  const AUTO_TRADE_KEY = "beatlineAutoTrade";
+  let autoTradeOn = false;
+  try {
+    autoTradeOn = localStorage.getItem(AUTO_TRADE_KEY) === "1";
+  } catch {
+    autoTradeOn = false;
+  }
+  let autoTradeBusy = false;
+  /** Dedupe: one auto entry per ticker+side until window rolls. */
+  let lastAutoTradeKey = null;
+  let lastAutoTradeAt = 0;
+  let lastAutoTradeNote = "";
   let lastFifteenTicker = null;
   /** While > now, sync 15m ticker quietly — no open-from-background chime dump. */
   let suppressTargetChimeUntil = 0;
@@ -2998,6 +3012,20 @@
 
   /** Cash + open mark (what the account is worth if you closed now). */
   function accountEquityNow(mark) {
+    if (isLiveKalshi() && Number.isFinite(kalshiLive.balance)) {
+      const cash = Number(kalshiLive.balance);
+      const livePos = demo.position && demo.position.liveKalshi;
+      if (
+        livePos &&
+        mark &&
+        mark.proceeds != null &&
+        Number.isFinite(mark.proceeds)
+      ) {
+        // Kalshi cash is already net of the buy; add mark exit value.
+        return Math.round((cash + mark.proceeds) * 100) / 100;
+      }
+      return Math.round(cash * 100) / 100;
+    }
     if (!demo.on) return null;
     const cash = Number(demo.balance);
     if (!Number.isFinite(cash)) return null;
@@ -3880,16 +3908,26 @@
       );
     }
     if (el.openPlBalance) {
-      const equity = accounted ? accountEquityNow(mark) : null;
+      const liveEq =
+        !!(pos.liveKalshi || isLiveKalshi()) &&
+        Number.isFinite(kalshiLive.balance);
+      const equity =
+        accounted || liveEq ? accountEquityNow(mark) : null;
       if (equity != null) {
         el.openPlBalance.hidden = false;
         el.openPlBalance.textContent = `(${money(equity)})`;
+        el.openPlBalance.title = liveEq
+          ? "Kalshi account if you closed now (cash + open mark)"
+          : "Demo account equity (cash + open mark)";
       } else {
         el.openPlBalance.hidden = true;
         el.openPlBalance.textContent = "";
+        el.openPlBalance.title = "";
       }
       if (el.openPlDayPct) {
-        const day = equity != null ? dayChangePct(equity) : null;
+        // Day % stays demo-ledger based; hide for pure live Kalshi.
+        const day =
+          equity != null && accounted ? dayChangePct(equity) : null;
         if (day) {
           el.openPlDayPct.hidden = false;
           el.openPlDayPct.textContent = `(${formatDayPct(day.pct)})`;
@@ -3959,6 +3997,7 @@
     const mark = markOpenPosition(pos);
     renderOpenPlBar(pos, mark);
     maybeAlertProfit(pos, mark);
+    if (isLiveKalshi()) paintLiveKalshiBadge();
     // Keep the chart clear: factor card lives in Options / bottom strip, not summary.
     if (el.demoLive) el.demoLive.hidden = true;
     return mark;
@@ -3970,6 +4009,7 @@
       el.menuBtn.classList.toggle("is-live", isLiveKalshi());
     }
     paintLiveKalshiBadge();
+    renderAutoTradeUi();
     if (el.demoToggle) el.demoToggle.checked = !!demo.on;
     if (el.demoAccount) el.demoAccount.hidden = !demo.on;
     if (el.demoStart && document.activeElement !== el.demoStart) {
@@ -4232,14 +4272,28 @@
     if (el.liveKalshiBadge) {
       el.liveKalshiBadge.hidden = !live;
       if (live) {
-        const bal =
+        const mark =
+          demo.position && demo.position.liveKalshi
+            ? markOpenPosition(demo.position)
+            : null;
+        const equity = accountEquityNow(mark);
+        const cash =
           kalshiLive.balance != null && Number.isFinite(kalshiLive.balance)
             ? money(kalshiLive.balance)
             : null;
-        el.liveKalshiBadge.textContent = bal ? `LIVE KALSHI · ${bal}` : "LIVE KALSHI";
-        el.liveKalshiBadge.title = bal
-          ? `Real Kalshi account · balance ${bal}`
-          : "Real Kalshi account — buys use your Kalshi balance";
+        const shown =
+          equity != null ? money(equity) : cash;
+        el.liveKalshiBadge.textContent = shown
+          ? `LIVE KALSHI · ${shown}`
+          : "LIVE KALSHI";
+        if (equity != null && mark && mark.proceeds != null) {
+          el.liveKalshiBadge.title =
+            `Account now ${money(equity)} (cash ${cash || "—"} + open mark)`;
+        } else {
+          el.liveKalshiBadge.title = cash
+            ? `Real Kalshi cash ${cash} — updates after each fill`
+            : "Real Kalshi account — buys use your Kalshi balance";
+        }
       }
     }
     if (el.brandSub) {
@@ -4347,6 +4401,25 @@
       if (!quiet) setStatus("warn", "Could not update live buys");
       return null;
     }
+  }
+
+  let lastKalshiBalFetchAt = 0;
+  async function refreshKalshiBalance(opts = {}) {
+    const force = !!(opts && opts.force);
+    const now = Date.now();
+    if (!force && now - lastKalshiBalFetchAt < 12_000) return kalshiLive.balance;
+    if (!kalshiLive.connected) return kalshiLive.balance;
+    lastKalshiBalFetchAt = now;
+    try {
+      const res = await fetch("/api/kalshi/account", { cache: "no-store" });
+      const data = await res.json();
+      if (data && data.ok !== false) {
+        applyKalshiAccountStatus(data);
+      }
+    } catch {
+      // keep last known balance
+    }
+    return kalshiLive.balance;
   }
 
   async function placeLiveKalshiBuy(side, sized) {
@@ -6732,6 +6805,144 @@
     });
   }
 
+
+  function autoTradeArmed() {
+    return !!autoTradeOn && tradingArmed();
+  }
+
+  function renderAutoTradeUi() {
+    if (el.autoTradeToggle) el.autoTradeToggle.checked = !!autoTradeOn;
+    if (el.autoTradeStatus) {
+      el.autoTradeStatus.classList.remove("is-live", "is-warn");
+      if (!autoTradeOn) {
+        el.autoTradeStatus.textContent =
+          "Off — BeatLine will not place buys for you";
+      } else if (!tradingArmed()) {
+        el.autoTradeStatus.textContent =
+          "On · enable Demo or Live Kalshi buys to arm";
+        el.autoTradeStatus.classList.add("is-warn");
+      } else if (isLiveKalshi()) {
+        el.autoTradeStatus.textContent = lastAutoTradeNote
+          ? `LIVE auto · ${lastAutoTradeNote}`
+          : "LIVE auto · waiting for clear Best Side (≤2% bal)";
+        el.autoTradeStatus.classList.add("is-live");
+      } else {
+        el.autoTradeStatus.textContent = lastAutoTradeNote
+          ? `Demo auto · ${lastAutoTradeNote}`
+          : "Demo auto · waiting for clear Best Side (≤2% bal)";
+      }
+    }
+  }
+
+  function setAutoTrade(on) {
+    autoTradeOn = !!on;
+    try {
+      localStorage.setItem(AUTO_TRADE_KEY, autoTradeOn ? "1" : "0");
+    } catch {
+      // ignore
+    }
+    renderAutoTradeUi();
+    if (autoTradeOn && !tradingArmed()) {
+      setStatus("warn", "Auto-trade on — turn on Demo or Live Kalshi buys");
+    } else if (autoTradeOn) {
+      setStatus(
+        "ok",
+        isLiveKalshi()
+          ? "Auto-trade ON · real Kalshi buys on clear Best Side"
+          : "Auto-trade ON · demo buys on clear Best Side"
+      );
+    } else {
+      setStatus("ok", "Auto-trade off");
+    }
+  }
+
+  /**
+   * Place one Best Side entry at suggested size when Auto-trade is armed.
+   * Uses the same Green Spike clear-edge + ≤2% stake as Suggested buy.
+   */
+  async function maybeAutoTrade(best, suggestStake) {
+    if (!autoTradeArmed()) return false;
+    if (autoTradeBusy) return false;
+    if (!best || !best.side) return false;
+    if (!(suggestStake >= BUY_AMOUNT_MIN)) return false;
+    if (demo.position && demo.position.side !== best.side) return false;
+    const ticker = lastTicker || lastFifteenTicker || "";
+    if (!ticker) return false;
+    const key = `${ticker}:${best.side}`;
+    if (lastAutoTradeKey === key) return false;
+    if (
+      demo.position &&
+      demo.position.side === best.side &&
+      demo.position.ticker === ticker
+    ) {
+      lastAutoTradeKey = key;
+      return false;
+    }
+    const ask =
+      best.side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
+    const sized = roiForStake(ask, suggestStake);
+    if (!sized || sized.empty || !(sized.contracts > 0)) return false;
+
+    autoTradeBusy = true;
+    const sideLabel = best.side === "above" ? "Above" : "Below";
+    try {
+      if (isLiveKalshi()) {
+        if (el.autoTradeStatus) {
+          el.autoTradeStatus.textContent = `LIVE auto · buying ${sideLabel}…`;
+          el.autoTradeStatus.classList.add("is-live");
+        }
+        const live = await placeLiveKalshiBuy(best.side, sized);
+        if (!live || !live.ok) {
+          lastAutoTradeNote = (live && live.error) || "order failed";
+          renderAutoTradeUi();
+          setStatus("warn", `Auto-trade failed · ${lastAutoTradeNote}`);
+          return false;
+        }
+        const ok = demoBuy(best.side, suggestStake, {
+          liveKalshi: true,
+          order: live,
+        });
+        if (!ok) {
+          lastAutoTradeNote = "filled but local track failed";
+          renderAutoTradeUi();
+          setStatus("warn", "Auto Kalshi fill · check Kalshi positions");
+          return false;
+        }
+        lastAutoTradeKey = key;
+        lastAutoTradeAt = Date.now();
+        lastAutoTradeNote = `bought ${sideLabel} $${suggestStake} @ ${Math.round(
+          Number(best.askCents) || 0
+        )}¢`;
+        renderAutoTradeUi();
+        paintLiveKalshiBadge();
+        setStatus(
+          "ok",
+          `Auto-bought ${sideLabel} · $${suggestStake} · Kalshi live`
+        );
+        return true;
+      }
+      if (demo.on) {
+        const ok = demoBuy(best.side, suggestStake);
+        if (!ok) {
+          lastAutoTradeNote = "demo buy blocked";
+          renderAutoTradeUi();
+          return false;
+        }
+        lastAutoTradeKey = key;
+        lastAutoTradeAt = Date.now();
+        lastAutoTradeNote = `bought ${sideLabel} $${suggestStake} @ ${Math.round(
+          Number(best.askCents) || 0
+        )}¢`;
+        renderAutoTradeUi();
+        setStatus("ok", `Auto demo buy ${sideLabel} · $${suggestStake}`);
+        return true;
+      }
+      return false;
+    } finally {
+      autoTradeBusy = false;
+    }
+  }
+
   function alertClearEdge(best) {
     if (!best || !best.side) return false;
     if (!chimeOn) return false;
@@ -7977,6 +8188,9 @@
       return;
     }
     if (!atRiskCap) didEdgeAlert = !!alertClearEdge(best);
+    if (!atRiskCap && suggestStake != null) {
+      void maybeAutoTrade(best, suggestStake);
+    }
     // Extra click for every new ADD ABOVE / ADD BELOW (keeps original alert tone).
     maybeClickAddSuggest(best, {
       sameAsOpen,
@@ -8798,6 +9012,7 @@
   async function refreshTarget(opts = {}) {
     const forceCandles = !!opts.forceCandles;
     try {
+      if (isLiveKalshi()) void refreshKalshiBalance();
       const res = await fetch(`/api/target?tf=15m&_=${Date.now()}`, {
         cache: "no-store",
       });
@@ -9154,9 +9369,18 @@
     }
     if (el.kalshiLiveToggle) {
       el.kalshiLiveToggle.addEventListener("change", () => {
-        void setKalshiLiveEnabled(!!el.kalshiLiveToggle.checked);
+        void setKalshiLiveEnabled(!!el.kalshiLiveToggle.checked).then(() =>
+          renderAutoTradeUi()
+        );
       });
     }
+    if (el.autoTradeToggle) {
+      el.autoTradeToggle.checked = !!autoTradeOn;
+      el.autoTradeToggle.addEventListener("change", () => {
+        setAutoTrade(!!el.autoTradeToggle.checked);
+      });
+    }
+    renderAutoTradeUi();
     if (el.kalshiConnect) {
       el.kalshiConnect.addEventListener("click", () => {
         void connectKalshiAccount();

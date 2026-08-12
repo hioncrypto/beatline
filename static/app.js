@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.32";
+  const APP_VERSION = "10.33";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -185,7 +185,7 @@
     },
     {
       title: "Odds & Best Side",
-      body: "Market chance shows Above/Below pricing. Best Side scores distance from the beat, time left, ask, and fees — then suggests an advantageous dollar size for high ROI with limited bankroll risk. When a clear edge appears, BeatLine chimes; tap Best to open the buy sheet pre-filled.",
+      body: "Market chance shows Above/Below pricing. Best Side scores distance from the beat, time left, ask, and fees — then suggests a dollar size capped at 2% of your bankroll (Kalshi balance when live). When a clear edge appears, BeatLine chimes; tap Best to open the buy sheet pre-filled.",
     },
     {
       title: "Set size, then buy",
@@ -4883,7 +4883,7 @@
     if (kicker) {
       if (isLiveKalshi()) {
         kicker.textContent = suggested != null
-          ? `Live Kalshi · suggested $${suggested}`
+          ? `Live Kalshi · suggested $${suggested} · ≤2% bal`
           : adding
             ? "Live Kalshi add · real money"
             : "Live Kalshi order · real money";
@@ -4891,8 +4891,8 @@
         kicker.textContent =
           suggested != null
             ? demo.on
-              ? `Suggested $${suggested} · high ROI / low risk`
-              : `Suggested $${suggested} · high ROI / low risk`
+              ? `Suggested $${suggested} · ≤2% bal`
+              : `Suggested $${suggested} · ≤2% bal`
             : adding
               ? demo.on
                 ? "Demo add · averages into open position"
@@ -5887,6 +5887,7 @@
             ? Number(payload.suggest_stake)
             : null,
     };
+    best.suggestedStake = clampBestStake(best.suggestedStake);
     // Bypass resume suppress — this is a live market signal, not a reopen dump.
     const sideLabel = side === "above" ? "Above" : "Below";
     const sug = best.suggestedStake;
@@ -6048,22 +6049,27 @@
       total: null,
       profitIfWin: null,
     };
-    const suggestion =
-      held.suggestStake != null
-        ? {
-            stake: held.suggestStake,
-            pWin,
-            atRiskCap: false,
-            lowProb: false,
-            contracts: 0,
-            total: held.suggestStake,
-            profitIfWin: 0,
-            roiIfWin: null,
-            bankPct: null,
-            streak: 0,
-            note: "from alert",
-          }
-        : suggestStakeForEdge(scored);
+    const bank = sizingBankroll();
+    let suggestion = null;
+    if (held.suggestStake != null) {
+      const clamped = clampBestStake(held.suggestStake, bank);
+      if (clamped != null) {
+        suggestion = {
+          stake: clamped,
+          pWin,
+          atRiskCap: false,
+          lowProb: false,
+          contracts: 0,
+          total: clamped,
+          profitIfWin: 0,
+          roiIfWin: null,
+          bankPct: bank > 0 ? (clamped / bank) * 100 : null,
+          streak: 0,
+          note: "from alert · ≤2% bal",
+        };
+      }
+    }
+    if (!suggestion) suggestion = suggestStakeForEdge(scored);
     const suggestStake =
       suggestion && suggestion.stake >= BUY_AMOUNT_MIN ? suggestion.stake : null;
     lastBestPick = {
@@ -7125,19 +7131,59 @@
     };
   }
 
-  /** Bankroll used for suggested sizing (demo balance when on). */
+  /**
+   * Hard cap for automatic Best Side / clear-edge suggested stake.
+   * Manual buy chips stay independent ($1–$250).
+   */
+  const MAX_BEST_RISK_PCT = 0.02;
+
+  /** Bankroll used for Best Side suggested sizing. */
   function sizingBankroll() {
+    if (
+      isLiveKalshi() &&
+      Number.isFinite(kalshiLive.balance) &&
+      kalshiLive.balance > 0
+    ) {
+      return kalshiLive.balance;
+    }
     if (demo.on && Number.isFinite(demo.balance)) {
       return Math.max(0, demo.balance);
     }
+    if (
+      kalshiLive.connected &&
+      Number.isFinite(kalshiLive.balance) &&
+      kalshiLive.balance > 0
+    ) {
+      return kalshiLive.balance;
+    }
     const start = Number(demo.start);
     return Number.isFinite(start) && start > 0 ? start : DEMO_DEFAULT_START;
+  }
+
+  /** Max $ the automatic beat may suggest this trade (≤2% of sizing bank). */
+  function maxBestRiskUsd(bank) {
+    const b = Math.max(0, Number(bank) || 0);
+    const cap = Math.floor(b * MAX_BEST_RISK_PCT);
+    if (cap >= BUY_AMOUNT_MIN) {
+      return Math.min(SUGGEST_AMOUNT_MAX, cap);
+    }
+    // Bank too small for a true 2% entry at the $1 minimum — no auto suggest.
+    return 0;
+  }
+
+  function clampBestStake(n, bank) {
+    const b = bank != null ? bank : sizingBankroll();
+    const cap = maxBestRiskUsd(b);
+    const v = Math.round(Number(n) || 0);
+    if (!(cap >= BUY_AMOUNT_MIN) || !(v >= BUY_AMOUNT_MIN)) return null;
+    return Math.max(BUY_AMOUNT_MIN, Math.min(cap, v));
   }
 
   const SUGGEST_STEPS = [1, 2, 3, 5, 8, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100];
 
   function snapSuggestStake(n, cap) {
     const suggestCap = Math.min(cap, SUGGEST_AMOUNT_MAX);
+    if (!(suggestCap >= BUY_AMOUNT_MIN)) return BUY_AMOUNT_MIN;
     const target = Math.max(BUY_AMOUNT_MIN, Math.min(suggestCap, Math.round(n)));
     let best = BUY_AMOUNT_MIN;
     let bestDist = Infinity;
@@ -7158,16 +7204,31 @@
   }
 
   /**
-   * Suggest $ for a clear Best Side — Green Spike sizing (Aug 5 / v9.33):
-   * fractional Kelly ~22–40%, bank risk ~2.5–12%. No drawdown/streak shrink.
-   * Suggested entries stay ≤ $100 even when the manual slider goes to $250.
+   * Suggest $ for automatic Best Side / clear-edge (Green Spike).
+   * Fractional Kelly ~22–40%, hard-capped at 2% of bankroll per trade.
+   * Manual slider/chips stay up to $250 and are not bound by this cap.
    */
   function suggestStakeForEdge(best) {
     if (!best || best.askCents == null) return null;
     const bank = sizingBankroll();
+    const riskCap = maxBestRiskUsd(bank);
+    if (!(riskCap >= BUY_AMOUNT_MIN)) {
+      return {
+        stake: 0,
+        contracts: 0,
+        total: 0,
+        profitIfWin: 0,
+        roiIfWin: null,
+        bankPct: 0,
+        pWin: Math.max(0.01, Math.min(0.99, Number(best.pWin) || 0.5)),
+        atRiskCap: true,
+        lowProb: false,
+        note: "need bal for 2% size",
+      };
+    }
     const hardCap = Math.max(
       BUY_AMOUNT_MIN,
-      Math.min(SUGGEST_AMOUNT_MAX, Math.floor(bank) || BUY_AMOUNT_MIN)
+      Math.min(SUGGEST_AMOUNT_MAX, riskCap, Math.floor(bank) || BUY_AMOUNT_MIN)
     );
     const unit = roiForStake(best.askCents, Math.min(10, hardCap));
     if (!unit || unit.empty || !(unit.contracts > 0)) return null;
@@ -7177,16 +7238,18 @@
     const pWin = Math.max(0.01, Math.min(0.99, Number(best.pWin) || 0.5));
     const edge = pWin - costPer;
     if (!(edge > 0)) {
-      const minSized = roiForStake(best.askCents, BUY_AMOUNT_MIN);
+      const minStake = Math.min(BUY_AMOUNT_MIN, hardCap);
+      const minSized = roiForStake(best.askCents, minStake);
       return {
-        stake: BUY_AMOUNT_MIN,
+        stake: minStake,
         contracts: minSized && !minSized.empty ? minSized.contracts : 0,
-        total: minSized && !minSized.empty ? minSized.total : BUY_AMOUNT_MIN,
+        total: minSized && !minSized.empty ? minSized.total : minStake,
         profitIfWin: minSized && !minSized.empty ? minSized.profitIfWin : 0,
         roiIfWin:
           minSized && !minSized.empty ? minSized.roiIfWin : unit.roiIfWin,
-        bankPct: bank > 0 ? (BUY_AMOUNT_MIN / bank) * 100 : 0,
+        bankPct: bank > 0 ? (minStake / bank) * 100 : 0,
         pWin,
+        atRiskCap: false,
         lowProb: pWin < 0.5,
         note: "no edge at this ask",
       };
@@ -7198,16 +7261,9 @@
       Math.max(0, (Number(best.score) - 0.04) / 0.18)
     );
     const kellyShare = 0.22 + 0.18 * edgeStrength; // ~22–40% Kelly
-    let maxBankPct = 0.03 + 0.07 * edgeStrength;
-    const roi = Number(best.roiIfWin);
-    if (Number.isFinite(roi)) {
-      if (roi >= 120) maxBankPct *= 1.15;
-      else if (roi < 40) maxBankPct *= 0.7;
-    }
-    maxBankPct = Math.min(0.12, Math.max(0.025, maxBankPct));
-
+    // Never above 2% of bank — Kelly may size smaller on weaker edges.
     const kellyUsd = bank * kellyFull * kellyShare;
-    const riskUsd = bank * maxBankPct;
+    const riskUsd = bank * MAX_BEST_RISK_PCT;
     let raw = Math.min(kellyUsd, riskUsd, hardCap);
     const minForOne = Math.ceil(costPer * 100) / 100;
     raw = Math.max(raw, Math.min(hardCap, Math.max(BUY_AMOUNT_MIN, minForOne)));
@@ -7225,7 +7281,7 @@
       roiIfWin: sized && !sized.empty ? sized.roiIfWin : unit.roiIfWin,
       bankPct: bank > 0 ? (stake / bank) * 100 : 0,
       streak: 0,
-      note: "¼-Kelly bal",
+      note: "≤2% bal",
     };
   }
 

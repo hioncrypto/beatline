@@ -1367,15 +1367,57 @@ def _short_term_trend() -> dict:
     }
 
 
-def _green_spike_suggest(ask: float, p_win: float) -> int:
-    """Suggested Best-buy entry — stays ≤ $100 even if manual size goes to $250."""
+_suggest_bankroll_cache = {"balance": None, "at": 0.0}
+_SUGGEST_BANKROLL_TTL_SEC = 60.0
+
+
+def _suggest_bankroll() -> float | None:
+    """Cached Kalshi cash for automatic-beat 2% sizing (avoids balance spam)."""
+    now = time.time()
+    cached = _suggest_bankroll_cache.get("balance")
+    at = float(_suggest_bankroll_cache.get("at") or 0.0)
+    if cached is not None and now - at < _SUGGEST_BANKROLL_TTL_SEC:
+        return float(cached)
+    try:
+        creds = get_kalshi_credentials()
+        if not creds:
+            return cached if cached is not None else None
+        bal = kalshi_fetch_balance(creds)
+        if bal.get("ok") and bal.get("balance") is not None:
+            value = float(bal["balance"])
+            _suggest_bankroll_cache["balance"] = value
+            _suggest_bankroll_cache["at"] = now
+            return value
+    except Exception:
+        pass
+    return cached if cached is not None else None
+
+
+def _green_spike_suggest(
+    ask: float, p_win: float, bankroll: float | None = None
+) -> int:
+    """
+    Suggested Best-buy / automatic-beat entry.
+    Hard-capped at 2% of Kalshi bankroll when known; else ≤ $100.
+    Manual buy chips on the client stay independent of this cap.
+    """
     cost = ask / 100.0
     edge_amt = p_win - cost
     suggest = 10
     if edge_amt > 0 and cost < 1:
         kelly = edge_amt / max(0.01, 1.0 - cost)
         suggest = int(max(5, min(100, round(100 * kelly * 0.3))))
-    return min(100, suggest)
+    suggest = min(100, suggest)
+    try:
+        bank = float(bankroll) if bankroll is not None else None
+    except (TypeError, ValueError):
+        bank = None
+    if bank is not None and bank > 0:
+        risk_cap = int(bank * 0.02)
+        if risk_cap < 1:
+            return 0
+        suggest = min(suggest, risk_cap)
+    return max(0, suggest)
 
 
 def evaluate_clear_edge(
@@ -1505,7 +1547,7 @@ def evaluate_clear_edge(
         "score": best["score"],
         "clear": clear,
         "reject": reject,
-        "suggest_stake": _green_spike_suggest(ask, p_win),
+        "suggest_stake": _green_spike_suggest(ask, p_win, _suggest_bankroll()),
         "profile": "green-spike",
         "secs_left": secs,
         "spot": float(spot),

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.52";
+  const APP_VERSION = "10.53";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4367,6 +4367,26 @@
     return !!demo.on || isLiveKalshi();
   }
 
+  function isStaleArmingNote(note) {
+    return /live kalshi buys off|auto-trade off|not connected|kalshi not connected/i.test(
+      String(note || "")
+    );
+  }
+
+  function adoptAutoTradeNote(raw) {
+    if (raw == null || raw === "") return;
+    const note = String(raw);
+    // Never keep an arming-error note when we are actually armed — that made
+    // Options show "ARMED · Live Kalshi buys off" with the Live toggle ON.
+    if (kalshiLive.serverArmed && isStaleArmingNote(note)) {
+      if (!lastAutoTradeNote || isStaleArmingNote(lastAutoTradeNote)) {
+        lastAutoTradeNote = "armed · waiting for clear Best Side";
+      }
+      return;
+    }
+    lastAutoTradeNote = note;
+  }
+
   function applyKalshiAccountStatus(status) {
     if (!status || typeof status !== "object") return;
     const errText = formatKalshiErr(status.error);
@@ -4403,22 +4423,7 @@
     if (status.last_auto_trade_key && !lastAutoTradeKey) {
       lastAutoTradeKey = status.last_auto_trade_key;
     }
-    if (status.last_auto_trade_note) {
-      const note = String(status.last_auto_trade_note);
-      const armingErr = /live kalshi buys off|auto-trade off|not connected/i.test(
-        note
-      );
-      // Never keep an arming-error note when we are actually armed — that made
-      // Options show "ARMED · Live Kalshi buys off" with the toggle ON.
-      if (!(kalshiLive.serverArmed && armingErr)) {
-        lastAutoTradeNote = note;
-      } else if (
-        !lastAutoTradeNote ||
-        /live kalshi buys off|auto-trade off|not connected/i.test(lastAutoTradeNote)
-      ) {
-        lastAutoTradeNote = "armed · waiting for clear Best Side";
-      }
-    }
+    adoptAutoTradeNote(status.last_auto_trade_note);
     renderKalshiLiveUi();
     renderDemoUi();
     renderAutoTradeVerify();
@@ -4639,10 +4644,11 @@
   function autoTradeDisplayNote() {
     const note = (lastAutoTradeNote || "").trim();
     if (!note) return "waiting for clear Best Side";
-    const armingErr = /live kalshi buys off|auto-trade off|not connected/i.test(
-      note
-    );
-    if (kalshiLive.serverArmed && armingErr) {
+    if (kalshiLive.serverArmed && isStaleArmingNote(note)) {
+      return "waiting for clear Best Side";
+    }
+    // Also hide when Live toggle is ON even if serverArmed flag lagged.
+    if (isLiveKalshi() && autoTradeOn && isStaleArmingNote(note)) {
       return "waiting for clear Best Side";
     }
     return note;
@@ -5046,9 +5052,7 @@
         }
         applyKalshiAccountStatus(data);
         if (data.last_auto_trade_key) lastAutoTradeKey = data.last_auto_trade_key;
-        if (data.last_auto_trade_note) {
-          lastAutoTradeNote = String(data.last_auto_trade_note);
-        }
+        adoptAutoTradeNote(data.last_auto_trade_note);
         renderAutoTradeUi();
       }
       return data;
@@ -5065,10 +5069,11 @@
       kalshiLive.autoTrade = !!data.auto_trade;
       kalshiLive.autoFlip = !!data.auto_flip;
       kalshiLive.serverArmed = !!data.server_armed;
-      kalshiLive.autoAttemptCount = Number(data.attempt_count) || 0;
-      if (data.last_auto_trade_note) {
-        lastAutoTradeNote = String(data.last_auto_trade_note);
+      if (typeof data.live_enabled === "boolean") {
+        kalshiLive.liveEnabled = !!data.live_enabled && !kalshiLive.authFailed;
       }
+      kalshiLive.autoAttemptCount = Number(data.attempt_count) || 0;
+      adoptAutoTradeNote(data.last_auto_trade_note);
       if (data.last_auto_trade_key && !lastAutoTradeKey) {
         lastAutoTradeKey = data.last_auto_trade_key;
       }
@@ -5081,6 +5086,7 @@
       } else {
         renderAutoTradeVerify();
         paintAutoTradeBadge();
+        renderKalshiLiveUi();
       }
       return data;
     } catch {

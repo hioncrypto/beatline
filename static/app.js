@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.29";
+  const APP_VERSION = "10.30";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -334,6 +334,7 @@
       "pl-chart-readout-balance-note"
     ),
     accountExport: document.getElementById("account-export"),
+    accountSync: document.getElementById("account-sync"),
     accountImport: document.getElementById("account-import"),
     accountImportFile: document.getElementById("account-import-file"),
     accountUserId: document.getElementById("account-user-id"),
@@ -911,7 +912,7 @@
   async function pushDemoStateToServer() {
     if (serverSaveInFlight) {
       queueServerDemoSave();
-      return;
+      return { ok: false, pending: true };
     }
     serverSaveInFlight = true;
     try {
@@ -924,7 +925,7 @@
         updatedAt: Date.now(),
       };
       demo.updatedAt = payload.updatedAt;
-      await fetch("/api/demo-account", {
+      const res = await fetch("/api/demo-account", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -933,11 +934,60 @@
         body: JSON.stringify({ userId: getUserId(), state: payload }),
         cache: "no-store",
       });
-    } catch {
-      // keep local; retry on next save
+      let data = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+      if (!res.ok || !(data && data.ok)) {
+        return {
+          ok: false,
+          error: (data && data.error) || `HTTP ${res.status}`,
+          count: history.length,
+        };
+      }
+      const savedHist =
+        data.state && Array.isArray(data.state.history)
+          ? data.state.history.length
+          : history.length;
+      return { ok: true, count: savedHist, userId: getUserId() };
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || "network error" };
     } finally {
       serverSaveInFlight = false;
     }
+  }
+
+  async function forceAccountSyncToServer() {
+    setStatus("ok", "Syncing account…");
+    // Pull local + seed together, then push hard.
+    try {
+      const seed = await loadSeedTradeHistory();
+      demo.history = mergeTradeHistory(
+        demo.history,
+        loadTradeHistory(),
+        seed
+      );
+      persistTradeHistory(demo.history);
+    } catch {
+      // still try push with whatever we have
+    }
+    const result = await pushDemoStateToServer();
+    if (result && result.ok) {
+      setStatus(
+        "ok",
+        `Synced ${result.count || 0} trades to server · id ${String(
+          result.userId || ""
+        ).slice(0, 8)}…`
+      );
+      return true;
+    }
+    setStatus(
+      "warn",
+      `Sync failed${result && result.error ? ` · ${result.error}` : ""} — open app in foreground and retry`
+    );
+    return false;
   }
 
   function isEphemeralHost() {
@@ -9012,6 +9062,11 @@
     document.addEventListener("touchcancel", () => resetPullIndicator(), {
       passive: true,
     });
+    if (el.accountSync) {
+      el.accountSync.addEventListener("click", () => {
+        void forceAccountSyncToServer();
+      });
+    }
     if (el.accountExport) {
       el.accountExport.addEventListener("click", () => exportAccountBackup());
     }

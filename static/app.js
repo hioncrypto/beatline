@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.36";
+  const APP_VERSION = "10.37";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -274,6 +274,7 @@
     settleMeta: document.getElementById("settle-meta"),
     menuBtn: document.getElementById("menu-btn"),
     liveKalshiBadge: document.getElementById("live-kalshi-badge"),
+    autoTradeBadge: document.getElementById("auto-trade-badge"),
     brandSub: document.getElementById("brand-sub"),
     optionsBackdrop: document.getElementById("options-backdrop"),
     optionsSheet: document.getElementById("options-sheet"),
@@ -4296,11 +4297,47 @@
         }
       }
     }
+    paintAutoTradeBadge();
     if (el.brandSub) {
-      el.brandSub.classList.toggle("is-live", live);
-      el.brandSub.textContent = live
-        ? "LIVE Kalshi · real money buys"
-        : "15-minute BTC · Price to beat";
+      const autoOn = !!autoTradeOn;
+      const armed = autoOn && tradingArmed();
+      el.brandSub.classList.toggle("is-live", live || armed);
+      if (live && autoOn) {
+        el.brandSub.textContent = armed
+          ? "LIVE · Auto trader on"
+          : "LIVE · Auto trader needs Demo or Live buys";
+      } else if (live) {
+        el.brandSub.textContent = "LIVE Kalshi · real money buys";
+      } else if (autoOn) {
+        el.brandSub.textContent = armed
+          ? "Auto trader on · waiting for clear Best Side"
+          : "Auto trader on · enable Demo or Live Kalshi";
+      } else {
+        el.brandSub.textContent = "15-minute BTC · Price to beat";
+      }
+    }
+  }
+
+  function paintAutoTradeBadge() {
+    const on = !!autoTradeOn;
+    document.body.classList.toggle("is-auto-trade", on);
+    if (!el.autoTradeBadge) return;
+    el.autoTradeBadge.hidden = !on;
+    if (!on) return;
+    const armed = tradingArmed();
+    const live = isLiveKalshi();
+    el.autoTradeBadge.classList.toggle("is-armed", armed);
+    el.autoTradeBadge.classList.toggle("is-waiting", on && !armed);
+    el.autoTradeBadge.textContent = "AUTO TRADER";
+    if (live && armed) {
+      el.autoTradeBadge.title =
+        "Auto trader ON · live Kalshi · ≤1% per clear Best Side";
+    } else if (armed) {
+      el.autoTradeBadge.title =
+        "Auto trader ON · demo · ≤1% per clear Best Side";
+    } else {
+      el.autoTradeBadge.title =
+        "Auto trader ON — turn on Demo or Live Kalshi buys to arm";
     }
   }
 
@@ -6812,6 +6849,7 @@
 
   function renderAutoTradeUi() {
     if (el.autoTradeToggle) el.autoTradeToggle.checked = !!autoTradeOn;
+    paintLiveKalshiBadge();
     if (el.autoTradeStatus) {
       el.autoTradeStatus.classList.remove("is-live", "is-warn");
       if (!autoTradeOn) {

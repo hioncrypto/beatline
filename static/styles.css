@@ -106,6 +106,60 @@ h1 {
   letter-spacing: -0.04em;
 }
 
+.brand-badges {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.auto-trade-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 7px;
+  border-radius: 999px;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #1a1208;
+  background: linear-gradient(180deg, #f5d76e, #e0b33a);
+  border: 1px solid rgba(255, 230, 150, 0.6);
+  box-shadow: 0 0 0 1px rgba(212, 160, 23, 0.2);
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.auto-trade-badge::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #1a1208;
+  box-shadow: 0 0 0 2px rgba(26, 18, 8, 0.18);
+  animation: live-kalshi-pulse 1.6s ease-in-out infinite;
+}
+
+.auto-trade-badge.is-armed {
+  background: linear-gradient(180deg, #f0c14b, #d4a017);
+}
+
+.auto-trade-badge.is-waiting {
+  opacity: 0.85;
+  background: linear-gradient(180deg, #c9a84a, #9a7a20);
+}
+
+.auto-trade-badge[hidden] {
+  display: none !important;
+}
+
+body.is-auto-trade .mark {
+  background: linear-gradient(180deg, #f0c14b, #d4a017);
+  box-shadow: 0 0 0 1px rgba(240, 193, 75, 0.45);
+}
+
 .brand-title-row {
   display: flex;
   align-items: center;

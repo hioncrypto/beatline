@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.48";
+  const APP_VERSION = "10.49";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -8157,15 +8157,13 @@
     return Number.isFinite(start) && start > 0 ? start : DEMO_DEFAULT_START;
   }
 
-  /** Max $ the automatic beat may suggest this trade (≤1% of sizing bank). */
+  /** Max $ the automatic beat may suggest this trade (~1% of sizing bank). */
   function maxBestRiskUsd(bank) {
     const b = Math.max(0, Number(bank) || 0);
-    const cap = Math.floor(b * MAX_BEST_RISK_PCT);
-    if (cap >= BUY_AMOUNT_MIN) {
-      return Math.min(SUGGEST_AMOUNT_MAX, cap);
-    }
-    // Bank too small for a true 1% entry at the $1 minimum — no auto suggest.
-    return 0;
+    if (!(b >= BUY_AMOUNT_MIN)) return 0;
+    // Round then floor at $1 — Math.floor(95*0.01)=0 used to block every auto buy.
+    const cap = Math.max(BUY_AMOUNT_MIN, Math.round(b * MAX_BEST_RISK_PCT));
+    return Math.min(SUGGEST_AMOUNT_MAX, cap);
   }
 
   function clampBestStake(n, bank) {

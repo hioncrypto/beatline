@@ -195,6 +195,7 @@ def log_auto_trade_attempt(entry: dict) -> dict:
             "live_off",
             "not_connected",
             "need_flip",
+            "size_zero",
         ):
             for prev in reversed(attempts[-8:]):
                 if not isinstance(prev, dict):
@@ -1499,7 +1500,9 @@ def _green_spike_suggest(
 ) -> int:
     """
     Suggested Best-buy / automatic-beat entry.
-    Hard-capped at 1% of Kalshi bankroll when known; else ≤ $100.
+    Hard-capped at ~1% of Kalshi bankroll when known; else ≤ $100.
+    Small accounts (<$100) still get a $1 floor when balance can cover it —
+    int(bank*0.01) used to floor $95 → $0 and block every auto buy.
     Manual buy chips on the client stay independent of this cap.
     """
     cost = ask / 100.0
@@ -1514,7 +1517,10 @@ def _green_spike_suggest(
     except (TypeError, ValueError):
         bank = None
     if bank is not None and bank > 0:
-        risk_cap = int(bank * 0.01)
+        risk_cap = int(round(bank * 0.01))
+        # Never return $0 when the account can afford a $1 entry.
+        if bank >= 1:
+            risk_cap = max(1, risk_cap)
         if risk_cap < 1:
             return 0
         suggest = min(suggest, risk_cap)
@@ -2511,9 +2517,15 @@ def try_server_auto_trade(
     if stake is None or stake < 1:
         bal = kalshi_fetch_balance(creds)
         bank = bal.get("balance") if bal.get("ok") else None
+        # Prefer live balance for sizing — edge payload can carry stale $0.
         stake = float(_green_spike_suggest(limit_ask, 0.55, bank) or 0)
     if stake < 1:
-        note = "auto-trade size $0 (1% bal too small)"
+        bal = kalshi_fetch_balance(creds)
+        bank = bal.get("balance") if bal.get("ok") else None
+        if bank is not None and float(bank) >= 1:
+            stake = 1.0
+    if stake < 1:
+        note = "auto-trade size $0 (balance too small for $1 entry)"
         _last_auto_trade_note = note
         return finish({"ok": False, "error": note, "key": key}, kind="size_zero")
 
@@ -3106,7 +3118,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.3.4",
+                    "version": "2.3.5",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

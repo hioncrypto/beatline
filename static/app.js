@@ -7378,7 +7378,7 @@
     if (cap >= BUY_AMOUNT_MIN) {
       return Math.min(SUGGEST_AMOUNT_MAX, cap);
     }
-    // Bank too small for a true 2% entry at the $1 minimum — no auto suggest.
+    // Bank too small for a true 1% entry at the $1 minimum — no auto suggest.
     return 0;
   }
 

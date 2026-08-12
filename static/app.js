@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.35";
+  const APP_VERSION = "10.36";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -185,7 +185,7 @@
     },
     {
       title: "Odds & Best Side",
-      body: "Market chance shows Above/Below pricing. Best Side scores distance from the beat, time left, ask, and fees — then suggests a dollar size capped at 2% of your bankroll (Kalshi balance when live). When a clear edge appears, BeatLine chimes; tap Best to open the buy sheet pre-filled.",
+      body: "Market chance shows Above/Below pricing. Best Side scores distance from the beat, time left, ask, and fees — then suggests a dollar size capped at 1% of your bankroll (Kalshi balance when live). When a clear edge appears, BeatLine chimes; tap Best to open the buy sheet pre-filled.",
     },
     {
       title: "Set size, then buy",
@@ -197,7 +197,7 @@
     },
     {
       title: "Demo & alerts",
-      body: "⋮ Options → Demo mode for paper trades, Live Kalshi for real buys, and Auto-trade Best Side to let BeatLine take clear-edge entries at ≤2% of balance. The bell enables alerts.",
+      body: "⋮ Options → Demo mode for paper trades, Live Kalshi for real buys, and Auto-trade Best Side to let BeatLine take clear-edge entries at ≤1% of balance. The bell enables alerts.",
     },
   ];
 
@@ -4956,7 +4956,7 @@
     if (kicker) {
       if (isLiveKalshi()) {
         kicker.textContent = suggested != null
-          ? `Live Kalshi · suggested $${suggested} · ≤2% bal`
+          ? `Live Kalshi · suggested $${suggested} · ≤1% bal`
           : adding
             ? "Live Kalshi add · real money"
             : "Live Kalshi order · real money";
@@ -4964,8 +4964,8 @@
         kicker.textContent =
           suggested != null
             ? demo.on
-              ? `Suggested $${suggested} · ≤2% bal`
-              : `Suggested $${suggested} · ≤2% bal`
+              ? `Suggested $${suggested} · ≤1% bal`
+              : `Suggested $${suggested} · ≤1% bal`
             : adding
               ? demo.on
                 ? "Demo add · averages into open position"
@@ -6138,7 +6138,7 @@
           roiIfWin: null,
           bankPct: bank > 0 ? (clamped / bank) * 100 : null,
           streak: 0,
-          note: "from alert · ≤2% bal",
+          note: "from alert · ≤1% bal",
         };
       }
     }
@@ -6824,12 +6824,12 @@
       } else if (isLiveKalshi()) {
         el.autoTradeStatus.textContent = lastAutoTradeNote
           ? `LIVE auto · ${lastAutoTradeNote}`
-          : "LIVE auto · waiting for clear Best Side (≤2% bal)";
+          : "LIVE auto · waiting for clear Best Side (≤1% bal)";
         el.autoTradeStatus.classList.add("is-live");
       } else {
         el.autoTradeStatus.textContent = lastAutoTradeNote
           ? `Demo auto · ${lastAutoTradeNote}`
-          : "Demo auto · waiting for clear Best Side (≤2% bal)";
+          : "Demo auto · waiting for clear Best Side (≤1% bal)";
       }
     }
   }
@@ -6858,7 +6858,7 @@
 
   /**
    * Place one Best Side entry at suggested size when Auto-trade is armed.
-   * Uses the same Green Spike clear-edge + ≤2% stake as Suggested buy.
+   * Uses the same Green Spike clear-edge + ≤1% stake as Suggested buy.
    */
   async function maybeAutoTrade(best, suggestStake) {
     if (!autoTradeArmed()) return false;
@@ -7346,7 +7346,7 @@
    * Hard cap for automatic Best Side / clear-edge suggested stake.
    * Manual buy chips stay independent ($1–$250).
    */
-  const MAX_BEST_RISK_PCT = 0.02;
+  const MAX_BEST_RISK_PCT = 0.01;
 
   /** Bankroll used for Best Side suggested sizing. */
   function sizingBankroll() {
@@ -7371,7 +7371,7 @@
     return Number.isFinite(start) && start > 0 ? start : DEMO_DEFAULT_START;
   }
 
-  /** Max $ the automatic beat may suggest this trade (≤2% of sizing bank). */
+  /** Max $ the automatic beat may suggest this trade (≤1% of sizing bank). */
   function maxBestRiskUsd(bank) {
     const b = Math.max(0, Number(bank) || 0);
     const cap = Math.floor(b * MAX_BEST_RISK_PCT);
@@ -7416,7 +7416,7 @@
 
   /**
    * Suggest $ for automatic Best Side / clear-edge (Green Spike).
-   * Fractional Kelly ~22–40%, hard-capped at 2% of bankroll per trade.
+   * Fractional Kelly ~22–40%, hard-capped at 1% of bankroll per trade.
    * Manual slider/chips stay up to $250 and are not bound by this cap.
    */
   function suggestStakeForEdge(best) {
@@ -7434,7 +7434,7 @@
         pWin: Math.max(0.01, Math.min(0.99, Number(best.pWin) || 0.5)),
         atRiskCap: true,
         lowProb: false,
-        note: "need bal for 2% size",
+        note: "need bal for 1% size",
       };
     }
     const hardCap = Math.max(
@@ -7472,7 +7472,7 @@
       Math.max(0, (Number(best.score) - 0.04) / 0.18)
     );
     const kellyShare = 0.22 + 0.18 * edgeStrength; // ~22–40% Kelly
-    // Never above 2% of bank — Kelly may size smaller on weaker edges.
+    // Never above 1% of bank — Kelly may size smaller on weaker edges.
     const kellyUsd = bank * kellyFull * kellyShare;
     const riskUsd = bank * MAX_BEST_RISK_PCT;
     let raw = Math.min(kellyUsd, riskUsd, hardCap);
@@ -7492,7 +7492,7 @@
       roiIfWin: sized && !sized.empty ? sized.roiIfWin : unit.roiIfWin,
       bankPct: bank > 0 ? (stake / bank) * 100 : 0,
       streak: 0,
-      note: "≤2% bal",
+      note: "≤1% bal",
     };
   }
 

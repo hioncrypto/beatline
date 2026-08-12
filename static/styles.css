@@ -4477,9 +4477,9 @@ body.portrait-app #chart {
   border: 1px solid rgba(61, 214, 140, 0.45);
 }
 .kalshi-connect-confirm.is-warn {
-  color: #3a2200;
-  background: rgba(240, 180, 41, 0.2);
-  border: 1px solid rgba(240, 180, 41, 0.45);
+  color: #ffffff;
+  background: rgba(120, 70, 10, 0.92);
+  border: 1px solid rgba(255, 210, 100, 0.55);
 }
 
 .live-account-line {

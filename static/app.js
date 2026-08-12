@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.45";
+  const APP_VERSION = "10.46";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4338,6 +4338,16 @@
     kalshiLive.keyHint = status.key_hint || null;
     kalshiLive.error = errText || null;
     kalshiLive.authFailed = authFailed;
+    // Server mirrors Auto-trade so background clear-edge can fill without the app.
+    if (typeof status.auto_trade === "boolean") {
+      // Keep local preference authoritative while toggling; only adopt when unset mismatch from another device is rare — sync on load via syncAutoTradeToServer.
+    }
+    if (status.last_auto_trade_key && !lastAutoTradeKey) {
+      lastAutoTradeKey = status.last_auto_trade_key;
+    }
+    if (status.last_auto_trade_note) {
+      lastAutoTradeNote = String(status.last_auto_trade_note);
+    }
     renderKalshiLiveUi();
     renderDemoUi();
     if (authFailed) {
@@ -4826,10 +4836,24 @@
     }
   }
 
-  async function placeLiveKalshiBuy(side, sized) {
+  async function placeLiveKalshiBuy(side, sized, opts = {}) {
     if (!sized || !(sized.contracts > 0)) {
       return { ok: false, error: "Need contracts to buy" };
     }
+    const slip =
+      opts && Number.isFinite(Number(opts.slipCents))
+        ? Math.max(0, Math.round(Number(opts.slipCents)))
+        : 0;
+    const baseAsk = Math.round(Number(sized.askCents) || 0);
+    const askCents = Math.min(99, Math.max(1, baseAsk + slip));
+    // Re-size to the limit price so $ stake still caps contracts.
+    const priced =
+      slip > 0 && askCents !== baseAsk
+        ? roiForStake(askCents, opts.stakeUsd != null ? opts.stakeUsd : sized.total || 0) ||
+          sized
+        : sized;
+    const contracts =
+      priced && priced.contracts > 0 ? priced.contracts : sized.contracts;
     try {
       const res = await fetch("/api/kalshi/order", {
         method: "POST",
@@ -4837,8 +4861,8 @@
         body: JSON.stringify({
           ticker: lastTicker,
           side,
-          contracts: sized.contracts,
-          ask_cents: sized.askCents,
+          contracts,
+          ask_cents: askCents,
         }),
       });
       const data = await res.json();
@@ -4851,6 +4875,58 @@
         : { ok: false, error: "Bad order response" };
     } catch (err) {
       return { ok: false, error: "Order request failed" };
+    }
+  }
+
+  async function syncAutoTradeToServer() {
+    if (!kalshiLive.connected && !isLiveKalshi()) {
+      // Still try — server may have keys even if UI hasn't refreshed.
+    }
+    try {
+      const res = await fetch("/api/kalshi/auto-trade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          auto_trade: !!autoTradeOn,
+          auto_flip: !!autoFlipOn,
+        }),
+      });
+      const data = await res.json();
+      if (data && typeof data === "object") {
+        if (data.last_auto_trade_key) lastAutoTradeKey = data.last_auto_trade_key;
+        if (data.last_auto_trade_note) {
+          lastAutoTradeNote = String(data.last_auto_trade_note);
+        }
+      }
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Live auto-buy via server (slip + dedupe shared with background watcher). */
+  async function placeServerAutoBuy(side, suggestStake, askCents) {
+    try {
+      const res = await fetch("/api/kalshi/auto-buy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: lastTicker || lastFifteenTicker || "",
+          side,
+          ask_cents: askCents,
+          suggest_stake: suggestStake,
+        }),
+      });
+      const data = await res.json();
+      if (data && data.balance != null && Number.isFinite(Number(data.balance))) {
+        kalshiLive.balance = Number(data.balance);
+        renderKalshiLiveUi();
+      }
+      return data && typeof data === "object"
+        ? data
+        : { ok: false, error: "Bad auto-buy response" };
+    } catch {
+      return { ok: false, error: "Auto-buy request failed" };
     }
   }
 
@@ -6334,10 +6410,9 @@
    * Server/SW detected a live clear edge while this page is visible.
    * Always try to chime — this is the FG delivery path for pushes that would
    * otherwise only keepalive and leave the user with no phone notify either.
+   * Also kick auto-trade immediately (server fills in background too).
    */
   function handleMarketEdgeAlert(payload) {
-    if (!chimeOn) return;
-    if (!pageOwnsAlerts()) return;
     if (!payload || !payload.side) return;
     const side = payload.side === "below" ? "below" : "above";
     const ask = Math.round(
@@ -6347,8 +6422,6 @@
     const ticker =
       payload.ticker || lastTicker || lastFifteenTicker || "";
     const sticky = `${ticker}:${side}`;
-    if (sameSoundedSticky(sticky)) return;
-    if (demo.position && demo.position.side !== side) return;
     const best = {
       side,
       askCents: ask || null,
@@ -6366,6 +6439,19 @@
             : null,
     };
     best.suggestedStake = clampBestStake(best.suggestedStake);
+    // Auto-fill as soon as the alert arrives — don't wait for the next Best Side paint.
+    if (
+      autoTradeArmed() &&
+      best.suggestedStake != null &&
+      best.suggestedStake >= BUY_AMOUNT_MIN &&
+      !(demo.position && demo.position.side !== side && !autoFlipOn)
+    ) {
+      void maybeAutoTrade(best, best.suggestedStake);
+    }
+    if (!chimeOn) return;
+    if (!pageOwnsAlerts()) return;
+    if (sameSoundedSticky(sticky)) return;
+    if (demo.position && demo.position.side !== side) return;
     // Bypass resume suppress — this is a live market signal, not a reopen dump.
     const sideLabel = side === "above" ? "Above" : "Below";
     const sug = best.suggestedStake;
@@ -7275,6 +7361,7 @@
         // ignore
       }
     }
+    void syncAutoTradeToServer();
     renderAutoTradeUi();
     if (autoTradeOn && !tradingArmed()) {
       setStatus("warn", "Auto-trade on — turn on Demo or Live Kalshi buys");
@@ -7282,7 +7369,7 @@
       setStatus(
         "ok",
         isLiveKalshi()
-          ? "Auto-trade ON · real Kalshi buys on clear Best Side"
+          ? "Auto-trade ON · server fills on clear Best Side (even in background)"
           : "Auto-trade ON · demo buys on clear Best Side"
       );
     } else {
@@ -7297,6 +7384,7 @@
     } catch {
       // ignore
     }
+    void syncAutoTradeToServer();
     renderAutoTradeUi();
     if (autoFlipOn) {
       setStatus(
@@ -7310,7 +7398,8 @@
 
   /**
    * Place one Best Side entry at suggested size when Auto-trade is armed.
-   * Uses the same Green Spike clear-edge + ≤1% stake as Suggested buy.
+   * Live path hits the server immediately (same fill engine as background alerts)
+   * with a small ask bump so IOC orders fill fast.
    */
   async function maybeAutoTrade(best, suggestStake) {
     if (!autoTradeArmed()) return false;
@@ -7331,7 +7420,11 @@
     }
     // Opposite open: only flip if Auto-flip is checked.
     if (demo.position && demo.position.side !== best.side) {
-      if (!autoFlipOn) return false;
+      if (!autoFlipOn) {
+        lastAutoTradeNote = "skipped · opposite open (enable Auto-flip)";
+        renderAutoTradeUi();
+        return false;
+      }
       autoTradeBusy = true;
       try {
         if (el.autoTradeStatus) {
@@ -7354,8 +7447,19 @@
     }
     const ask =
       best.side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
-    const sized = roiForStake(ask, suggestStake);
-    if (!sized || sized.empty || !(sized.contracts > 0)) return false;
+    const askCents = Math.round(
+      Number(
+        ask != null
+          ? ask
+          : best.askCents != null
+            ? best.askCents
+            : 0
+      ) || 0
+    );
+    const sized = roiForStake(askCents || ask, suggestStake);
+    if ((!sized || sized.empty || !(sized.contracts > 0)) && !isLiveKalshi()) {
+      return false;
+    }
 
     autoTradeBusy = true;
     const sideLabel = best.side === "above" ? "Above" : "Below";
@@ -7365,9 +7469,48 @@
           el.autoTradeStatus.textContent = `LIVE auto · buying ${sideLabel}…`;
           el.autoTradeStatus.classList.add("is-live");
         }
-        const live = await placeLiveKalshiBuy(best.side, sized);
+        // Prefer server auto-buy (slip + shared dedupe with push watcher).
+        let live = await placeServerAutoBuy(
+          best.side,
+          suggestStake,
+          askCents || (sized && sized.askCents)
+        );
+        if (live && live.already) {
+          lastAutoTradeKey = live.key || key;
+          lastAutoTradeNote = live.note || "already filled by server";
+          renderAutoTradeUi();
+          return true;
+        }
+        if (live && live.skipped && !live.ok) {
+          const why = String((live && live.error) || "");
+          // Preference not armed on server yet — fall back to direct IOC + slip.
+          // Cooldown / already-handled skips must not place a second order.
+          if (/retry cooldown|already/i.test(why)) {
+            lastAutoTradeNote = why;
+            renderAutoTradeUi();
+            return false;
+          }
+          if (!/auto-trade off|live kalshi buys off|not connected/i.test(why)) {
+            lastAutoTradeNote = why || "auto skipped";
+            renderAutoTradeUi();
+            return false;
+          }
+          const slipSized =
+            sized && !sized.empty
+              ? sized
+              : roiForStake(askCents, suggestStake);
+          if (!slipSized || slipSized.empty) {
+            lastAutoTradeNote = why || "no size";
+            renderAutoTradeUi();
+            return false;
+          }
+          live = await placeLiveKalshiBuy(best.side, slipSized, {
+            slipCents: 3,
+            stakeUsd: suggestStake,
+          });
+        }
         if (!live || !live.ok) {
-          lastAutoTradeNote = (live && live.error) || "order failed";
+          lastAutoTradeNote = (live && (live.note || live.error)) || "order failed";
           renderAutoTradeUi();
           setStatus("warn", `Auto-trade failed · ${lastAutoTradeNote}`);
           return false;
@@ -7378,15 +7521,18 @@
         });
         if (!ok) {
           lastAutoTradeNote = "filled but local track failed";
+          lastAutoTradeKey = key;
           renderAutoTradeUi();
           setStatus("warn", "Auto Kalshi fill · check Kalshi positions");
           return false;
         }
-        lastAutoTradeKey = key;
+        lastAutoTradeKey = live.key || key;
         lastAutoTradeAt = Date.now();
-        lastAutoTradeNote = `bought ${sideLabel} $${suggestStake} @ ${Math.round(
-          Number(best.askCents) || 0
-        )}¢`;
+        lastAutoTradeNote =
+          live.note ||
+          `bought ${sideLabel} $${suggestStake} @≤${
+            live.limit_ask_cents || askCents
+          }¢`;
         renderAutoTradeUi();
         paintLiveKalshiBadge();
         setStatus(
@@ -7396,6 +7542,11 @@
         return true;
       }
       if (demo.on) {
+        if (!sized || sized.empty) {
+          lastAutoTradeNote = "demo buy blocked · no size";
+          renderAutoTradeUi();
+          return false;
+        }
         const ok = demoBuy(best.side, suggestStake);
         if (!ok) {
           lastAutoTradeNote = "demo buy blocked";
@@ -8652,6 +8803,10 @@
           markEdgeSounded(best);
         }
         quietArmClearEdge(best, { chimed: false });
+      }
+      // Always try auto-fill on first clear edge — do not return before buying.
+      if (!atRiskCap && suggestStake != null) {
+        void maybeAutoTrade(best, suggestStake);
       }
       maybeClickAddSuggest(best, {
         sameAsOpen,
@@ -10377,6 +10532,8 @@
       ensureServiceWorker(),
       refreshKalshiAccountStatus(),
     ]).finally(() => {
+      void syncAutoTradeToServer();
+      renderAutoTradeUi();
       refreshTarget()
         .then(() => refreshCandles())
         .then(refreshSpot);

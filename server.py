@@ -140,6 +140,15 @@ EDGE_PUSH_COOLDOWN_SEC = 60.0
 EDGE_GONE_RESET_SEC = 60.0
 SETTLE_WINDOW_SEC = 60.0
 KALSHI_SERIES_URL = "https://kalshi.com/markets/kxbtc15m"
+# Live Auto-trade (server-side): fills on the same clear-edge pulse as alerts,
+# even when the PWA is backgrounded / suspended.
+_auto_trade_lock = threading.Lock()
+_last_auto_trade_key: str | None = None
+_last_auto_trade_at: float = 0.0
+_last_auto_trade_note: str = ""
+_last_auto_trade_attempt_at: float = 0.0
+AUTO_FILL_SLIP_CENTS = 3
+AUTO_TRADE_RETRY_SEC = 4.0
 
 
 def _parse_dollars(value) -> float | None:
@@ -1630,6 +1639,7 @@ def push_watcher_loop() -> None:
     global _last_push_ticker, _last_edge_key, _last_edge_at, _last_edge_gone_at
     global _last_edge_ask, _clear_edge_latched, _clear_edge_latch_ticker
     global _edge_confirm_key, _edge_confirm_count
+    global _last_auto_trade_key
     print("[kalshi-btc-target] background push watcher started")
     while True:
         try:
@@ -1658,6 +1668,9 @@ def push_watcher_loop() -> None:
                 _clear_edge_latch_ticker = ticker
                 _edge_confirm_key = None
                 _edge_confirm_count = 0
+                # Fresh 15m window — allow a new auto-buy.
+                with _auto_trade_lock:
+                    _last_auto_trade_key = None
             if ticker:
                 _last_push_ticker = ticker
 
@@ -1732,6 +1745,18 @@ def push_watcher_loop() -> None:
                         _last_edge_key = sticky
                         _last_edge_ask = ask
                         _last_edge_at = now
+                # Fill immediately on the same confirmed pulse as the alert —
+                # do not wait for the phone / foreground JS.
+                if confirmed:
+                    try:
+                        try_server_auto_trade(
+                            ticker=ticker or "",
+                            side=edge["side"],
+                            ask_cents=edge["ask_cents"],
+                            suggest_stake=edge.get("suggest_stake"),
+                        )
+                    except Exception as auto_exc:
+                        print(f"[kalshi-btc-target] auto-trade error: {auto_exc}")
                 _last_edge_gone_at = 0.0
             else:
                 _clear_edge_latched = False
@@ -1812,6 +1837,8 @@ def get_kalshi_credentials() -> dict | None:
         "api_key_id": api_key_id,
         "private_key_pem": private_key_pem,
         "live_enabled": bool(file_creds.get("live_enabled")),
+        "auto_trade": bool(file_creds.get("auto_trade")),
+        "auto_flip": bool(file_creds.get("auto_flip")),
         "from_env": bool(env_id and env_pem),
         "key_hint": api_key_id[:8] + "…" if len(api_key_id) > 8 else api_key_id,
     }
@@ -1824,6 +1851,25 @@ def set_kalshi_live_enabled(enabled: bool) -> dict:
         data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _save_kalshi_creds_file(data)
     return kalshi_account_status(fetch_balance=True)
+
+
+def set_kalshi_auto_trade(
+    *, auto_trade: bool | None = None, auto_flip: bool | None = None
+) -> dict:
+    """Persist Auto-trade / Auto-flip so the push watcher can fill in background."""
+    with _kalshi_creds_lock:
+        data = _load_kalshi_creds_file()
+        if auto_trade is not None:
+            data["auto_trade"] = bool(auto_trade)
+            if not auto_trade:
+                data["auto_flip"] = False
+        if auto_flip is not None:
+            data["auto_flip"] = bool(auto_flip) and bool(
+                data.get("auto_trade") if auto_trade is None else auto_trade
+            )
+        data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _save_kalshi_creds_file(data)
+    return kalshi_account_status(fetch_balance=False)
 
 
 def save_kalshi_credentials(api_key_id: str, private_key_pem: str, live_enabled=None) -> dict:
@@ -1850,6 +1896,8 @@ def clear_kalshi_credentials() -> dict:
         data.pop("api_key_id", None)
         data.pop("private_key_pem", None)
         data["live_enabled"] = False
+        data["auto_trade"] = False
+        data["auto_flip"] = False
         data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _save_kalshi_creds_file(data)
     return kalshi_account_status(fetch_balance=False)
@@ -2016,15 +2064,21 @@ def kalshi_account_status(fetch_balance: bool = True) -> dict:
             "ok": True,
             "connected": False,
             "live_enabled": False,
+            "auto_trade": False,
+            "auto_flip": False,
             "from_env": False,
             "balance": None,
             "key_hint": None,
             "error": None,
+            "last_auto_trade_key": _last_auto_trade_key,
+            "last_auto_trade_note": _last_auto_trade_note or None,
         }
     out = {
         "ok": True,
         "connected": True,
         "live_enabled": bool(creds.get("live_enabled")),
+        "auto_trade": bool(creds.get("auto_trade")),
+        "auto_flip": bool(creds.get("auto_flip")),
         "from_env": bool(creds.get("from_env")),
         "key_hint": creds.get("key_hint"),
         "balance": None,
@@ -2032,6 +2086,8 @@ def kalshi_account_status(fetch_balance: bool = True) -> dict:
         "error": None,
         "authenticated": None,
         "auth_failed": False,
+        "last_auto_trade_key": _last_auto_trade_key,
+        "last_auto_trade_note": _last_auto_trade_note or None,
     }
     if fetch_balance:
         bal = kalshi_fetch_balance(creds)
@@ -2058,6 +2114,136 @@ def kalshi_account_status(fetch_balance: bool = True) -> dict:
                 out["auth_failed"] = True
     else:
         out["authenticated"] = None
+    return out
+
+
+def _auto_contracts_for_stake(ask_cents: int, stake_usd) -> int:
+    try:
+        ask = int(ask_cents)
+        stake = float(stake_usd)
+    except (TypeError, ValueError):
+        return 0
+    if ask < 1 or ask > 99 or stake < 1:
+        return 0
+    p = ask / 100.0
+    return max(1, int(stake // p))
+
+
+def try_server_auto_trade(
+    *,
+    ticker: str,
+    side: str,
+    ask_cents: int,
+    suggest_stake=None,
+    force: bool = False,
+) -> dict:
+    """
+    Place a live Best Side buy when Auto-trade is armed on the server.
+    Uses IOC with a small ask bump so fills land quickly as the book moves.
+    Dedupes per ticker:side; retries failed IOCs after AUTO_TRADE_RETRY_SEC.
+    """
+    global _last_auto_trade_key, _last_auto_trade_at, _last_auto_trade_note
+    global _last_auto_trade_attempt_at
+
+    ticker = (ticker or "").strip()
+    side = (side or "").strip().lower()
+    if side in ("yes", "y"):
+        side = "above"
+    elif side in ("no", "n"):
+        side = "below"
+    if not ticker or side not in ("above", "below"):
+        return {"ok": False, "skipped": True, "error": "Need ticker and side"}
+
+    creds = get_kalshi_credentials()
+    if not creds:
+        return {"ok": False, "skipped": True, "error": "Kalshi not connected"}
+    if not creds.get("live_enabled") and not os.environ.get("KALSHI_LIVE_FORCE"):
+        return {"ok": False, "skipped": True, "error": "Live Kalshi buys off"}
+    if not creds.get("auto_trade") and not force:
+        return {"ok": False, "skipped": True, "error": "Auto-trade off"}
+
+    key = f"{ticker}:{side}"
+    now = time.time()
+    with _auto_trade_lock:
+        if _last_auto_trade_key == key:
+            return {
+                "ok": True,
+                "skipped": True,
+                "already": True,
+                "key": key,
+                "note": _last_auto_trade_note or "already auto-bought",
+            }
+        if (
+            _last_auto_trade_attempt_at
+            and now - _last_auto_trade_attempt_at < AUTO_TRADE_RETRY_SEC
+        ):
+            return {
+                "ok": False,
+                "skipped": True,
+                "error": "auto-trade retry cooldown",
+                "key": key,
+            }
+        _last_auto_trade_attempt_at = now
+
+    try:
+        ask = int(ask_cents)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Invalid ask"}
+    if ask < 1 or ask > 99:
+        return {"ok": False, "error": "Ask must be 1–99¢"}
+
+    # Pay a few cents through the ask so IOC fills instead of canceling.
+    limit_ask = min(99, ask + AUTO_FILL_SLIP_CENTS)
+    stake = suggest_stake
+    try:
+        stake = float(stake) if stake is not None else None
+    except (TypeError, ValueError):
+        stake = None
+    if stake is None or stake < 1:
+        bal = kalshi_fetch_balance(creds)
+        bank = bal.get("balance") if bal.get("ok") else None
+        stake = float(_green_spike_suggest(limit_ask, 0.55, bank) or 0)
+    if stake < 1:
+        note = "auto-trade size $0 (1% bal too small)"
+        _last_auto_trade_note = note
+        return {"ok": False, "error": note, "key": key}
+
+    contracts = _auto_contracts_for_stake(limit_ask, stake)
+    if contracts < 1:
+        return {"ok": False, "error": "Need at least 1 contract", "key": key}
+
+    result = place_kalshi_buy(
+        ticker=ticker,
+        side=side,
+        contracts=contracts,
+        ask_cents=limit_ask,
+    )
+    side_label = "Above" if side == "above" else "Below"
+    if result.get("ok"):
+        with _auto_trade_lock:
+            _last_auto_trade_key = key
+            _last_auto_trade_at = time.time()
+            _last_auto_trade_note = (
+                f"bought {side_label} ~${int(round(stake))} "
+                f"@≤{limit_ask}¢ ({int(result.get('fill_count') or contracts)} cts)"
+            )
+        result = dict(result)
+        result["auto"] = True
+        result["key"] = key
+        result["limit_ask_cents"] = limit_ask
+        result["suggest_stake"] = int(round(stake))
+        result["note"] = _last_auto_trade_note
+        print(f"[kalshi-btc-target] auto-trade FILL {key} {_last_auto_trade_note}")
+        return result
+
+    err = result.get("error") or "order failed"
+    _last_auto_trade_note = f"failed {side_label}: {err}"
+    print(f"[kalshi-btc-target] auto-trade MISS {key} {err}")
+    out = dict(result)
+    out["auto"] = True
+    out["key"] = key
+    out["limit_ask_cents"] = limit_ask
+    out["note"] = _last_auto_trade_note
     return out
 
 
@@ -2381,6 +2567,50 @@ class Handler(BaseHTTPRequestHandler):
                 return
             status = set_kalshi_live_enabled(bool(enabled))
             self._send_json(200 if status.get("ok") else 502, status)
+            return
+
+        if path == "/api/kalshi/auto-trade":
+            if not get_kalshi_credentials():
+                self._send_json(
+                    400,
+                    {"ok": False, "error": "Connect your Kalshi API key first"},
+                )
+                return
+            auto_trade = body.get("auto_trade")
+            if auto_trade is None:
+                auto_trade = body.get("autoTrade")
+            if auto_trade is None and "enabled" in body:
+                auto_trade = body.get("enabled")
+            auto_flip = body.get("auto_flip")
+            if auto_flip is None:
+                auto_flip = body.get("autoFlip")
+            if auto_trade is None and auto_flip is None:
+                self._send_json(
+                    400, {"ok": False, "error": "auto_trade or auto_flip required"}
+                )
+                return
+            status = set_kalshi_auto_trade(
+                auto_trade=None if auto_trade is None else bool(auto_trade),
+                auto_flip=None if auto_flip is None else bool(auto_flip),
+            )
+            self._send_json(200, status)
+            return
+
+        if path == "/api/kalshi/auto-buy":
+            # Foreground / client can trigger the same server fill path.
+            result = try_server_auto_trade(
+                ticker=str(body.get("ticker") or "").strip(),
+                side=str(body.get("side") or "").strip().lower(),
+                ask_cents=body.get("ask_cents")
+                if body.get("ask_cents") is not None
+                else body.get("askCents") or body.get("price_cents") or body.get("price"),
+                suggest_stake=body.get("suggest_stake")
+                if body.get("suggest_stake") is not None
+                else body.get("suggestStake") or body.get("stake"),
+                force=bool(body.get("force")),
+            )
+            code = 200 if result.get("ok") or result.get("skipped") else 400
+            self._send_json(code, result)
             return
 
         if path == "/api/kalshi/order":

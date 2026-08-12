@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.46";
+  const APP_VERSION = "10.47";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4240,7 +4240,8 @@
         pos.side,
         pos.contracts,
         mark.bidCents,
-        pos.ticker
+        pos.ticker,
+        { slipCents: quiet ? 3 : 0 }
       );
       if (!sold || !sold.ok) {
         const err = (sold && sold.error) || "Kalshi close failed";
@@ -4804,13 +4805,18 @@
     return kalshiLive.balance;
   }
 
-  async function placeLiveKalshiSell(side, contracts, bidCents, ticker) {
+  async function placeLiveKalshiSell(side, contracts, bidCents, ticker, opts = {}) {
     if (!(contracts > 0)) {
       return { ok: false, error: "Need contracts to sell" };
     }
     if (!(bidCents > 0)) {
       return { ok: false, error: "Need a live bid to close" };
     }
+    const slip =
+      opts && Number.isFinite(Number(opts.slipCents))
+        ? Math.max(0, Math.round(Number(opts.slipCents)))
+        : 0;
+    const limitBid = Math.max(1, Math.min(99, Math.round(bidCents) - slip));
     try {
       const res = await fetch("/api/kalshi/order", {
         method: "POST",
@@ -4820,7 +4826,7 @@
           ticker: ticker || lastTicker,
           side,
           contracts,
-          bid_cents: bidCents,
+          bid_cents: limitBid,
         }),
       });
       const data = await res.json();
@@ -4904,8 +4910,12 @@
     }
   }
 
-  /** Live auto-buy via server (slip + dedupe shared with background watcher). */
+  /** Live auto-buy via server (slip + flip + dedupe shared with background watcher). */
   async function placeServerAutoBuy(side, suggestStake, askCents) {
+    const oppSide = side === "above" ? "below" : "above";
+    const oppBid =
+      oppSide === "above" ? lastRoiBids.above : lastRoiBids.below;
+    const sameBid = side === "above" ? lastRoiBids.above : lastRoiBids.below;
     try {
       const res = await fetch("/api/kalshi/auto-buy", {
         method: "POST",
@@ -4915,6 +4925,8 @@
           side,
           ask_cents: askCents,
           suggest_stake: suggestStake,
+          bid_cents: sameBid,
+          opposite_bid_cents: oppBid,
         }),
       });
       const data = await res.json();
@@ -7425,24 +7437,31 @@
         renderAutoTradeUi();
         return false;
       }
-      autoTradeBusy = true;
-      try {
-        if (el.autoTradeStatus) {
-          el.autoTradeStatus.textContent = "Auto-flip · closing opposite…";
-          el.autoTradeStatus.classList.add("is-live");
+      // Live: server auto-buy closes opposite then buys (one path).
+      // Demo: close locally first, then buy.
+      if (!isLiveKalshi()) {
+        autoTradeBusy = true;
+        try {
+          if (el.autoTradeStatus) {
+            el.autoTradeStatus.textContent = "Auto-flip · closing opposite…";
+            el.autoTradeStatus.classList.add("is-live");
+          }
+          const closed = await closeDemoPosition({ quiet: true });
+          if (!closed || !closed.ok || demo.position) {
+            lastAutoTradeNote = (closed && closed.error) || "flip close failed";
+            renderAutoTradeUi();
+            setStatus("warn", `Auto-flip close failed · ${lastAutoTradeNote}`);
+            return false;
+          }
+          lastAutoTradeNote = `flipped off ${
+            best.side === "above" ? "Below" : "Above"
+          } · opening ${best.side === "above" ? "Above" : "Below"}`;
+        } finally {
+          autoTradeBusy = false;
         }
-        const closed = await closeDemoPosition({ quiet: true });
-        if (!closed || !closed.ok || demo.position) {
-          lastAutoTradeNote = (closed && closed.error) || "flip close failed";
-          renderAutoTradeUi();
-          setStatus("warn", `Auto-flip close failed · ${lastAutoTradeNote}`);
-          return false;
-        }
-        lastAutoTradeNote = `flipped off ${
-          best.side === "above" ? "Below" : "Above"
-        } · opening ${best.side === "above" ? "Above" : "Below"}`;
-      } finally {
-        autoTradeBusy = false;
+      } else if (el.autoTradeStatus) {
+        el.autoTradeStatus.textContent = "Auto-flip · close + reverse…";
+        el.autoTradeStatus.classList.add("is-live");
       }
     }
     const ask =
@@ -7515,6 +7534,15 @@
           setStatus("warn", `Auto-trade failed · ${lastAutoTradeNote}`);
           return false;
         }
+        // Server may have closed opposite — clear local open before tracking new side.
+        if (
+          live.flipped &&
+          demo.position &&
+          demo.position.side !== best.side
+        ) {
+          demo.position = null;
+          saveDemoState();
+        }
         const ok = demoBuy(best.side, suggestStake, {
           liveKalshi: true,
           order: live,
@@ -7537,7 +7565,9 @@
         paintLiveKalshiBadge();
         setStatus(
           "ok",
-          `Auto-bought ${sideLabel} · $${suggestStake} · Kalshi live`
+          live.flipped
+            ? `Auto-flipped to ${sideLabel} · $${suggestStake} · Kalshi live`
+            : `Auto-bought ${sideLabel} · $${suggestStake} · Kalshi live`
         );
         return true;
       }
@@ -7572,8 +7602,10 @@
     if (!best || !best.side) return false;
     if (!chimeOn) return false;
     // Flat: always alert. Same-side open: still alert (add decision).
-    // Opposite open: skip — that used to spam BUY while already long the other way.
-    if (demo.position && demo.position.side !== best.side) return false;
+    // Opposite open: only alert when Auto-flip is on (flip signal).
+    const oppositeOpen =
+      !!(demo.position && demo.position.side !== best.side);
+    if (oppositeOpen && !autoFlipOn) return false;
 
     const side = best.side;
     const ask = Math.round(Number(best.askCents) || 0);
@@ -7612,9 +7644,13 @@
         : null;
     setStatus(
       "ok",
-      sug != null
-        ? `Clear edge · Buy ${sideLabel} · suggest $${sug}${ask ? ` @ ${ask}¢` : ""}`
-        : `Clear edge · Buy ${sideLabel}${ask ? ` @ ${ask}¢` : ""}`
+      oppositeOpen
+        ? sug != null
+          ? `Auto-flip · ${sideLabel} · suggest $${sug}${ask ? ` @ ${ask}¢` : ""}`
+          : `Auto-flip · ${sideLabel}${ask ? ` @ ${ask}¢` : ""}`
+        : sug != null
+          ? `Clear edge · Buy ${sideLabel} · suggest $${sug}${ask ? ` @ ${ask}¢` : ""}`
+          : `Clear edge · Buy ${sideLabel}${ask ? ` @ ${ask}¢` : ""}`
     );
 
     const visible = pageOwnsAlerts();

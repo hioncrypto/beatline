@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.44";
+  const APP_VERSION = "10.45";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -4225,13 +4225,28 @@
     syncBuyDock();
   }
 
-  function closeDemoPosition() {
+  async function closeDemoPosition(opts = {}) {
+    const quiet = !!(opts && opts.quiet);
     const pos = demo.position;
-    if (!pos) return;
+    if (!pos) return { ok: false, error: "No open position" };
     const mark = markOpenPosition(pos);
     if (!mark || mark.bidCents == null || mark.proceeds == null) {
-      setStatus("warn", "No live bid to close against");
-      return;
+      if (!quiet) setStatus("warn", "No live bid to close against");
+      return { ok: false, error: "No live bid" };
+    }
+    const livePos = !!(pos.liveKalshi || (isLiveKalshi() && pos.entrySource === "kalshi"));
+    if (livePos && isLiveKalshi()) {
+      const sold = await placeLiveKalshiSell(
+        pos.side,
+        pos.contracts,
+        mark.bidCents,
+        pos.ticker
+      );
+      if (!sold || !sold.ok) {
+        const err = (sold && sold.error) || "Kalshi close failed";
+        if (!quiet) setStatus("warn", err);
+        return { ok: false, error: err };
+      }
     }
     const pl = mark.unrealized;
     const accounted = pos.accounted !== false && demo.on;
@@ -4250,7 +4265,9 @@
         ? `CLOSED ${sideLabel} @ ${mark.bidCents}¢ · ${formatPl(pl)} · bal ${money(
             demo.balance
           )}`
-        : `CLOSED ${sideLabel} @ ${mark.bidCents}¢ · ${formatPl(pl)} · paper`,
+        : livePos
+          ? `CLOSED ${sideLabel} @ ${mark.bidCents}¢ · ${formatPl(pl)} · Kalshi`
+          : `CLOSED ${sideLabel} @ ${mark.bidCents}¢ · ${formatPl(pl)} · paper`,
     };
     pushTradeHistory({
       id: `${Date.now()}-${pos.ticker || "x"}`,
@@ -4266,6 +4283,7 @@
       pl,
       won,
       accounted: !!accounted,
+      liveKalshi: !!livePos,
       followedSuggest:
         pos.followedSuggest == null ? null : !!pos.followedSuggest,
       suggestSide: pos.suggestSide || null,
@@ -4275,7 +4293,8 @@
     saveDemoState();
     renderDemoUi();
     renderStrategyReport();
-    setStatus(won ? "ok" : "warn", demo.lastResult.text);
+    if (!quiet) setStatus(won ? "ok" : "warn", demo.lastResult.text);
+    return { ok: true, pl, won };
   }
 
   function setDemoOn(on) {
@@ -4773,6 +4792,38 @@
       // keep last known balance
     }
     return kalshiLive.balance;
+  }
+
+  async function placeLiveKalshiSell(side, contracts, bidCents, ticker) {
+    if (!(contracts > 0)) {
+      return { ok: false, error: "Need contracts to sell" };
+    }
+    if (!(bidCents > 0)) {
+      return { ok: false, error: "Need a live bid to close" };
+    }
+    try {
+      const res = await fetch("/api/kalshi/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "sell",
+          ticker: ticker || lastTicker,
+          side,
+          contracts,
+          bid_cents: bidCents,
+        }),
+      });
+      const data = await res.json();
+      if (data && data.balance != null && Number.isFinite(Number(data.balance))) {
+        kalshiLive.balance = Number(data.balance);
+        renderKalshiLiveUi();
+      }
+      return data && typeof data === "object"
+        ? data
+        : { ok: false, error: "Bad sell response" };
+    } catch (err) {
+      return { ok: false, error: "Sell request failed" };
+    }
   }
 
   async function placeLiveKalshiBuy(side, sized) {
@@ -5610,6 +5661,7 @@
       pl,
       won,
       accounted: !!accounted,
+      liveKalshi: !!(pos.liveKalshi || pos.entrySource === "kalshi"),
       outcome,
       followedSuggest:
         pos.followedSuggest == null ? null : !!pos.followedSuggest,
@@ -7165,6 +7217,14 @@
 
   function renderAutoTradeUi() {
     if (el.autoTradeToggle) el.autoTradeToggle.checked = !!autoTradeOn;
+    if (el.autoFlipToggle) {
+      el.autoFlipToggle.checked = !!autoFlipOn;
+      el.autoFlipToggle.disabled = !autoTradeOn;
+    }
+    if (el.autoFlipRow) {
+      el.autoFlipRow.classList.toggle("is-disabled", !autoTradeOn);
+      el.autoFlipRow.hidden = false;
+    }
     paintLiveKalshiBadge();
     if (el.autoTradeHow) {
       el.autoTradeHow.hidden = !!(autoTradeOn && tradingArmed());
@@ -7206,6 +7266,15 @@
     } catch {
       // ignore
     }
+    if (!autoTradeOn) {
+      // Flip only makes sense under auto-trade.
+      autoFlipOn = false;
+      try {
+        localStorage.setItem(AUTO_FLIP_KEY, "0");
+      } catch {
+        // ignore
+      }
+    }
     renderAutoTradeUi();
     if (autoTradeOn && !tradingArmed()) {
       setStatus("warn", "Auto-trade on — turn on Demo or Live Kalshi buys");
@@ -7221,6 +7290,24 @@
     }
   }
 
+  function setAutoFlip(on) {
+    autoFlipOn = !!on && !!autoTradeOn;
+    try {
+      localStorage.setItem(AUTO_FLIP_KEY, autoFlipOn ? "1" : "0");
+    } catch {
+      // ignore
+    }
+    renderAutoTradeUi();
+    if (autoFlipOn) {
+      setStatus(
+        "ok",
+        "Auto-flip ON — will close and reverse when Best Side flips"
+      );
+    } else {
+      setStatus("ok", "Auto-flip off — opposite Best Side waits until you close");
+    }
+  }
+
   /**
    * Place one Best Side entry at suggested size when Auto-trade is armed.
    * Uses the same Green Spike clear-edge + ≤1% stake as Suggested buy.
@@ -7230,7 +7317,6 @@
     if (autoTradeBusy) return false;
     if (!best || !best.side) return false;
     if (!(suggestStake >= BUY_AMOUNT_MIN)) return false;
-    if (demo.position && demo.position.side !== best.side) return false;
     const ticker = lastTicker || lastFifteenTicker || "";
     if (!ticker) return false;
     const key = `${ticker}:${best.side}`;
@@ -7242,6 +7328,29 @@
     ) {
       lastAutoTradeKey = key;
       return false;
+    }
+    // Opposite open: only flip if Auto-flip is checked.
+    if (demo.position && demo.position.side !== best.side) {
+      if (!autoFlipOn) return false;
+      autoTradeBusy = true;
+      try {
+        if (el.autoTradeStatus) {
+          el.autoTradeStatus.textContent = "Auto-flip · closing opposite…";
+          el.autoTradeStatus.classList.add("is-live");
+        }
+        const closed = await closeDemoPosition({ quiet: true });
+        if (!closed || !closed.ok || demo.position) {
+          lastAutoTradeNote = (closed && closed.error) || "flip close failed";
+          renderAutoTradeUi();
+          setStatus("warn", `Auto-flip close failed · ${lastAutoTradeNote}`);
+          return false;
+        }
+        lastAutoTradeNote = `flipped off ${
+          best.side === "above" ? "Below" : "Above"
+        } · opening ${best.side === "above" ? "Above" : "Below"}`;
+      } finally {
+        autoTradeBusy = false;
+      }
     }
     const ask =
       best.side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
@@ -9773,6 +9882,17 @@
         setAutoTrade(!!el.autoTradeToggle.checked);
       });
     }
+    if (el.autoFlipToggle) {
+      el.autoFlipToggle.checked = !!autoFlipOn;
+      el.autoFlipToggle.addEventListener("change", () => {
+        if (!autoTradeOn) {
+          el.autoFlipToggle.checked = false;
+          setStatus("warn", "Turn on Auto-trade Best Side first");
+          return;
+        }
+        setAutoFlip(!!el.autoFlipToggle.checked);
+      });
+    }
     renderAutoTradeUi();
     if (el.kalshiConnect) {
       el.kalshiConnect.addEventListener("click", () => {
@@ -9878,7 +9998,7 @@
       el.demoLiveClose.addEventListener("click", () => closeDemoPosition());
     }
     if (el.openPlClose) {
-      el.openPlClose.addEventListener("click", () => closeDemoPosition());
+      el.openPlClose.addEventListener("click", () => { void closeDemoPosition(); });
     }
     if (el.openPlAdd) {
       el.openPlAdd.addEventListener("click", () => {

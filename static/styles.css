@@ -4481,3 +4481,24 @@ body.portrait-app #chart {
   background: rgba(240, 180, 41, 0.2);
   border: 1px solid rgba(240, 180, 41, 0.45);
 }
+
+.live-account-line {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  font-weight: 750;
+  letter-spacing: 0.01em;
+  color: #f0c14b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.live-account-line.is-up {
+  color: var(--up, #3dd68c);
+}
+.live-account-line.is-down {
+  color: var(--down, #ff6b6b);
+}
+.live-account-line[hidden] {
+  display: none !important;
+}

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.39";
+  const APP_VERSION = "10.40";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -276,6 +276,7 @@
     liveKalshiBadge: document.getElementById("live-kalshi-badge"),
     autoTradeBadge: document.getElementById("auto-trade-badge"),
     brandSub: document.getElementById("brand-sub"),
+    liveAccountLine: document.getElementById("live-account-line"),
     optionsBackdrop: document.getElementById("options-backdrop"),
     optionsSheet: document.getElementById("options-sheet"),
     optionsBody: document.getElementById("options-body"),
@@ -4301,6 +4302,55 @@
     paintLiveKalshiBadge();
   }
 
+
+  function paintLiveAccountLine() {
+    if (!el.liveAccountLine) return;
+    const connected = !!kalshiLive.connected;
+    const live = isLiveKalshi();
+    if (!connected) {
+      el.liveAccountLine.hidden = true;
+      el.liveAccountLine.textContent = "";
+      el.liveAccountLine.classList.remove("is-up", "is-down");
+      return;
+    }
+    const mark =
+      demo.position && (demo.position.liveKalshi || live)
+        ? markOpenPosition(demo.position)
+        : null;
+    const cash =
+      kalshiLive.balance != null && Number.isFinite(kalshiLive.balance)
+        ? Number(kalshiLive.balance)
+        : null;
+    const equity = live ? accountEquityNow(mark) : cash;
+    const openPl =
+      mark && mark.unrealized != null && Number.isFinite(mark.unrealized)
+        ? mark.unrealized
+        : null;
+
+    el.liveAccountLine.hidden = false;
+    el.liveAccountLine.classList.remove("is-up", "is-down");
+
+    if (!live) {
+      el.liveAccountLine.textContent =
+        cash != null
+          ? `Kalshi ${money(cash)} · turn Live buys ON to trade`
+          : "Kalshi connected · turn Live buys ON";
+      return;
+    }
+
+    if (equity != null && openPl != null && demo.position) {
+      el.liveAccountLine.textContent = `Acct ${money(equity)} · open ${formatPl(
+        openPl
+      )}`;
+      if (openPl > 0) el.liveAccountLine.classList.add("is-up");
+      if (openPl < 0) el.liveAccountLine.classList.add("is-down");
+    } else if (equity != null) {
+      el.liveAccountLine.textContent = `Acct ${money(equity)} · flat`;
+    } else {
+      el.liveAccountLine.textContent = "LIVE · balance loading…";
+    }
+  }
+
   function paintLiveKalshiBadge() {
     const live = isLiveKalshi();
     document.body.classList.toggle("is-live-kalshi", live);
@@ -4335,6 +4385,7 @@
         }
       }
     }
+    paintLiveAccountLine();
     paintAutoTradeBadge();
     if (el.brandSub) {
       const autoOn = !!autoTradeOn;

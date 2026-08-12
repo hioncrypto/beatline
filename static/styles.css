@@ -106,6 +106,61 @@ h1 {
   letter-spacing: -0.04em;
 }
 
+.brand-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.live-kalshi-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 7px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #1a1208;
+  background: linear-gradient(180deg, #f0c14b, #d4a017);
+  border: 1px solid rgba(255, 220, 120, 0.55);
+  box-shadow: 0 0 0 1px rgba(212, 160, 23, 0.25);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.live-kalshi-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #1a1208;
+  box-shadow: 0 0 0 2px rgba(26, 18, 8, 0.2);
+  animation: live-kalshi-pulse 1.6s ease-in-out infinite;
+}
+
+.live-kalshi-badge[hidden] {
+  display: none !important;
+}
+
+@keyframes live-kalshi-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+body.is-live-kalshi .mark {
+  background: linear-gradient(180deg, #f0c14b, #d4a017);
+  box-shadow: 0 0 0 1px rgba(240, 193, 75, 0.45);
+}
+
 .sub {
   margin: 2px 0 0;
   color: var(--muted);
@@ -114,6 +169,11 @@ h1 {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+
+.sub.is-live {
+  color: #f0c14b;
+  font-weight: 650;
 }
 
 .system-health {
@@ -281,6 +341,12 @@ h1 {
 .menu-btn.is-demo {
   border-color: rgba(26, 201, 107, 0.55);
   background: rgba(26, 201, 107, 0.12);
+}
+
+.menu-btn.is-live {
+  border-color: rgba(240, 193, 75, 0.7);
+  background: rgba(240, 193, 75, 0.14);
+  color: #f0c14b;
 }
 
 .menu-dots {

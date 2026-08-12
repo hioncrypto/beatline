@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.31";
+  const APP_VERSION = "10.32";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -273,6 +273,8 @@
     settleAvg: document.getElementById("settle-avg"),
     settleMeta: document.getElementById("settle-meta"),
     menuBtn: document.getElementById("menu-btn"),
+    liveKalshiBadge: document.getElementById("live-kalshi-badge"),
+    brandSub: document.getElementById("brand-sub"),
     optionsBackdrop: document.getElementById("options-backdrop"),
     optionsSheet: document.getElementById("options-sheet"),
     optionsBody: document.getElementById("options-body"),
@@ -4212,6 +4214,35 @@
     }
     if (el.kalshiApiKeyId && kalshiLive.fromEnv && !el.kalshiApiKeyId.value) {
       el.kalshiApiKeyId.placeholder = "Set via server env KALSHI_API_KEY_ID";
+    }
+    paintLiveKalshiBadge();
+  }
+
+  function paintLiveKalshiBadge() {
+    const live = isLiveKalshi();
+    document.body.classList.toggle("is-live-kalshi", live);
+    if (el.menuBtn) {
+      el.menuBtn.classList.toggle("is-live", live);
+      if (live) el.menuBtn.classList.remove("is-demo");
+    }
+    if (el.liveKalshiBadge) {
+      el.liveKalshiBadge.hidden = !live;
+      if (live) {
+        const bal =
+          kalshiLive.balance != null && Number.isFinite(kalshiLive.balance)
+            ? money(kalshiLive.balance)
+            : null;
+        el.liveKalshiBadge.textContent = bal ? `LIVE KALSHI · ${bal}` : "LIVE KALSHI";
+        el.liveKalshiBadge.title = bal
+          ? `Real Kalshi account · balance ${bal}`
+          : "Real Kalshi account — buys use your Kalshi balance";
+      }
+    }
+    if (el.brandSub) {
+      el.brandSub.classList.toggle("is-live", live);
+      el.brandSub.textContent = live
+        ? "LIVE Kalshi · real money buys"
+        : "15-minute BTC · Price to beat";
     }
   }
 

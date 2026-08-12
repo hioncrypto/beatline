@@ -33,6 +33,7 @@ PUSH_SUBS_FILE = DATA_DIR / "push_subscriptions.json"
 DEMO_ACCOUNT_FILE = DATA_DIR / "demo_account.json"
 ACCOUNTS_DIR = DATA_DIR / "accounts"
 KALSHI_CREDS_FILE = DATA_DIR / "kalshi_credentials.json"
+AUTO_TRADE_LOG_FILE = DATA_DIR / "auto_trade_log.json"
 SEED_TRADE_HISTORY_FILE = STATIC_DIR / "seed-trade-history.json"
 VAPID_PRIVATE = DATA_DIR / "vapid_private.pem"
 VAPID_PUBLIC_RAW = DATA_DIR / "vapid_public_raw.txt"
@@ -151,6 +152,95 @@ _last_auto_trade_attempt_at: float = 0.0
 _last_auto_position: dict | None = None
 AUTO_FILL_SLIP_CENTS = 3
 AUTO_TRADE_RETRY_SEC = 4.0
+AUTO_TRADE_LOG_LIMIT = 40
+
+
+def _load_auto_trade_log() -> list:
+    if not AUTO_TRADE_LOG_FILE.exists():
+        return []
+    try:
+        raw = json.loads(AUTO_TRADE_LOG_FILE.read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and isinstance(raw.get("attempts"), list):
+            return raw["attempts"]
+        if isinstance(raw, list):
+            return raw
+    except Exception:
+        pass
+    return []
+
+
+def _save_auto_trade_log(attempts: list) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = AUTO_TRADE_LOG_FILE.with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps({"attempts": attempts[-AUTO_TRADE_LOG_LIMIT:]}, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(tmp, AUTO_TRADE_LOG_FILE)
+
+
+def log_auto_trade_attempt(entry: dict) -> dict:
+    """Append one auto-trade attempt so we can prove whether the bot fired."""
+    global _last_auto_trade_note
+    row = {
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "ts": time.time(),
+        **(entry or {}),
+    }
+    with _auto_trade_lock:
+        attempts = _load_auto_trade_log()
+        # Dedupe repeated skip noise (auto_off / live_off) within 90s.
+        if row.get("skipped") or row.get("kind") in (
+            "auto_off",
+            "live_off",
+            "not_connected",
+            "need_flip",
+        ):
+            for prev in reversed(attempts[-8:]):
+                if not isinstance(prev, dict):
+                    continue
+                if (
+                    prev.get("kind") == row.get("kind")
+                    and prev.get("ticker") == row.get("ticker")
+                    and prev.get("side") == row.get("side")
+                    and row["ts"] - float(prev.get("ts") or 0) < 90
+                ):
+                    prev["at"] = row["at"]
+                    prev["ts"] = row["ts"]
+                    prev["note"] = row.get("note") or prev.get("note")
+                    _save_auto_trade_log(attempts)
+                    if row.get("note"):
+                        _last_auto_trade_note = str(row["note"])
+                    return prev
+        attempts.append(row)
+        _save_auto_trade_log(attempts)
+        note = row.get("note") or row.get("error") or row.get("result")
+        if note:
+            _last_auto_trade_note = str(note)
+    return row
+
+
+def auto_trade_status() -> dict:
+    """Armed flags + recent attempts — used to verify the auto trader."""
+    creds = get_kalshi_credentials()
+    attempts = _load_auto_trade_log()
+    live_on = bool(creds and creds.get("live_enabled"))
+    auto_on = bool(creds and creds.get("auto_trade"))
+    connected = bool(creds)
+    return {
+        "ok": True,
+        "connected": connected,
+        "live_enabled": live_on,
+        "auto_trade": auto_on,
+        "auto_flip": bool(creds and creds.get("auto_flip")),
+        "server_armed": bool(connected and live_on and auto_on),
+        "last_auto_trade_key": _last_auto_trade_key,
+        "last_auto_trade_at": _last_auto_trade_at or None,
+        "last_auto_trade_note": _last_auto_trade_note or None,
+        "last_auto_position": _last_auto_position,
+        "attempts": attempts[-12:],
+        "attempt_count": len(attempts),
+    }
 
 
 def _parse_dollars(value) -> float | None:
@@ -2078,12 +2168,14 @@ def kalshi_account_status(fetch_balance: bool = True) -> dict:
             "live_enabled": False,
             "auto_trade": False,
             "auto_flip": False,
+            "server_armed": False,
             "from_env": False,
             "balance": None,
             "key_hint": None,
             "error": None,
             "last_auto_trade_key": _last_auto_trade_key,
             "last_auto_trade_note": _last_auto_trade_note or None,
+            "auto_attempt_count": len(_load_auto_trade_log()),
         }
     out = {
         "ok": True,
@@ -2091,6 +2183,9 @@ def kalshi_account_status(fetch_balance: bool = True) -> dict:
         "live_enabled": bool(creds.get("live_enabled")),
         "auto_trade": bool(creds.get("auto_trade")),
         "auto_flip": bool(creds.get("auto_flip")),
+        "server_armed": bool(
+            creds.get("live_enabled") and creds.get("auto_trade")
+        ),
         "from_env": bool(creds.get("from_env")),
         "key_hint": creds.get("key_hint"),
         "balance": None,
@@ -2100,6 +2195,7 @@ def kalshi_account_status(fetch_balance: bool = True) -> dict:
         "auth_failed": False,
         "last_auto_trade_key": _last_auto_trade_key,
         "last_auto_trade_note": _last_auto_trade_note or None,
+        "auto_attempt_count": len(_load_auto_trade_log()),
     }
     if fetch_balance:
         bal = kalshi_fetch_balance(creds)
@@ -2215,9 +2311,38 @@ def try_server_auto_trade(
     Uses IOC with a small ask bump so fills land quickly as the book moves.
     If Auto-flip is on and the opposite side is open, sell that first then buy.
     Dedupes per ticker:side; retries failed IOCs after AUTO_TRADE_RETRY_SEC.
+    Every outcome is logged so we can verify the bot actually tried.
     """
     global _last_auto_trade_key, _last_auto_trade_at, _last_auto_trade_note
     global _last_auto_trade_attempt_at, _last_auto_position
+
+    def finish(result: dict, *, kind: str) -> dict:
+        out = dict(result or {})
+        out.setdefault("auto", True)
+        note = out.get("note") or out.get("error") or kind
+        # Skip noisy poll spam — still keep real tries / blocks / fills.
+        if kind not in ("cooldown", "already", "already_long"):
+            log_auto_trade_attempt(
+                {
+                    "kind": kind,
+                    "ticker": ticker,
+                    "side": side,
+                    "ok": bool(out.get("ok")),
+                    "skipped": bool(out.get("skipped")),
+                    "already": bool(out.get("already")),
+                    "flipped": bool(out.get("flipped")),
+                    "note": note,
+                    "error": out.get("error"),
+                    "key": out.get("key"),
+                    "limit_ask_cents": out.get("limit_ask_cents"),
+                    "fill_count": out.get("fill_count"),
+                    "suggest_stake": out.get("suggest_stake"),
+                }
+            )
+        elif note and kind in ("already", "already_long"):
+            global _last_auto_trade_note
+            _last_auto_trade_note = str(note)
+        return out
 
     ticker = (ticker or "").strip()
     side = (side or "").strip().lower()
@@ -2226,37 +2351,55 @@ def try_server_auto_trade(
     elif side in ("no", "n"):
         side = "below"
     if not ticker or side not in ("above", "below"):
-        return {"ok": False, "skipped": True, "error": "Need ticker and side"}
+        return finish(
+            {"ok": False, "skipped": True, "error": "Need ticker and side"},
+            kind="bad_args",
+        )
 
     creds = get_kalshi_credentials()
     if not creds:
-        return {"ok": False, "skipped": True, "error": "Kalshi not connected"}
+        return finish(
+            {"ok": False, "skipped": True, "error": "Kalshi not connected"},
+            kind="not_connected",
+        )
     if not creds.get("live_enabled") and not os.environ.get("KALSHI_LIVE_FORCE"):
-        return {"ok": False, "skipped": True, "error": "Live Kalshi buys off"}
+        return finish(
+            {"ok": False, "skipped": True, "error": "Live Kalshi buys off"},
+            kind="live_off",
+        )
     if not creds.get("auto_trade") and not force:
-        return {"ok": False, "skipped": True, "error": "Auto-trade off"}
+        return finish(
+            {"ok": False, "skipped": True, "error": "Auto-trade off"},
+            kind="auto_off",
+        )
 
     key = f"{ticker}:{side}"
     now = time.time()
     with _auto_trade_lock:
         if _last_auto_trade_key == key:
-            return {
-                "ok": True,
-                "skipped": True,
-                "already": True,
-                "key": key,
-                "note": _last_auto_trade_note or "already auto-bought",
-            }
+            return finish(
+                {
+                    "ok": True,
+                    "skipped": True,
+                    "already": True,
+                    "key": key,
+                    "note": _last_auto_trade_note or "already auto-bought",
+                },
+                kind="already",
+            )
         if (
             _last_auto_trade_attempt_at
             and now - _last_auto_trade_attempt_at < AUTO_TRADE_RETRY_SEC
         ):
-            return {
-                "ok": False,
-                "skipped": True,
-                "error": "auto-trade retry cooldown",
-                "key": key,
-            }
+            return finish(
+                {
+                    "ok": False,
+                    "skipped": True,
+                    "error": "auto-trade retry cooldown",
+                    "key": key,
+                },
+                kind="cooldown",
+            )
         _last_auto_trade_attempt_at = now
 
     # Resolve any open position on this ticker (Kalshi truth, then local memory).
@@ -2282,13 +2425,16 @@ def try_server_auto_trade(
                 f"already long {'Above' if side == 'above' else 'Below'} "
                 f"({held_contracts} cts)"
             )
-        return {
-            "ok": True,
-            "skipped": True,
-            "already": True,
-            "key": key,
-            "note": _last_auto_trade_note,
-        }
+        return finish(
+            {
+                "ok": True,
+                "skipped": True,
+                "already": True,
+                "key": key,
+                "note": _last_auto_trade_note,
+            },
+            kind="already_long",
+        )
 
     flipped = False
     if held_side and held_side != side and held_contracts > 0:
@@ -2298,14 +2444,16 @@ def try_server_auto_trade(
                 f"holding {'Above' if held_side == 'above' else 'Below'}"
             )
             _last_auto_trade_note = note
-            return {"ok": False, "skipped": True, "error": note, "key": key}
+            return finish(
+                {"ok": False, "skipped": True, "error": note, "key": key},
+                kind="need_flip",
+            )
 
         # Close opposite at bid − slip so IOC sells fill.
         opp_bid = _usable_bid_cents(opposite_bid_cents)
         if opp_bid is None:
             opp_bid = _usable_bid_cents(bid_cents)
         if opp_bid is None:
-            # Infer from complementary ask when book only gives one side.
             try:
                 ask_i = int(ask_cents)
                 opp_bid = max(1, min(99, 100 - ask_i))
@@ -2314,7 +2462,7 @@ def try_server_auto_trade(
         if opp_bid is None:
             note = "auto-flip blocked · no live bid to close opposite"
             _last_auto_trade_note = note
-            return {"ok": False, "error": note, "key": key}
+            return finish({"ok": False, "error": note, "key": key}, kind="flip_no_bid")
 
         limit_bid = max(1, opp_bid - AUTO_FILL_SLIP_CENTS)
         print(
@@ -2332,11 +2480,13 @@ def try_server_auto_trade(
             note = f"auto-flip close failed · {err}"
             _last_auto_trade_note = note
             print(f"[kalshi-btc-target] auto-flip CLOSE MISS {ticker}:{held_side} {err}")
-            return {"ok": False, "error": note, "key": key, "sell": sold}
+            return finish(
+                {"ok": False, "error": note, "key": key, "sell": sold},
+                kind="flip_close_fail",
+            )
 
         with _auto_trade_lock:
             _last_auto_position = None
-            # Allow buying the new side even if we had marked the old key.
             if _last_auto_trade_key and _last_auto_trade_key.startswith(f"{ticker}:"):
                 _last_auto_trade_key = None
         flipped = True
@@ -2348,11 +2498,10 @@ def try_server_auto_trade(
     try:
         ask = int(ask_cents)
     except (TypeError, ValueError):
-        return {"ok": False, "error": "Invalid ask"}
+        return finish({"ok": False, "error": "Invalid ask"}, kind="bad_ask")
     if ask < 1 or ask > 99:
-        return {"ok": False, "error": "Ask must be 1–99¢"}
+        return finish({"ok": False, "error": "Ask must be 1–99¢"}, kind="bad_ask")
 
-    # Pay a few cents through the ask so IOC fills instead of canceling.
     limit_ask = min(99, ask + AUTO_FILL_SLIP_CENTS)
     stake = suggest_stake
     try:
@@ -2366,11 +2515,29 @@ def try_server_auto_trade(
     if stake < 1:
         note = "auto-trade size $0 (1% bal too small)"
         _last_auto_trade_note = note
-        return {"ok": False, "error": note, "key": key}
+        return finish({"ok": False, "error": note, "key": key}, kind="size_zero")
 
     contracts = _auto_contracts_for_stake(limit_ask, stake)
     if contracts < 1:
-        return {"ok": False, "error": "Need at least 1 contract", "key": key}
+        return finish(
+            {"ok": False, "error": "Need at least 1 contract", "key": key},
+            kind="no_contracts",
+        )
+
+    # Prove we are about to hit Kalshi (not just alerting).
+    log_auto_trade_attempt(
+        {
+            "kind": "sending_buy",
+            "ticker": ticker,
+            "side": side,
+            "ok": None,
+            "note": f"sending IOC buy {side} {contracts} cts @≤{limit_ask}¢",
+            "key": key,
+            "limit_ask_cents": limit_ask,
+            "suggest_stake": int(round(stake)),
+            "flipped": flipped,
+        }
+    )
 
     result = place_kalshi_buy(
         ticker=ticker,
@@ -2402,7 +2569,7 @@ def try_server_auto_trade(
         result["suggest_stake"] = int(round(stake))
         result["note"] = _last_auto_trade_note
         print(f"[kalshi-btc-target] auto-trade FILL {key} {_last_auto_trade_note}")
-        return result
+        return finish(result, kind="fill")
 
     err = result.get("error") or "order failed"
     _last_auto_trade_note = (
@@ -2415,7 +2582,7 @@ def try_server_auto_trade(
     out["key"] = key
     out["limit_ask_cents"] = limit_ask
     out["note"] = _last_auto_trade_note
-    return out
+    return finish(out, kind="miss")
 
 
 def place_kalshi_buy(
@@ -2900,6 +3067,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, kalshi_account_status(fetch_balance=True))
             return
 
+        if path in ("/api/kalshi/auto-status", "/api/kalshi/auto"):
+            self._send_json(200, auto_trade_status())
+            return
+
         if path in ("/api/demo-account", "/api/account"):
             user_id = _normalize_user_id(
                 (qs.get("userId") or qs.get("user_id") or [None])[0]
@@ -2935,13 +3106,14 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.3.3",
+                    "version": "2.3.4",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
                     "demo_account": DEMO_ACCOUNT_FILE.is_file() or len(accounts) > 0,
                     "accounts": len(accounts),
                     "multi_user": True,
+                    "auto_trade": auto_trade_status(),
                     "edge_watcher": {
                         "last_key": _last_edge_key,
                         "last_ask": _last_edge_ask,

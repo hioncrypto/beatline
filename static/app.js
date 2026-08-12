@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.47";
+  const APP_VERSION = "10.48";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -418,6 +418,7 @@
     kalshiConnectConfirm: document.getElementById("kalshi-connect-confirm"),
     autoTradeToggle: document.getElementById("auto-trade-toggle"),
     autoTradeStatus: document.getElementById("auto-trade-status"),
+    autoTradeVerify: document.getElementById("auto-trade-verify"),
     autoFlipToggle: document.getElementById("auto-flip-toggle"),
     autoFlipRow: document.getElementById("auto-flip-row"),
     analyticsScopeLive: document.getElementById("analytics-scope-live"),
@@ -460,6 +461,11 @@
     keyHint: null,
     error: null,
     authFailed: false,
+    /** Server persisted Auto-trade flag (needed for background fills). */
+    autoTrade: false,
+    autoFlip: false,
+    serverArmed: false,
+    autoAttemptCount: 0,
   };
   const AUTO_TRADE_KEY = "beatlineAutoTrade";
   const AUTO_FLIP_KEY = "beatlineAutoFlip";
@@ -2843,13 +2849,19 @@
         t.pl == null ? "" : t.won || t.pl >= 0 ? "is-win" : "is-loss";
       const fills = t.fills > 1 ? ` · ${t.fills} fills` : "";
       const exit = t.exitCents != null ? ` @ ${t.exitCents}¢` : "";
-      const mode = t.accounted ? "" : " · paper";
       const tag =
-        t.followedSuggest === true
-          ? " · Best Side"
-          : t.followedSuggest === false
-            ? " · Own call"
-            : "";
+        t.entrySource === "auto" || t.autoTrade
+          ? " · AUTO"
+          : t.followedSuggest === true
+            ? " · Best Side"
+            : t.followedSuggest === false
+              ? " · Own call"
+              : "";
+      const mode = t.liveKalshi
+        ? " · live"
+        : t.accounted
+          ? ""
+          : " · paper";
       const plTxt =
         t.pl == null || !Number.isFinite(Number(t.pl))
           ? t.text || "—"
@@ -4339,9 +4351,21 @@
     kalshiLive.keyHint = status.key_hint || null;
     kalshiLive.error = errText || null;
     kalshiLive.authFailed = authFailed;
-    // Server mirrors Auto-trade so background clear-edge can fill without the app.
     if (typeof status.auto_trade === "boolean") {
-      // Keep local preference authoritative while toggling; only adopt when unset mismatch from another device is rare — sync on load via syncAutoTradeToServer.
+      kalshiLive.autoTrade = !!status.auto_trade;
+    }
+    if (typeof status.auto_flip === "boolean") {
+      kalshiLive.autoFlip = !!status.auto_flip;
+    }
+    kalshiLive.serverArmed = !!(
+      status.server_armed ||
+      (kalshiLive.connected &&
+        kalshiLive.liveEnabled &&
+        kalshiLive.autoTrade &&
+        !authFailed)
+    );
+    if (status.auto_attempt_count != null) {
+      kalshiLive.autoAttemptCount = Number(status.auto_attempt_count) || 0;
     }
     if (status.last_auto_trade_key && !lastAutoTradeKey) {
       lastAutoTradeKey = status.last_auto_trade_key;
@@ -4351,6 +4375,7 @@
     }
     renderKalshiLiveUi();
     renderDemoUi();
+    renderAutoTradeVerify();
     if (authFailed) {
       setKalshiConnectConfirm(
         "warn",
@@ -4543,19 +4568,60 @@
     if (!on) return;
     const armed = tradingArmed();
     const live = isLiveKalshi();
-    el.autoTradeBadge.classList.toggle("is-armed", armed);
-    el.autoTradeBadge.classList.toggle("is-waiting", on && !armed);
-    el.autoTradeBadge.textContent = "AUTO TRADER";
-    if (live && armed) {
+    const serverArmed = !!kalshiLive.serverArmed;
+    el.autoTradeBadge.classList.toggle("is-armed", armed && (!live || serverArmed));
+    el.autoTradeBadge.classList.toggle("is-waiting", on && (!armed || (live && !serverArmed)));
+    if (live && serverArmed) {
+      el.autoTradeBadge.textContent = "AUTO ARMED";
       el.autoTradeBadge.title =
-        "Auto trader ON · live Kalshi · ≤1% per clear Best Side";
+        "Server auto-trader ARMED — will buy clear Best Side on Kalshi (≤1%)";
+    } else if (live && on && !serverArmed) {
+      el.autoTradeBadge.textContent = "AUTO NOT ARMED";
+      el.autoTradeBadge.title =
+        "Phone Auto-trade is on, but the server is not armed — re-toggle Auto-trade after Save & connect + Live buys";
     } else if (armed) {
+      el.autoTradeBadge.textContent = "AUTO TRADER";
       el.autoTradeBadge.title =
         "Auto trader ON · demo · ≤1% per clear Best Side";
     } else {
+      el.autoTradeBadge.textContent = "AUTO TRADER";
       el.autoTradeBadge.title =
         "Auto trader ON — turn on Demo or Live Kalshi buys to arm";
     }
+  }
+
+  function renderAutoTradeVerify() {
+    if (!el.autoTradeVerify) return;
+    el.autoTradeVerify.classList.remove("is-armed", "is-warn");
+    if (!autoTradeOn) {
+      el.autoTradeVerify.textContent =
+        "Server auto: off — turn on Auto-trade to let the bot buy";
+      return;
+    }
+    if (!kalshiLive.connected) {
+      el.autoTradeVerify.textContent =
+        "Server auto: NOT ARMED · Kalshi not connected (Save & connect first)";
+      el.autoTradeVerify.classList.add("is-warn");
+      return;
+    }
+    if (!kalshiLive.liveEnabled) {
+      el.autoTradeVerify.textContent =
+        "Server auto: NOT ARMED · turn on Live Kalshi buys, then re-toggle Auto-trade";
+      el.autoTradeVerify.classList.add("is-warn");
+      return;
+    }
+    if (!kalshiLive.autoTrade) {
+      el.autoTradeVerify.textContent =
+        "Server auto: NOT ARMED · phone is on but server flag is off — toggle Auto-trade off/on once";
+      el.autoTradeVerify.classList.add("is-warn");
+      return;
+    }
+    const note = lastAutoTradeNote || "waiting for next clear Best Side";
+    const n = kalshiLive.autoAttemptCount || 0;
+    el.autoTradeVerify.textContent = `Server auto: ARMED · ${note}${
+      n ? ` · ${n} attempt${n === 1 ? "" : "s"} logged` : " · no attempts yet"
+    }`;
+    el.autoTradeVerify.classList.add("is-armed");
   }
 
   async function refreshKalshiAccountStatus() {
@@ -4697,6 +4763,8 @@
         setKalshiConnectConfirm("ok", confirmMsg);
         setStatus("ok", confirmMsg);
         if (el.kalshiConnect) el.kalshiConnect.textContent = "Saved ✓";
+        // Re-arm server Auto-trade after connect (deploys wipe the flag).
+        void syncAutoTradeToServer();
         setTimeout(() => {
           if (el.kalshiConnect) el.kalshiConnect.textContent = "Save & connect";
         }, 2500);
@@ -4770,6 +4838,8 @@
             renderDemoUi();
           }
           if (!quiet) setStatus("ok", "Live Kalshi buys ON — real money");
+          // Live buys just unlocked — push Auto-trade preference to server.
+          void syncAutoTradeToServer();
         } else if (!quiet) {
           setStatus(
             data && data.error ? "warn" : "ok",
@@ -4885,9 +4955,6 @@
   }
 
   async function syncAutoTradeToServer() {
-    if (!kalshiLive.connected && !isLiveKalshi()) {
-      // Still try — server may have keys even if UI hasn't refreshed.
-    }
     try {
       const res = await fetch("/api/kalshi/auto-trade", {
         method: "POST",
@@ -4899,10 +4966,49 @@
       });
       const data = await res.json();
       if (data && typeof data === "object") {
+        if (data.error && !data.connected) {
+          kalshiLive.autoTrade = false;
+          kalshiLive.serverArmed = false;
+          renderAutoTradeVerify();
+          return data;
+        }
+        applyKalshiAccountStatus(data);
         if (data.last_auto_trade_key) lastAutoTradeKey = data.last_auto_trade_key;
         if (data.last_auto_trade_note) {
           lastAutoTradeNote = String(data.last_auto_trade_note);
         }
+        renderAutoTradeUi();
+      }
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  async function refreshAutoTradeStatus() {
+    try {
+      const res = await fetch("/api/kalshi/auto-status", { cache: "no-store" });
+      const data = await res.json();
+      if (!data || typeof data !== "object") return null;
+      kalshiLive.autoTrade = !!data.auto_trade;
+      kalshiLive.autoFlip = !!data.auto_flip;
+      kalshiLive.serverArmed = !!data.server_armed;
+      kalshiLive.autoAttemptCount = Number(data.attempt_count) || 0;
+      if (data.last_auto_trade_note) {
+        lastAutoTradeNote = String(data.last_auto_trade_note);
+      }
+      if (data.last_auto_trade_key && !lastAutoTradeKey) {
+        lastAutoTradeKey = data.last_auto_trade_key;
+      }
+      // If server filled while we were away, show it.
+      if (
+        data.last_auto_trade_note &&
+        /bought|flipped|FILL|fill/i.test(String(data.last_auto_trade_note))
+      ) {
+        renderAutoTradeUi();
+      } else {
+        renderAutoTradeVerify();
+        paintAutoTradeBadge();
       }
       return data;
     } catch {
@@ -5009,6 +5115,7 @@
 
   function demoBuy(side, amountUsd, opts = {}) {
     const liveKalshi = !!(opts && opts.liveKalshi);
+    const autoTradeFill = !!(opts && (opts.autoTrade || opts.entrySource === "auto"));
     const existing = demo.position;
     if (existing && existing.side !== side) {
       setStatus(
@@ -5050,6 +5157,11 @@
       spotN != null && Number.isFinite(spotN) ? spotN : null;
     const follow = followMetaForSide(side);
     const liveOrder = (opts && opts.order) || null;
+    const entrySource = autoTradeFill
+      ? "auto"
+      : liveKalshi
+        ? "kalshi"
+        : follow.entrySource || "own";
 
     if (existing) {
       const nextContracts = existing.contracts + sized.contracts;
@@ -5097,11 +5209,16 @@
           existing.kalshiOrderId ||
           null,
         followedSuggest:
-          !!existing.followedSuggest || !!follow.followedSuggest,
+          !!existing.followedSuggest ||
+          !!follow.followedSuggest ||
+          autoTradeFill,
         suggestSide: follow.suggestSide || existing.suggestSide || null,
-        entrySource: liveKalshi
-          ? "kalshi"
-          : follow.entrySource || existing.entrySource || "own",
+        entrySource: autoTradeFill
+          ? "auto"
+          : existing.entrySource === "auto"
+            ? "auto"
+            : entrySource,
+        autoTrade: !!(existing.autoTrade || autoTradeFill),
       };
     } else {
       demo.position = {
@@ -5120,13 +5237,14 @@
         liveKalshi: !!liveKalshi,
         kalshiOrderId:
           (liveOrder && (liveOrder.order_id || liveOrder.orderId)) || null,
-        followedSuggest: !!follow.followedSuggest,
+        followedSuggest: !!(follow.followedSuggest || autoTradeFill),
         suggestSide: follow.suggestSide,
-        entrySource: liveKalshi ? "kalshi" : follow.entrySource,
+        entrySource,
+        autoTrade: !!autoTradeFill,
         profitChimed: false,
       };
     }
-    if (follow.followedSuggest) markSuggestTaken(lastTicker, side);
+    if (follow.followedSuggest || autoTradeFill) markSuggestTaken(lastTicker, side);
     // Keep main trade-size slider in sync for Best Side sizing ($1–$250).
     if (stake >= BUY_AMOUNT_MIN && stake <= BUY_AMOUNT_MAX) {
       setTradeStake(Math.round(stake));
@@ -5149,9 +5267,10 @@
       liveKalshi: !!liveKalshi,
       kalshiOrderId:
         (liveOrder && (liveOrder.order_id || liveOrder.orderId)) || null,
-      followedSuggest: !!follow.followedSuggest,
+      followedSuggest: !!(follow.followedSuggest || autoTradeFill),
       suggestSide: follow.suggestSide,
-      entrySource: liveKalshi ? "kalshi" : follow.entrySource,
+      entrySource,
+      autoTrade: !!autoTradeFill,
     });
     saveDemoState();
     refreshBestSide();
@@ -7324,6 +7443,7 @@
       el.autoFlipRow.hidden = false;
     }
     paintLiveKalshiBadge();
+    renderAutoTradeVerify();
     if (el.autoTradeHow) {
       el.autoTradeHow.hidden = !!(autoTradeOn && tradingArmed());
     }
@@ -7545,6 +7665,8 @@
         }
         const ok = demoBuy(best.side, suggestStake, {
           liveKalshi: true,
+          autoTrade: true,
+          entrySource: "auto",
           order: live,
         });
         if (!ok) {
@@ -7577,7 +7699,10 @@
           renderAutoTradeUi();
           return false;
         }
-        const ok = demoBuy(best.side, suggestStake);
+        const ok = demoBuy(best.side, suggestStake, {
+          autoTrade: true,
+          entrySource: "auto",
+        });
         if (!ok) {
           lastAutoTradeNote = "demo buy blocked";
           renderAutoTradeUi();
@@ -10568,7 +10693,7 @@
       ensureServiceWorker(),
       refreshKalshiAccountStatus(),
     ]).finally(() => {
-      void syncAutoTradeToServer();
+      void syncAutoTradeToServer().then(() => refreshAutoTradeStatus());
       renderAutoTradeUi();
       refreshTarget()
         .then(() => refreshCandles())
@@ -10577,6 +10702,9 @@
     setInterval(refreshTarget, TARGET_POLL_MS);
     setInterval(refreshCandles, CANDLE_POLL_MS);
     setInterval(refreshSpot, SPOT_POLL_MS);
+    setInterval(() => {
+      if (autoTradeOn) void refreshAutoTradeStatus();
+    }, 15_000);
     setInterval(tickClock, 250);
     // Keep fighting landscape — Android can ignore a single lock call.
     setInterval(() => {

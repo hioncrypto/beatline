@@ -4459,6 +4459,26 @@ body.portrait-app #chart {
   color: var(--fg);
   font-weight: 700;
 }
+.auto-trade-verify {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.auto-trade-verify.is-armed {
+  color: #d4f5c8;
+  border-color: rgba(120, 200, 90, 0.35);
+  background: rgba(80, 160, 60, 0.12);
+}
+.auto-trade-verify.is-warn {
+  color: #ffe6b8;
+  border-color: rgba(220, 160, 60, 0.4);
+  background: rgba(180, 110, 30, 0.14);
+}
 .toggle-row input[type="checkbox"]:disabled {
   opacity: 0.45;
 }

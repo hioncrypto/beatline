@@ -532,6 +532,13 @@ body.is-live-kalshi .mark {
   color: #f0b429;
 }
 
+#auto-trade-status.is-live {
+  color: #1a7f37;
+}
+#auto-trade-status.is-warn {
+  color: #a15c00;
+}
+
 .demo-account {
   margin-top: 4px;
   padding-top: 4px;

@@ -9992,10 +9992,10 @@
       el.dockBuyBest.addEventListener("click", () => demoBuyBest());
     }
     if (el.demoClose) {
-      el.demoClose.addEventListener("click", () => closeDemoPosition());
+      el.demoClose.addEventListener("click", () => { void closeDemoPosition(); });
     }
     if (el.demoLiveClose) {
-      el.demoLiveClose.addEventListener("click", () => closeDemoPosition());
+      el.demoLiveClose.addEventListener("click", () => { void closeDemoPosition(); });
     }
     if (el.openPlClose) {
       el.openPlClose.addEventListener("click", () => { void closeDemoPosition(); });

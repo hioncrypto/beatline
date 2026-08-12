@@ -1193,7 +1193,7 @@ h1 {
   border: 1px solid var(--border);
   background: rgba(8, 14, 11, 0.55);
   overflow: hidden;
-  /* Entire surface is a one-finger pan / hard-press inspect target. */
+  /* Entire surface is one-finger pan / light-press inspect. */
   touch-action: none;
   -webkit-user-select: none;
   user-select: none;

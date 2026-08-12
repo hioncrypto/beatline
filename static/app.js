@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.28";
+  const APP_VERSION = "10.29";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -1809,9 +1809,11 @@
 
   /**
    * Simple P/L chart gestures (chart box size stays fixed):
-   * - one finger drag = pan left/right
+   * - one finger drag = pan left/right (when crosshair is off)
+   * - light short press (~70ms) = show inspect crosshair
+   * - with crosshair on, one finger drag = scrub across candles
+   * - quick tap = dismiss open crosshair
    * - pinch = gentle time zoom
-   * - tap = toggle inspect crosshair
    * - drag on right price numbers = zoom candles vertically (Y scale only)
    */
   function wirePlChartTouchGuards() {
@@ -1820,7 +1822,8 @@
     const PRICE_AXIS_PX = 58;
     const MOVE_PX = 8;
     const TAP_MS = 320;
-    const INSPECT_HOLD_MS = 420;
+    // Light short press — was 420ms and felt like a hard long-press.
+    const INSPECT_HOLD_MS = 70;
 
     let pinchStartDist = null;
     let pinchStartRange = null;
@@ -1839,6 +1842,7 @@
     let inspectMode = false;
     let inspectAlreadyOn = false;
     let activatedInspect = false;
+    let inspectScrubbed = false;
 
     const crosshairVisible = () =>
       !!(el.plCrosshair && !el.plCrosshair.hidden);
@@ -1897,17 +1901,19 @@
       }
     };
 
-    const beginInspectAt = (x, y) => {
+    const beginInspectAt = (x, y, { buzz } = {}) => {
       activatedInspect = true;
       inspectMode = true;
       plInspecting = true;
       panStartX = null;
       panStartRange = null;
       panMoved = false;
-      try {
-        if (navigator.vibrate) navigator.vibrate(8);
-      } catch {
-        // ignore
+      if (buzz) {
+        try {
+          if (navigator.vibrate) navigator.vibrate(6);
+        } catch {
+          // ignore
+        }
       }
       updatePlInspectAtClient(x, y);
     };
@@ -1951,6 +1957,7 @@
         inspectAlreadyOn = crosshairVisible() || plInspecting;
         activatedInspect = false;
         inspectMode = false;
+        inspectScrubbed = false;
         panMoved = false;
         axisMoved = false;
         clearInspectHold();
@@ -1969,10 +1976,17 @@
         axisStartMargin = null;
         panStartX = t.clientX;
         panStartRange = readRange();
+
+        // Crosshair already open: grab it immediately so a light slide scrubs.
+        if (inspectAlreadyOn) {
+          beginInspectAt(t.clientX, t.clientY, { buzz: false });
+          return;
+        }
+
         inspectHoldTimer = setTimeout(() => {
           inspectHoldTimer = null;
           if (!panMoved && !axisMoved) {
-            beginInspectAt(pressStartX, pressStartY);
+            beginInspectAt(pressStartX, pressStartY, { buzz: true });
           }
         }, INSPECT_HOLD_MS);
       },
@@ -2030,6 +2044,11 @@
         }
 
         if (inspectMode || activatedInspect) {
+          const movedWhileInspect =
+            pressStartX != null
+              ? Math.hypot(t.clientX - pressStartX, t.clientY - pressStartY)
+              : 0;
+          if (movedWhileInspect >= MOVE_PX) inspectScrubbed = true;
           updatePlInspectAtClient(t.clientX, t.clientY);
           return;
         }
@@ -2038,6 +2057,14 @@
           pressStartX != null
             ? Math.hypot(t.clientX - pressStartX, t.clientY - pressStartY)
             : 0;
+
+        // Crosshair was already on: any slide scrubs it across candles.
+        if (inspectAlreadyOn && movedFromStart >= MOVE_PX) {
+          clearInspectHold();
+          beginInspectAt(t.clientX, t.clientY, { buzz: false });
+          return;
+        }
+
         if (movedFromStart >= MOVE_PX) {
           clearInspectHold();
         } else {
@@ -2068,11 +2095,12 @@
       const heldMs = pressStartedAt ? Date.now() - pressStartedAt : 0;
       const tapX = pressStartX;
       const tapY = pressStartY;
+      const wasScrub = inspectScrubbed;
       const quickTap =
         !wasPan &&
         !wasPinch &&
         !wasAxis &&
-        !activatedInspect &&
+        !wasScrub &&
         heldMs > 0 &&
         heldMs < TAP_MS;
       const hadInspect = inspectAlreadyOn;
@@ -2091,6 +2119,7 @@
       pressStartY = null;
       pressStartedAt = 0;
       inspectMode = false;
+      inspectScrubbed = false;
 
       if (wasPan || wasPinch) {
         // Persist zoom/pan — do not snap back to the previous window.
@@ -2099,9 +2128,10 @@
       } else if (wasAxis) {
         clearPlInspect();
       } else if (quickTap && hadInspect) {
+        // Light tap dismisses an open crosshair (even if touchstart re-armed it).
         clearPlInspect();
       } else if (quickTap && !hadInspect && tapX != null && tapY != null) {
-        beginInspectAt(tapX, tapY);
+        beginInspectAt(tapX, tapY, { buzz: true });
         plInspecting = true;
       } else if (activatedInspect) {
         plInspecting = true;

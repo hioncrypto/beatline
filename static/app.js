@@ -3965,7 +3965,11 @@
   }
 
   function renderDemoUi() {
-    if (el.menuBtn) el.menuBtn.classList.toggle("is-demo", !!demo.on);
+    if (el.menuBtn) {
+      el.menuBtn.classList.toggle("is-demo", !!demo.on && !isLiveKalshi());
+      el.menuBtn.classList.toggle("is-live", isLiveKalshi());
+    }
+    paintLiveKalshiBadge();
     if (el.demoToggle) el.demoToggle.checked = !!demo.on;
     if (el.demoAccount) el.demoAccount.hidden = !demo.on;
     if (el.demoStart && document.activeElement !== el.demoStart) {

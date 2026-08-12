@@ -9310,6 +9310,8 @@
         unlockAudioPlayback();
         ensurePortraitLock(true);
         startRolloverBurst();
+        // Foreground return: flush local ledger (background often never finishes POST).
+        void pushDemoStateToServer();
         // Quiet-sync any 15m window that rolled while we were away — do not
         // dump the "new 15m target / Price to beat" chime on open.
         suppressTargetChimeUntil = Date.now() + 4000;

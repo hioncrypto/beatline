@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.42";
+  const APP_VERSION = "10.43";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -452,6 +452,7 @@
     balance: null,
     keyHint: null,
     error: null,
+    authFailed: false,
   };
   const AUTO_TRADE_KEY = "beatlineAutoTrade";
   let autoTradeOn = false;
@@ -4210,7 +4211,12 @@
   }
 
   function isLiveKalshi() {
-    return !!(kalshiLive.connected && kalshiLive.liveEnabled);
+    // Auth must succeed — keys-on-disk alone is not enough to show LIVE.
+    return !!(
+      kalshiLive.connected &&
+      kalshiLive.liveEnabled &&
+      !kalshiLive.authFailed
+    );
   }
 
   function tradingArmed() {
@@ -4219,31 +4225,45 @@
 
   function applyKalshiAccountStatus(status) {
     if (!status || typeof status !== "object") return;
-    kalshiLive.connected = !!status.connected;
-    kalshiLive.liveEnabled = !!status.live_enabled;
+    const errText = formatKalshiErr(status.error);
+    const authFailed =
+      !!status.auth_failed ||
+      (typeof errText === "string" &&
+        /authentication|unauthorized|invalid.?api.?key/i.test(errText));
+    kalshiLive.connected = !!status.connected && !authFailed;
+    kalshiLive.liveEnabled = !!status.live_enabled && !authFailed;
     kalshiLive.fromEnv = !!status.from_env;
     kalshiLive.balance =
       status.balance != null && Number.isFinite(Number(status.balance))
         ? Number(status.balance)
         : null;
     kalshiLive.keyHint = status.key_hint || null;
-    kalshiLive.error = status.error || null;
+    kalshiLive.error = errText || null;
+    kalshiLive.authFailed = authFailed;
     renderKalshiLiveUi();
     renderDemoUi();
-    // Keep the Options banner in sync with real connection state (never leave
-    // a stale "Not connected · [object Object]" over a live session).
-    if (kalshiLive.connected) {
+    if (authFailed) {
+      setKalshiConnectConfirm(
+        "warn",
+        `Not connected · ${errText || "authentication_error"} — check API Key ID + private key match, then Save & connect again`
+      );
+    } else if (kalshiLive.connected) {
       const bal =
         kalshiLive.balance != null ? money(kalshiLive.balance) : null;
       const hint = kalshiLive.keyHint ? ` · key ${kalshiLive.keyHint}` : "";
-      const liveBit = kalshiLive.liveEnabled ? " · Live buys ON" : " · turn Live buys ON";
+      const liveBit = kalshiLive.liveEnabled
+        ? " · Live buys ON"
+        : " · turn Live buys ON";
       setKalshiConnectConfirm(
         "ok",
         bal
           ? `Saved & connected · bal ${bal}${hint}${liveBit}`
           : `Saved & connected${hint}${liveBit}`
       );
-    } else if (el.kalshiConnectConfirm && el.kalshiConnectConfirm.classList.contains("is-ok")) {
+    } else if (
+      el.kalshiConnectConfirm &&
+      el.kalshiConnectConfirm.classList.contains("is-ok")
+    ) {
       setKalshiConnectConfirm(null, "");
     }
   }
@@ -4508,7 +4528,20 @@
       });
       const data = await res.json();
       applyKalshiAccountStatus(data);
-      if (data && data.ok && data.connected) {
+      const authFailed =
+        !!(data && data.auth_failed) ||
+        (!!(data && data.error) &&
+          /authentication|unauthorized/i.test(
+            formatKalshiErr(data.error) || ""
+          ));
+      const connectedOk =
+        !!(data && data.connected) && !authFailed && data.balance != null;
+      // Accept connect if authenticated even when ok flag is false for other reasons
+      const softOk =
+        !!(data && data.connected) &&
+        !authFailed &&
+        (data.ok !== false || data.authenticated === true);
+      if (connectedOk || softOk) {
         // Private key is stored on the server — clear it from the phone.
         if (el.kalshiPrivateKey) {
           el.kalshiPrivateKey.value = "";
@@ -4529,18 +4562,17 @@
         setStatus("ok", confirmMsg);
         if (el.kalshiConnect) el.kalshiConnect.textContent = "Saved ✓";
         setTimeout(() => {
-          if (el.kalshiConnect && !el.kalshiConnect.disabled) {
-            el.kalshiConnect.textContent = "Save & connect";
-          } else if (el.kalshiConnect) {
-            el.kalshiConnect.textContent = "Save & connect";
-          }
+          if (el.kalshiConnect) el.kalshiConnect.textContent = "Save & connect";
         }, 2500);
       } else {
         const err =
           formatKalshiErr(data && data.error) ||
           formatKalshiErr(data && data.message) ||
           "Kalshi connect failed";
-        setKalshiConnectConfirm("warn", `Not connected · ${err}`);
+        const tip = /authentication/i.test(err)
+          ? " — API Key ID and private key must be the matching pair from Kalshi"
+          : "";
+        setKalshiConnectConfirm("warn", `Not connected · ${err}${tip}`);
         setStatus("warn", err);
         if (el.kalshiConnect) el.kalshiConnect.textContent = "Save & connect";
       }

@@ -1993,15 +1993,34 @@ def kalshi_account_status(fetch_balance: bool = True) -> dict:
         "balance": None,
         "balance_cents": None,
         "error": None,
+        "authenticated": None,
+        "auth_failed": False,
     }
     if fetch_balance:
         bal = kalshi_fetch_balance(creds)
         if bal.get("ok"):
             out["balance"] = bal.get("balance")
             out["balance_cents"] = bal.get("balance_cents")
+            out["authenticated"] = True
         else:
-            out["error"] = bal.get("error") or "Could not read Kalshi balance"
+            err = bal.get("error") or "Could not read Kalshi balance"
+            out["error"] = err
             out["ok"] = False
+            out["authenticated"] = False
+            status = bal.get("status")
+            err_l = str(err).lower()
+            # Keys on disk but Kalshi rejected them — not a live session.
+            if (
+                status in (401, 403)
+                or "authentication" in err_l
+                or "unauthorized" in err_l
+                or "invalid" in err_l and "key" in err_l
+            ):
+                out["connected"] = False
+                out["live_enabled"] = False
+                out["auth_failed"] = True
+    else:
+        out["authenticated"] = None
     return out
 
 

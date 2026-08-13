@@ -153,7 +153,7 @@ _last_auto_position: dict | None = None
 AUTO_FILL_SLIP_CENTS = 8
 AUTO_FILL_RETRY_SLIP_CENTS = 18
 AUTO_TRADE_RETRY_SEC = 3.0
-AUTO_TRADE_LOG_LIMIT = 40
+AUTO_TRADE_LOG_LIMIT = 200
 # Hard lock: live Kalshi buys only at 1¢/contract (no higher asks, no slip).
 LIVE_BUY_ONLY_CENTS = 1
 
@@ -223,6 +223,8 @@ def log_auto_trade_attempt(entry: dict) -> dict:
             "not_connected",
             "need_flip",
             "size_zero",
+            "ask_too_high",
+            "cooldown",
         ):
             for prev in reversed(attempts[-8:]):
                 if not isinstance(prev, dict):
@@ -277,8 +279,9 @@ def auto_trade_status() -> dict:
         "last_auto_trade_at": _last_auto_trade_at or None,
         "last_auto_trade_note": note,
         "last_auto_position": _last_auto_position,
-        "attempts": attempts[-12:],
+        "attempts": attempts[-50:],
         "attempt_count": len(attempts),
+        "live_buy_only_cents": LIVE_BUY_ONLY_CENTS,
     }
 
 
@@ -3731,7 +3734,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.1",
+                    "version": "2.4.2",
                     "live_buy_only_cents": LIVE_BUY_ONLY_CENTS,
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),

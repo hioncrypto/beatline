@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.58" />
+    <link rel="stylesheet" href="/styles.css?v=10.59" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=10.58" defer></script>
+    <script src="/app.js?v=10.59" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -363,6 +363,7 @@
           </div>
         </div>
         <div id="open-pl-sub" class="open-pl-sub">—</div>
+        <div id="open-pl-playbook" class="open-pl-playbook" hidden></div>
         <div class="open-pl-actions">
           <button type="button" id="open-pl-add" class="open-pl-add">
             Add to position
@@ -673,6 +674,36 @@
         </button>
       </div>
 
+      <section
+        id="best-trades-section"
+        class="best-trades-section"
+        aria-label="Best Trades playbook"
+      >
+        <button
+          type="button"
+          id="best-trades-toggle"
+          class="pl-chart-toggle"
+          aria-expanded="true"
+          aria-controls="best-trades-body"
+        >
+          <span>
+            <strong>Best Trades playbook</strong>
+            <em id="best-trades-summary">Rules from your live Kalshi audit</em>
+          </span>
+          <span id="best-trades-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
+        </button>
+        <div id="best-trades-body" class="best-trades-body">
+          <p id="best-trades-audit" class="best-trades-audit">
+            Live audit loading…
+          </p>
+          <ol id="best-trades-rules" class="best-trades-rules"></ol>
+          <p class="best-trades-footer">
+            Streak style = bank winners with <strong>Close at bid</strong>. Auto’s 1¢ mode is a
+            separate lottery — don’t mix it with this playbook.
+          </p>
+        </div>
+      </section>
+
       <section id="strategy-section" class="strategy-section" aria-label="Strategy report">
         <button
           type="button"
@@ -875,6 +906,7 @@
       <p id="buy-limit-hint" class="buy-balance-hint">
         Auto-trade stays 1¢-only. Manual buys use this limit (or the live ask if blank).
       </p>
+      <p id="buy-rules-warn" class="buy-rules-warn" hidden></p>
       <div id="buy-suggest" class="buy-suggest" hidden>
         <div class="buy-suggest-text">
           <div class="buy-suggest-kicker">Suggested size</div>

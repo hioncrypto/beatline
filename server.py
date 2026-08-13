@@ -3732,10 +3732,9 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.5",
+                    "version": "2.4.4",
                     "live_buy_only_cents": LIVE_BUY_ONLY_CENTS,
                     "auto_buy_only_cents": LIVE_BUY_ONLY_CENTS,
-                    "best_trades_playbook": True,
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

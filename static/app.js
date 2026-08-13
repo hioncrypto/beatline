@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.59";
+  const APP_VERSION = "10.58";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -27,67 +27,6 @@
    */
   const BEST_SIDE_PROFILE = "green-spike";
   const BEST_SIDE_PROFILE_LABEL = "Green Spike";
-  /**
-   * Best Trades playbook — rules mined from live Kalshi ledger (1W/9L, −$97)
-   * plus the Aug 5 paper streak (early exits, median +21¢ mark edge).
-   * Keep thresholds stable; bump APP_VERSION when changing.
-   */
-  const BEST_TRADES = {
-    takeProfitEdgeCents: 15,
-    takeProfitDollarsLive: 2,
-    takeProfitDollarsPaper: 10,
-    holdToSettleMinAsk: 68,
-    lotteryMaxAsk: 15,
-    lotteryMaxStakeUsd: 1,
-    maxRiskPct: 0.01,
-    hardCapUsdUntilRecover: 5,
-    recoverBalanceUsd: 50,
-    finalMinutesForceClose: 2,
-    midAskLow: 25,
-    midAskHigh: 65,
-    rules: [
-      {
-        id: "take-profit",
-        title: "Bank winners — don’t hold green marks",
-        body: "Close at bid when the bid is ≥ +15¢ vs your entry, or you’re up ~$2+ live. Your paper streak averaged +21¢ of edge before exit. Unrealized +$45 is not profit until Kalshi fills the close.",
-      },
-      {
-        id: "confirm-close",
-        title: "Confirm CLOSED · Kalshi — then retry if it misses",
-        body: "If Close spins or says “did not fill,” tap again immediately. Never wait for settlement hoping the mark sticks.",
-      },
-      {
-        id: "size-cap",
-        title: "Size ≤1% of cash (hard $5 until bal ≥ $50)",
-        body: "Live audit’s −$84 hit was a ~200-contract Below bag. With $7 cash, trade tiny or deposit first — never size for the old paper bankroll.",
-      },
-      {
-        id: "hold-settle",
-        title: "Hold-to-settle only at ≥68¢ + Best Side + winning vs beat",
-        body: "Your only live settlement win was Above @70¢ into YES. Mid-ask holds (≈40–65¢) into expiry were almost all losers.",
-      },
-      {
-        id: "no-bag",
-        title: "No bags in the last 2 minutes",
-        body: "If you’re still open with <2:00 left and not a hold-to-settle setup, mash Close at bid. Bags into the wrong result killed the live account.",
-      },
-      {
-        id: "one-side",
-        title: "One side per window — never both",
-        body: "Live tickets that mixed Above buys with Below inventory settled badly. Flat first, then flip.",
-      },
-      {
-        id: "lottery",
-        title: "≤15¢ lottery = $1 max",
-        body: "Cheap 4¢/12¢ Above tickets lost. Tiny lottery only — or skip and wait for a clear Best Side.",
-      },
-      {
-        id: "auto-split",
-        title: "Auto 1¢ ≠ streak trading",
-        body: "Auto waiting for 1¢ is a separate lottery. For the profitable streak, use manual Best/Above/Below + early Close.",
-      },
-    ],
-  };
   /** Tape bias stays off under Green Spike (window-vs-beat only). */
   const TREND_BIAS_ENABLED = false;
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
@@ -451,17 +390,9 @@
     strategyChartEmpty: document.getElementById("strategy-chart-empty"),
     openPlAdd: document.getElementById("open-pl-add"),
     openPlClose: document.getElementById("open-pl-close"),
-    openPlPlaybook: document.getElementById("open-pl-playbook"),
     openPlToggle: document.getElementById("open-pl-toggle"),
     openPlPeek: document.getElementById("open-pl-peek"),
     openPlBody: document.getElementById("open-pl-body"),
-    bestTradesSection: document.getElementById("best-trades-section"),
-    bestTradesToggle: document.getElementById("best-trades-toggle"),
-    bestTradesBody: document.getElementById("best-trades-body"),
-    bestTradesChevron: document.getElementById("best-trades-chevron"),
-    bestTradesSummary: document.getElementById("best-trades-summary"),
-    bestTradesAudit: document.getElementById("best-trades-audit"),
-    bestTradesRules: document.getElementById("best-trades-rules"),
     buyBackdrop: document.getElementById("buy-backdrop"),
     buySheet: document.getElementById("buy-sheet"),
     buySheetTitle: document.getElementById("buy-sheet-title"),
@@ -471,7 +402,6 @@
     buyLimitCents: document.getElementById("buy-limit-cents"),
     buyLimitLabel: document.getElementById("buy-limit-label"),
     buyLimitHint: document.getElementById("buy-limit-hint"),
-    buyRulesWarn: document.getElementById("buy-rules-warn"),
     buyRange: document.getElementById("buy-range"),
     buyRangeValue: document.getElementById("buy-range-value"),
     buySuggest: document.getElementById("buy-suggest"),
@@ -2121,7 +2051,6 @@
     }
     renderLiveTradeLog();
     renderLiveActivityFeed();
-    renderBestTradesPlaybook();
   }
 
   function adoptLiveAutoAttempts(status) {
@@ -4853,11 +4782,6 @@
       el.openPlBar.hidden = true;
       document.body.classList.remove("has-open-pl");
       document.body.classList.remove("open-pl-collapsed");
-      if (el.openPlPlaybook) {
-        el.openPlPlaybook.hidden = true;
-        el.openPlPlaybook.textContent = "";
-      }
-      if (el.openPlClose) el.openPlClose.classList.remove("is-take-profit");
       clearBreakevenLines();
       if (lastTarget != null) applyTargetLine(lastTarget, "TO BEAT");
       if (hadOpen) {
@@ -4982,18 +4906,10 @@
     }
     if (el.openPlClose) {
       el.openPlClose.disabled = !mark || mark.bidCents == null;
-      const tp = evaluateTakeProfit(pos, mark);
-      if (tp && tp.shouldClose) {
-        el.openPlClose.textContent = "TAKE PROFIT · Close at bid";
-        el.openPlClose.classList.add("is-take-profit");
-      } else {
-        el.openPlClose.classList.remove("is-take-profit");
-        el.openPlClose.textContent = accounted
-          ? "Close at bid · post P/L"
-          : "Close at bid · clear mark";
-      }
+      el.openPlClose.textContent = accounted
+        ? "Close at bid · post P/L"
+        : "Close at bid · clear mark";
     }
-    paintOpenPlPlaybook(pos, mark);
     if (el.openPlAdd) {
       const side = pos.side === "above" ? "Above" : "Below";
       el.openPlAdd.disabled = !canBuySide(pos.side);
@@ -6455,7 +6371,6 @@
       el.buySlideLabel.textContent = label;
     }
     renderBuySuggest(side, amount);
-    paintBuyRulesWarn(side, amount, ask);
   }
 
   function renderBuySuggest(side, currentAmount) {
@@ -7472,197 +7387,6 @@
     return ok;
   }
 
-  function liveBankrollUsd() {
-    if (isLiveKalshi() && kalshiLive.balance != null && Number.isFinite(Number(kalshiLive.balance))) {
-      return Math.max(0, Number(kalshiLive.balance));
-    }
-    if (demo.on && Number.isFinite(Number(demo.balance))) {
-      return Math.max(0, Number(demo.balance));
-    }
-    return null;
-  }
-
-  function bestTradesMaxStakeUsd() {
-    const bal = liveBankrollUsd();
-    if (bal == null) return BEST_TRADES.hardCapUsdUntilRecover;
-    const pctCap = Math.max(1, Math.floor(bal * BEST_TRADES.maxRiskPct));
-    if (bal < BEST_TRADES.recoverBalanceUsd) {
-      return Math.min(BEST_TRADES.hardCapUsdUntilRecover, Math.max(1, pctCap));
-    }
-    return Math.max(1, pctCap);
-  }
-
-  function evaluateTakeProfit(pos, mark) {
-    if (!pos || !mark || mark.bidCents == null || mark.unrealized == null) {
-      return null;
-    }
-    const entry = Math.round(Number(pos.askCents) || 0);
-    const bid = Math.round(Number(mark.bidCents) || 0);
-    const edge = entry > 0 ? bid - entry : 0;
-    const secs = mark.secs != null ? Number(mark.secs) : null;
-    const dollarFloor = isLiveKalshi()
-      ? BEST_TRADES.takeProfitDollarsLive
-      : BEST_TRADES.takeProfitDollarsPaper;
-    const edgeHit = edge >= BEST_TRADES.takeProfitEdgeCents;
-    const dollarHit = mark.unrealized >= dollarFloor;
-    const holdOk =
-      entry >= BEST_TRADES.holdToSettleMinAsk &&
-      !!mark.settleNowWin &&
-      (!lastBestPick || lastBestPick.side === pos.side);
-    const midBag =
-      entry >= BEST_TRADES.midAskLow && entry <= BEST_TRADES.midAskHigh;
-    const late =
-      secs != null &&
-      secs >= 0 &&
-      secs <= BEST_TRADES.finalMinutesForceClose * 60;
-    const forceLate = late && !holdOk;
-    const shouldClose = edgeHit || dollarHit || forceLate;
-    let reason = "";
-    if (edgeHit) {
-      reason = `+${edge}¢ vs entry — bank it (playbook ≥+${BEST_TRADES.takeProfitEdgeCents}¢)`;
-    } else if (dollarHit) {
-      reason = `${formatPl(mark.unrealized)} open — Close at bid to lock`;
-    } else if (forceLate) {
-      reason = midBag
-        ? `<${BEST_TRADES.finalMinutesForceClose}m left on mid-ask — Close, don’t bag`
-        : `<${BEST_TRADES.finalMinutesForceClose}m left — Close unless ≥${BEST_TRADES.holdToSettleMinAsk}¢ hold setup`;
-    }
-    return {
-      shouldClose,
-      edge,
-      holdOk,
-      forceLate,
-      reason,
-    };
-  }
-
-  function paintOpenPlPlaybook(pos, mark) {
-    if (!el.openPlPlaybook) return;
-    if (!pos || !mark) {
-      el.openPlPlaybook.hidden = true;
-      el.openPlPlaybook.textContent = "";
-      return;
-    }
-    const tp = evaluateTakeProfit(pos, mark);
-    if (tp && tp.shouldClose && tp.reason) {
-      el.openPlPlaybook.hidden = false;
-      el.openPlPlaybook.textContent = `Best Trades · ${tp.reason}`;
-      el.openPlPlaybook.classList.add("is-urgent");
-      return;
-    }
-    const entry = Math.round(Number(pos.askCents) || 0);
-    if (
-      entry >= BEST_TRADES.holdToSettleMinAsk &&
-      mark.settleNowWin &&
-      (!lastBestPick || lastBestPick.side === pos.side)
-    ) {
-      el.openPlPlaybook.hidden = false;
-      el.openPlPlaybook.classList.remove("is-urgent");
-      el.openPlPlaybook.textContent = `Best Trades · hold-to-settle OK (≥${BEST_TRADES.holdToSettleMinAsk}¢ + winning vs beat)`;
-      return;
-    }
-    if (mark.unrealized != null && mark.unrealized > 0) {
-      el.openPlPlaybook.hidden = false;
-      el.openPlPlaybook.classList.remove("is-urgent");
-      el.openPlPlaybook.textContent =
-        "Best Trades · in profit — Close at bid when edge hits +15¢";
-      return;
-    }
-    el.openPlPlaybook.hidden = true;
-    el.openPlPlaybook.textContent = "";
-  }
-
-  function evaluateBuyRules(side, amount, askCents) {
-    const warns = [];
-    const ask = Math.round(Number(askCents) || 0);
-    const amt = Math.round(Number(amount) || 0);
-    const bal = liveBankrollUsd();
-    const maxStake = bestTradesMaxStakeUsd();
-    if (amt > maxStake) {
-      warns.push(
-        bal != null && bal < BEST_TRADES.recoverBalanceUsd
-          ? `Size $${amt} > playbook cap $${maxStake} (rebuild mode until bal ≥ $${BEST_TRADES.recoverBalanceUsd})`
-          : `Size $${amt} > ≤1% cap $${maxStake}`
-      );
-    }
-    if (ask > 0 && ask <= BEST_TRADES.lotteryMaxAsk && amt > BEST_TRADES.lotteryMaxStakeUsd) {
-      warns.push(
-        `≤${BEST_TRADES.lotteryMaxAsk}¢ lottery — keep ≤$${BEST_TRADES.lotteryMaxStakeUsd}`
-      );
-    }
-    if (
-      demo.position &&
-      demo.position.side &&
-      demo.position.side !== side
-    ) {
-      warns.push("Opposite side while open — close first (one side per window)");
-    }
-    if (
-      ask >= BEST_TRADES.midAskLow &&
-      ask <= BEST_TRADES.midAskHigh &&
-      !(lastBestPick && lastBestPick.side === side)
-    ) {
-      warns.push(
-        "Mid-ask without Best Side — plan an early Close; don’t hold to settle"
-      );
-    }
-    return warns;
-  }
-
-  function paintBuyRulesWarn(side, amount, askCents) {
-    if (!el.buyRulesWarn) return;
-    const warns = evaluateBuyRules(side, amount, askCents);
-    if (!warns.length) {
-      el.buyRulesWarn.hidden = true;
-      el.buyRulesWarn.textContent = "";
-      return;
-    }
-    el.buyRulesWarn.hidden = false;
-    el.buyRulesWarn.textContent = `Best Trades · ${warns[0]}${
-      warns.length > 1 ? ` · (+${warns.length - 1} more)` : ""
-    }`;
-  }
-
-  function renderBestTradesPlaybook() {
-    if (el.bestTradesRules) {
-      el.bestTradesRules.innerHTML = BEST_TRADES.rules
-        .map(
-          (r) =>
-            `<li class="best-trades-rule"><strong>${r.title}</strong><span>${r.body}</span></li>`
-        )
-        .join("");
-    }
-    const ledger = kalshiLedger && kalshiLedger.ok ? kalshiLedger : null;
-    const sum = ledger && ledger.summary;
-    if (el.bestTradesAudit) {
-      if (sum) {
-        const wins = Number(sum.settlement_wins) || 0;
-        const losses = Number(sum.settlement_losses) || 0;
-        const pl = Number(sum.settlement_pl_sum);
-        const bal =
-          sum.balance != null
-            ? money(sum.balance)
-            : kalshiLive.balance != null
-              ? money(kalshiLive.balance)
-              : "—";
-        el.bestTradesAudit.textContent = `Live audit · ${wins}W–${losses}L · settlement ${
-          Number.isFinite(pl) ? formatPl(pl) : "—"
-        } · cash ${bal}. Biggest loss was a large bag into the wrong settlement — playbook below is how you stay profitable.`;
-      } else if (isLiveKalshi() || kalshiLive.connected) {
-        el.bestTradesAudit.textContent =
-          "Connect Live + Refresh the trading log to attach your Kalshi settlement audit. Rules below already encode that review.";
-      } else {
-        el.bestTradesAudit.textContent =
-          "From your live Kalshi review: 1 settlement win (Above @70¢) vs 9 losses (net ≈ −$97). Paper streak wins were early Closes (~+21¢ edge). Follow the rules below.";
-      }
-    }
-    if (el.bestTradesSummary) {
-      el.bestTradesSummary.textContent = isLiveKalshi()
-        ? "Live · bank winners · ≤1% size · no bags"
-        : "Bank winners · ≤1% size · no bags";
-    }
-  }
-
   function alertProfit(pos, mark) {
     if (!chimeOn) return;
     const sideLabel = pos && pos.side === "below" ? "Below" : "Above";
@@ -7747,7 +7471,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.37", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.35", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -11550,24 +11274,6 @@
       el.strategyBody.hidden = false;
       el.strategyToggle.setAttribute("aria-expanded", "true");
       if (el.strategySection) el.strategySection.classList.add("is-open");
-    }
-    if (el.bestTradesToggle && el.bestTradesBody) {
-      el.bestTradesToggle.addEventListener("click", () => {
-        const open = el.bestTradesBody.hidden;
-        el.bestTradesBody.hidden = !open;
-        el.bestTradesToggle.setAttribute(
-          "aria-expanded",
-          open ? "true" : "false"
-        );
-        if (el.bestTradesSection) {
-          el.bestTradesSection.classList.toggle("is-open", open);
-        }
-        if (open) renderBestTradesPlaybook();
-      });
-      el.bestTradesBody.hidden = false;
-      el.bestTradesToggle.setAttribute("aria-expanded", "true");
-      if (el.bestTradesSection) el.bestTradesSection.classList.add("is-open");
-      renderBestTradesPlaybook();
     }
     document.querySelectorAll(".analytics-scope-btn").forEach((btn) => {
       btn.addEventListener("click", () => {

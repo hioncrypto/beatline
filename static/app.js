@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.65";
+  const APP_VERSION = "10.66";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -226,7 +226,7 @@
     },
     {
       title: "Demo & alerts",
-      body: "⋮ Options → Demo mode for paper trades, Live Kalshi for real buys, and Auto-trade Best Side to let BeatLine take clear-edge entries at ≤1% of balance. The bell enables alerts.",
+      body: "⋮ Options → Demo mode for paper trades, Live Kalshi for real buys, and Auto-trade Best Side to let BeatLine take clear-edge entries at ≤1% of balance (never in the last 5 minutes). The bell enables alerts.",
     },
   ];
 
@@ -515,6 +515,8 @@
   };
   const AUTO_TRADE_KEY = "beatlineAutoTrade";
   const AUTO_FLIP_KEY = "beatlineAutoFlip";
+  /** Auto-trade must not open a new buy once ≤5 minutes remain. */
+  const AUTO_TRADE_CUTOFF_SECS = 5 * 60;
   const ANALYTICS_SCOPE_KEY = "beatlineAnalyticsScope";
   let autoTradeOn = false;
   let autoFlipOn = false;
@@ -8644,8 +8646,8 @@
       setStatus(
         "ok",
         isLiveKalshi()
-          ? "Auto-trade ON · server fills on clear Best Side (even in background)"
-          : "Auto-trade ON · demo buys on clear Best Side"
+          ? "Auto-trade ON · clear Best Side fills, none in the last 5 min"
+          : "Auto-trade ON · demo buys on clear Best Side, none in the last 5 min"
       );
     } else {
       setStatus("ok", "Auto-trade off");
@@ -8683,6 +8685,15 @@
     if (!(suggestStake >= BUY_AMOUNT_MIN)) return false;
     const ticker = lastTicker || lastFifteenTicker || "";
     if (!ticker) return false;
+    const secs = secondsLeft();
+    if (secs != null && secs <= AUTO_TRADE_CUTOFF_SECS) {
+      lastAutoTradeNote =
+        secs > 0
+          ? `skipped · ${Math.max(1, Math.ceil(secs / 60))}m left (no auto buys in last 5 min)`
+          : "skipped · window over (no auto buys in last 5 min)";
+      renderAutoTradeUi();
+      return false;
+    }
     const key = `${ticker}:${best.side}`;
     if (lastAutoTradeKey === key) return false;
     if (

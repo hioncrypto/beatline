@@ -155,6 +155,8 @@ AUTO_FILL_SLIP_CENTS = 8
 AUTO_FILL_RETRY_SLIP_CENTS = 18
 AUTO_TRADE_RETRY_SEC = 3.0
 AUTO_TRADE_LOG_LIMIT = 200
+# No new auto buys (or auto-flip entries) once ≤5 minutes remain.
+AUTO_TRADE_CUTOFF_SECS = 5 * 60
 
 
 def _fresh_side_ask_cents(ticker: str, side: str) -> int | None:
@@ -1941,6 +1943,8 @@ def push_watcher_loop() -> None:
                             suggest_stake=edge.get("suggest_stake"),
                             bid_cents=same_bid,
                             opposite_bid_cents=opp_bid,
+                            secs_left=edge.get("secs_left")
+                            or data.get("seconds_to_close"),
                         )
                     except Exception as auto_exc:
                         print(f"[kalshi-btc-target] auto-trade error: {auto_exc}")
@@ -2903,6 +2907,33 @@ def kalshi_fetch_market_position(ticker: str, creds: dict | None = None) -> dict
     return {"ok": True, "side": None, "contracts": 0, "raw": payload}
 
 
+def _auto_trade_secs_left(secs_left=None) -> float | None:
+    """Seconds until this 15m window closes, or None if unknown."""
+    if secs_left is not None:
+        try:
+            n = float(secs_left)
+            if math.isfinite(n):
+                return n
+        except (TypeError, ValueError):
+            pass
+    try:
+        data = fetch_target_payload("15m")
+    except Exception:
+        return None
+    secs = data.get("seconds_to_close") if isinstance(data, dict) else None
+    try:
+        if secs is not None:
+            n = float(secs)
+            if math.isfinite(n):
+                return n
+    except (TypeError, ValueError):
+        pass
+    close_ms = parse_close_ms((data or {}).get("close_time"))
+    if close_ms is None:
+        return None
+    return (close_ms - time.time() * 1000.0) / 1000.0
+
+
 def try_server_auto_trade(
     *,
     ticker: str,
@@ -2912,6 +2943,7 @@ def try_server_auto_trade(
     bid_cents=None,
     opposite_bid_cents=None,
     force: bool = False,
+    secs_left=None,
 ) -> dict:
     """
     Place a live Best Side buy when Auto-trade is armed on the server.
@@ -2919,6 +2951,7 @@ def try_server_auto_trade(
     If Auto-flip is on and the opposite side is open, sell that first then buy.
     Dedupes per ticker:side; retries failed IOCs after AUTO_TRADE_RETRY_SEC.
     Every outcome is logged so we can verify the bot actually tried.
+    No new auto buys in the last 5 minutes of the window.
     """
     global _last_auto_trade_key, _last_auto_trade_at, _last_auto_trade_note
     global _last_auto_trade_attempt_at, _last_auto_position
@@ -2928,7 +2961,7 @@ def try_server_auto_trade(
         out.setdefault("auto", True)
         note = out.get("note") or out.get("error") or kind
         # Skip noisy poll spam — still keep real tries / blocks / fills.
-        if kind not in ("cooldown", "already", "already_long"):
+        if kind not in ("cooldown", "already", "already_long", "late_window"):
             log_auto_trade_attempt(
                 {
                     "kind": kind,
@@ -2946,7 +2979,7 @@ def try_server_auto_trade(
                     "suggest_stake": out.get("suggest_stake"),
                 }
             )
-        elif note and kind in ("already", "already_long"):
+        elif note and kind in ("already", "already_long", "late_window"):
             global _last_auto_trade_note
             _last_auto_trade_note = str(note)
         return out
@@ -2978,6 +3011,27 @@ def try_server_auto_trade(
         return finish(
             {"ok": False, "skipped": True, "error": "Auto-trade off"},
             kind="auto_off",
+        )
+
+    secs = _auto_trade_secs_left(secs_left)
+    if secs is not None and secs <= AUTO_TRADE_CUTOFF_SECS:
+        if secs > 0:
+            note = (
+                f"skipped · {secs / 60.0:.1f}m left "
+                "(no auto buys in last 5 min)"
+            )
+        else:
+            note = "skipped · window over (no auto buys in last 5 min)"
+        _last_auto_trade_note = note
+        return finish(
+            {
+                "ok": True,
+                "skipped": True,
+                "error": note,
+                "note": note,
+                "secs_left": secs,
+            },
+            kind="late_window",
         )
 
     key = f"{ticker}:{side}"
@@ -3788,7 +3842,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.7",
+                    "version": "2.4.8",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.45" />
+    <link rel="stylesheet" href="/styles.css?v=10.54" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=10.45" defer></script>
+    <script src="/app.js?v=10.54" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -484,6 +484,44 @@
         </div>
       </section>
 
+      <section
+        id="live-trade-log-section"
+        class="live-trade-log"
+        aria-label="Live Kalshi trading log"
+        hidden
+      >
+        <button
+          type="button"
+          id="live-trade-log-toggle"
+          class="pl-chart-toggle"
+          aria-expanded="true"
+          aria-controls="live-trade-log-body"
+        >
+          <span>
+            <strong>Live trading log</strong>
+            <em id="live-trade-log-summary" class="live-trade-log-summary"
+              >Real Kalshi fills &amp; settlements — not paper</em
+            >
+          </span>
+          <span id="live-trade-log-chevron" class="pl-chart-chevron" aria-hidden="true"
+            >▾</span
+          >
+        </button>
+        <div id="live-trade-log-body" class="live-trade-log-body">
+          <div id="live-trade-log-cash" class="live-trade-log-cash">Kalshi cash —</div>
+          <p id="live-trade-log-note" class="live-trade-log-note">
+            This log is only your live Kalshi account. Demo / paper trades stay in Trade
+            history below.
+          </p>
+          <div id="live-trade-log-list" class="trade-history-list">
+            <div class="trade-history-empty">Loading live fills from Kalshi…</div>
+          </div>
+          <button type="button" id="live-trade-log-refresh" class="demo-btn ghost">
+            Refresh from Kalshi
+          </button>
+        </div>
+      </section>
+
       <div class="options-alerts-row">
         <div class="options-alerts-text">
           <strong>Alerts</strong>
@@ -557,7 +595,8 @@
               </div>
             </div>
             <div id="pl-chart-empty" class="pl-chart-empty">
-              Wins/losses will candle here after you close or settle trades.
+              Wins/losses candle here after settlements. For Live Kalshi, open
+              Options → Live Kalshi — chart loads from your Kalshi account.
             </div>
             <p class="pl-chart-hint">
               Opens on full history. Pinch to zoom, slide to pan. Light-press a

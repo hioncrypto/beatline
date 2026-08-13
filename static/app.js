@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.53";
+  const APP_VERSION = "10.54";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -425,6 +425,15 @@
     analyticsScopeDemo: document.getElementById("analytics-scope-demo"),
     analyticsScopeAll: document.getElementById("analytics-scope-all"),
     analyticsScopeNote: document.getElementById("analytics-scope-note"),
+    liveTradeLogSection: document.getElementById("live-trade-log-section"),
+    liveTradeLogToggle: document.getElementById("live-trade-log-toggle"),
+    liveTradeLogBody: document.getElementById("live-trade-log-body"),
+    liveTradeLogChevron: document.getElementById("live-trade-log-chevron"),
+    liveTradeLogSummary: document.getElementById("live-trade-log-summary"),
+    liveTradeLogCash: document.getElementById("live-trade-log-cash"),
+    liveTradeLogNote: document.getElementById("live-trade-log-note"),
+    liveTradeLogList: document.getElementById("live-trade-log-list"),
+    liveTradeLogRefresh: document.getElementById("live-trade-log-refresh"),
     strategyScopeEm: document.getElementById("strategy-scope-em"),
     kalshiLink: null,
   };
@@ -488,6 +497,12 @@
   let lastAutoTradeAt = 0;
   let lastAutoTradeNote = "";
   let analyticsScope = "all";
+  /** Live Kalshi fills/settlements from /api/kalshi/ledger (source of truth). */
+  let kalshiLedger = null;
+  let kalshiLedgerAt = 0;
+  let kalshiLedgerLoading = false;
+  /** Dedicated Live trading log panel stays open by default when Live is on. */
+  let liveTradeLogOpen = true;
   try {
     const raw = localStorage.getItem(ANALYTICS_SCOPE_KEY);
     if (raw === "live" || raw === "demo" || raw === "all") analyticsScope = raw;
@@ -1438,13 +1453,275 @@
 
   function tradeIsLiveKalshi(t) {
     if (!t || typeof t !== "object") return false;
-    return !!(t.liveKalshi || t.entrySource === "kalshi");
+    return !!(
+      t.liveKalshi ||
+      t.entrySource === "kalshi" ||
+      t.entrySource === "auto" ||
+      t.source === "kalshi_ledger"
+    );
   }
 
   function preferredAnalyticsScope() {
     if (isLiveKalshi()) return "live";
     if (demo.on) return "demo";
     return analyticsScope || "all";
+  }
+
+  async function refreshKalshiLedger({ force = false } = {}) {
+    if (kalshiLedgerLoading) return kalshiLedger;
+    const fresh = Date.now() - (kalshiLedgerAt || 0) < 15000;
+    if (!force && kalshiLedger && fresh) return kalshiLedger;
+    kalshiLedgerLoading = true;
+    try {
+      const res = await fetch("/api/kalshi/ledger", { cache: "no-store" });
+      const data = await res.json();
+      if (data && (data.ok || data.error)) {
+        kalshiLedger = data;
+        kalshiLedgerAt = Date.now();
+      }
+    } catch {
+      // keep prior ledger
+    } finally {
+      kalshiLedgerLoading = false;
+    }
+    return kalshiLedger;
+  }
+
+  /** Settlement rows from Kalshi ledger → demo-shaped close records for charts. */
+  function liveLedgerClosedTrades() {
+    const settlements =
+      kalshiLedger && Array.isArray(kalshiLedger.settlements)
+        ? kalshiLedger.settlements
+        : [];
+    return settlements
+      .filter((s) => s && Number.isFinite(Number(s.pl)))
+      .map((s) => ({
+        kind: "settle",
+        side: s.side === "above" || s.side === "below" ? s.side : null,
+        pl: Number(s.pl),
+        won: s.won === true || Number(s.pl) >= 0,
+        at: Number(s.at) || Date.now(),
+        contracts: s.contracts,
+        askCents: null,
+        total: s.cost_dollars,
+        ticker: s.ticker,
+        liveKalshi: true,
+        entrySource: "kalshi",
+        source: "kalshi_ledger",
+        revenue: s.revenue_dollars,
+        fee: s.fee_dollars,
+      }))
+      .sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0));
+  }
+
+  function buildKalshiLedgerHistoryHtml(ledger) {
+    const rows = [];
+    if (!ledger || !ledger.ok) {
+      const err =
+        (ledger && (ledger.error || (ledger.summary && ledger.summary.balance_error))) ||
+        "Connect Kalshi to load the live log";
+      return `<div class="trade-history-empty">${err}</div>`;
+    }
+    const positions = Array.isArray(ledger.positions) ? ledger.positions : [];
+    for (const p of positions) {
+      const side = p.side === "above" ? "Above" : "Below";
+      rows.push(
+        `<article class="trade-history-item is-open">` +
+          `<div class="trade-history-top">` +
+          `<span class="trade-history-kind">OPEN ${side}</span>` +
+          `<span class="trade-history-pl">${
+            p.market_exposure_dollars != null
+              ? money(p.market_exposure_dollars)
+              : "—"
+          }</span>` +
+          `</div>` +
+          `<div class="trade-history-meta">${
+            p.contracts != null ? p.contracts : "—"
+          } cts · ${(p.ticker || "").slice(0, 28)} · live Kalshi</div>` +
+          `</article>`
+      );
+    }
+    const events = (ledger.events || [])
+      .slice()
+      .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+    for (const ev of events) {
+      if (ev.kind === "fill") {
+        const side =
+          ev.side === "above" ? "Above" : ev.side === "below" ? "Below" : "—";
+        const act = (ev.action || "").toUpperCase() || "FILL";
+        const plTxt =
+          ev.cash_delta != null && Number.isFinite(Number(ev.cash_delta))
+            ? formatPl(Number(ev.cash_delta))
+            : "—";
+        const plClass =
+          ev.cash_delta == null
+            ? ""
+            : Number(ev.cash_delta) >= 0
+              ? "is-win"
+              : "is-loss";
+        rows.push(
+          `<article class="trade-history-item ${plClass}">` +
+            `<div class="trade-history-top">` +
+            `<span class="trade-history-kind">${act} ${side}</span>` +
+            `<span class="trade-history-pl">${plTxt}</span>` +
+            `</div>` +
+            `<div class="trade-history-meta">${formatHistoryTime(ev.at)} · ${
+              ev.contracts != null ? ev.contracts : "—"
+            } cts @ ${
+              ev.price_cents != null ? ev.price_cents + "¢" : "—"
+            } · ${(ev.ticker || "").slice(0, 24)}</div>` +
+            `</article>`
+        );
+      } else if (ev.kind === "settlement") {
+        const side =
+          ev.side === "above" ? "Above" : ev.side === "below" ? "Below" : "—";
+        const kind = ev.won ? "WIN" : "LOSS";
+        const plClass =
+          ev.pl == null ? "" : Number(ev.pl) >= 0 ? "is-win" : "is-loss";
+        rows.push(
+          `<article class="trade-history-item ${plClass}">` +
+            `<div class="trade-history-top">` +
+            `<span class="trade-history-kind">${kind} ${side} · settled</span>` +
+            `<span class="trade-history-pl">${
+              ev.pl == null ? "—" : formatPl(Number(ev.pl))
+            }</span>` +
+            `</div>` +
+            `<div class="trade-history-meta">${formatHistoryTime(ev.at)} · ${
+              ev.contracts != null ? ev.contracts : "—"
+            } cts · paid ${
+              ev.cost_dollars != null ? money(ev.cost_dollars) : "—"
+            } · got ${
+              ev.revenue_dollars != null ? money(ev.revenue_dollars) : "—"
+            }</div>` +
+            `</article>`
+        );
+      } else if (ev.kind === "deposit") {
+        rows.push(
+          `<article class="trade-history-item is-win">` +
+            `<div class="trade-history-top">` +
+            `<span class="trade-history-kind">DEPOSIT</span>` +
+            `<span class="trade-history-pl">${
+              ev.amount_dollars != null
+                ? formatPl(Number(ev.amount_dollars))
+                : "—"
+            }</span>` +
+            `</div>` +
+            `<div class="trade-history-meta">${formatHistoryTime(ev.at)} · ${
+              ev.status || "credited"
+            }</div>` +
+            `</article>`
+        );
+      }
+    }
+    if (!rows.length) {
+      return '<div class="trade-history-empty">No live Kalshi fills yet. After a buy or settlement, tap Refresh.</div>';
+    }
+    return rows.join("");
+  }
+
+  function applyLiveTradeLogUi() {
+    const show = !!(kalshiLive.connected || isLiveKalshi());
+    if (el.liveTradeLogSection) {
+      el.liveTradeLogSection.hidden = !show;
+      el.liveTradeLogSection.classList.toggle("is-open", !!liveTradeLogOpen);
+    }
+    if (el.liveTradeLogBody) {
+      el.liveTradeLogBody.hidden = !liveTradeLogOpen;
+    }
+    if (el.liveTradeLogToggle) {
+      el.liveTradeLogToggle.setAttribute(
+        "aria-expanded",
+        liveTradeLogOpen ? "true" : "false"
+      );
+    }
+  }
+
+  function renderLiveTradeLog() {
+    applyLiveTradeLogUi();
+    if (!el.liveTradeLogSection || el.liveTradeLogSection.hidden) return;
+
+    const ledger = kalshiLedger;
+    const sum = (ledger && ledger.summary) || {};
+    const bal =
+      ledger && ledger.balance != null
+        ? Number(ledger.balance)
+        : kalshiLive.balance != null
+          ? Number(kalshiLive.balance)
+          : null;
+
+    if (el.liveTradeLogCash) {
+      if (bal != null && Number.isFinite(bal)) {
+        el.liveTradeLogCash.textContent = `Kalshi cash ${money(bal)}`;
+        el.liveTradeLogCash.classList.toggle("is-up", bal > 0);
+        el.liveTradeLogCash.classList.toggle("is-down", bal <= 0);
+      } else {
+        el.liveTradeLogCash.textContent = kalshiLedgerLoading
+          ? "Kalshi cash …"
+          : "Kalshi cash —";
+        el.liveTradeLogCash.classList.remove("is-up", "is-down");
+      }
+    }
+
+    if (el.liveTradeLogSummary) {
+      if (ledger && ledger.ok) {
+        const closed = Number(sum.settlement_count) || 0;
+        const wins = Number(sum.settlement_wins) || 0;
+        const losses = Number(sum.settlement_losses) || 0;
+        const totalPl = Number(sum.settlement_pl_sum) || 0;
+        const nFills =
+          Number(sum.fill_count) ||
+          (Array.isArray(ledger.fills) ? ledger.fills.length : 0);
+        const openN = (ledger.positions || []).length;
+        const openBit = openN ? ` · ${openN} open` : "";
+        el.liveTradeLogSummary.textContent = closed
+          ? `${nFills} fills · ${closed} settled · ${wins}W-${losses}L · ${formatPl(
+              totalPl
+            )}${openBit}`
+          : nFills
+            ? `${nFills} fills · awaiting settlement${openBit}`
+            : `Waiting for live fills${openBit}`;
+        el.liveTradeLogSummary.classList.toggle("is-up", totalPl > 0);
+        el.liveTradeLogSummary.classList.toggle("is-down", totalPl < 0);
+      } else if (kalshiLedgerLoading) {
+        el.liveTradeLogSummary.textContent = "Loading from Kalshi…";
+        el.liveTradeLogSummary.classList.remove("is-up", "is-down");
+      } else {
+        el.liveTradeLogSummary.textContent =
+          (ledger && ledger.error) || "Tap Refresh to pull live fills";
+        el.liveTradeLogSummary.classList.remove("is-up", "is-down");
+      }
+    }
+
+    if (el.liveTradeLogNote) {
+      el.liveTradeLogNote.textContent = isLiveKalshi()
+        ? "Live buys ON — this log is only your real Kalshi account (paper stays below)."
+        : "Kalshi connected — live log available. Turn on Live Kalshi buys to trade real money.";
+    }
+
+    if (el.liveTradeLogList) {
+      if (kalshiLedgerLoading && !(ledger && ledger.ok)) {
+        el.liveTradeLogList.innerHTML =
+          '<div class="trade-history-empty">Loading live fills from Kalshi…</div>';
+      } else {
+        el.liveTradeLogList.innerHTML = buildKalshiLedgerHistoryHtml(ledger);
+      }
+    }
+  }
+
+  async function refreshAndPaintLiveTradeLog({ force = true } = {}) {
+    applyLiveTradeLogUi();
+    if (!el.liveTradeLogSection || el.liveTradeLogSection.hidden) return;
+    renderLiveTradeLog();
+    await refreshKalshiLedger({ force });
+    // When Live is on, lock analytics + chart onto this live log.
+    if (isLiveKalshi() && analyticsScope !== "live") {
+      setAnalyticsScope("live", { persist: true });
+    } else {
+      paintAnalyticsScopeUi();
+      renderTradeHistory();
+      renderStrategyReport();
+    }
+    renderLiveTradeLog();
   }
 
   function setAnalyticsScope(scope, { persist = true } = {}) {
@@ -1460,6 +1737,13 @@
     paintAnalyticsScopeUi();
     renderStrategyReport();
     renderTradeHistory();
+    if (scope === "live") {
+      refreshKalshiLedger({ force: true }).then(() => {
+        paintAnalyticsScopeUi();
+        renderStrategyReport();
+        renderTradeHistory();
+      });
+    }
   }
 
   function paintAnalyticsScopeUi() {
@@ -1474,9 +1758,13 @@
           ? "Demo / paper"
           : "All trades";
     if (el.analyticsScopeNote) {
+      const bal =
+        kalshiLedger && kalshiLedger.balance != null
+          ? ` · Kalshi cash ${money(kalshiLedger.balance)}`
+          : "";
       el.analyticsScopeNote.textContent =
         scope === "live"
-          ? "Showing Live Kalshi trades only (demo history hidden)"
+          ? `Showing Live Kalshi fills & settlements from your connected account${bal}`
           : scope === "demo"
             ? "Showing Demo / paper trades only"
             : "Showing all trades (Live + Demo)";
@@ -1495,6 +1783,10 @@
 
   /** Closed settle/close rows with a real P/L, oldest → newest (scoped). */
   function closedPlTrades() {
+    if (analyticsScope === "live") {
+      const fromLedger = liveLedgerClosedTrades();
+      if (fromLedger.length) return fromLedger;
+    }
     // Merge demo state + dedicated trade-history key so Options charts never
     // drop older days after a partial server sync.
     const list = mergeTradeHistory(
@@ -1534,10 +1826,28 @@
    */
   function buildPlCandles() {
     const closed = closedPlTrades();
-    const start =
-      Number.isFinite(Number(demo.start)) && Number(demo.start) > 0
-        ? Number(demo.start)
-        : DEMO_DEFAULT_START;
+    let start;
+    if (
+      analyticsScope === "live" &&
+      kalshiLedger &&
+      kalshiLedger.summary &&
+      Number.isFinite(Number(kalshiLedger.balance))
+    ) {
+      const sumPl = closed.reduce((s, t) => s + Number(t.pl || 0), 0);
+      start = Math.round((Number(kalshiLedger.balance) - sumPl) * 100) / 100;
+    } else if (
+      analyticsScope === "live" &&
+      kalshiLedger &&
+      kalshiLedger.summary &&
+      Number.isFinite(Number(kalshiLedger.summary.start_equity))
+    ) {
+      start = Number(kalshiLedger.summary.start_equity);
+    } else {
+      start =
+        Number.isFinite(Number(demo.start)) && Number(demo.start) > 0
+          ? Number(demo.start)
+          : DEMO_DEFAULT_START;
+    }
     let equity = start;
     let lastTime = 0;
     const candles = [];
@@ -1563,8 +1873,8 @@
         at: Number(t.at) || time * 1000,
       });
     }
-    // Optional live candle for open mark P/L.
-    if (demo.position) {
+    // Optional live candle for open mark P/L (demo only — Live uses Kalshi ledger).
+    if (analyticsScope !== "live" && demo.position) {
       const mark = markOpenPosition(demo.position);
       if (mark && Number.isFinite(mark.unrealized)) {
         const open = Math.round(equity * 100) / 100;
@@ -2688,14 +2998,22 @@
     if (el.plChartCaption) {
       if (!hasBars) {
         el.plChartCaption.textContent =
-          "All-time closed trades as equity candles · dates on bottom";
+          analyticsScope === "live"
+            ? "Live Kalshi settlements as equity candles · tap Live Kalshi if empty"
+            : "All-time closed trades as equity candles · dates on bottom";
       } else {
         const wins = candles.filter((c) => c.kind !== "open" && c.won).length;
         const losses = Math.max(0, closedCount - wins);
         const last = candles[candles.length - 1];
         const net = Math.round((last.close - start) * 100) / 100;
         const spanBit = daySpan ? ` · ${daySpan}` : "";
-        el.plChartCaption.textContent = `All-time · ${closedCount} closed · ${formatWinLossRecord(
+        const scopeBit =
+          analyticsScope === "live"
+            ? "Live Kalshi · "
+            : analyticsScope === "demo"
+              ? "Demo · "
+              : "All-time · ";
+        el.plChartCaption.textContent = `${scopeBit}${closedCount} closed · ${formatWinLossRecord(
           wins,
           losses
         )} · equity ${money(last.close)} (${formatPl(net)})${spanBit}`;
@@ -2767,13 +3085,45 @@
       Array.isArray(demo.history) ? demo.history : [],
       loadTradeHistory()
     );
-    const list = demo.history;
-    const open = demo.position;
+    const useLedger =
+      analyticsScope === "live" &&
+      kalshiLedger &&
+      kalshiLedger.ok &&
+      (Array.isArray(kalshiLedger.events) ? kalshiLedger.events.length > 0 : false);
+    const list = useLedger
+      ? []
+      : filterTradesByScope(demo.history);
+    const open = analyticsScope === "live" ? null : demo.position;
     const openMark = open ? markOpenPosition(open) : null;
+    const ledgerPositions =
+      useLedger && Array.isArray(kalshiLedger.positions)
+        ? kalshiLedger.positions
+        : [];
 
     if (el.tradeHistorySummary) {
-      if (!list.length && !open) {
-        el.tradeHistorySummary.textContent = "No trades yet";
+      if (useLedger) {
+        const sum = kalshiLedger.summary || {};
+        const closed = Number(sum.settlement_count) || 0;
+        const wins = Number(sum.settlement_wins) || 0;
+        const losses = Number(sum.settlement_losses) || 0;
+        const totalPl = Number(sum.settlement_pl_sum) || 0;
+        const bal =
+          kalshiLedger.balance != null ? ` · cash ${money(kalshiLedger.balance)}` : "";
+        const openBit = ledgerPositions.length
+          ? ` · ${ledgerPositions.length} open`
+          : "";
+        el.tradeHistorySummary.textContent = closed
+          ? `Live Kalshi · ${closed} settled · ${wins}W-${losses}L · ${formatPl(
+              totalPl
+            )}${bal}${openBit}`
+          : `Live Kalshi${bal}${openBit || " · no settlements yet"}`;
+        el.tradeHistorySummary.classList.toggle("is-up", totalPl > 0);
+        el.tradeHistorySummary.classList.toggle("is-down", totalPl < 0);
+      } else if (!list.length && !open) {
+        el.tradeHistorySummary.textContent =
+          analyticsScope === "live"
+            ? "No Live Kalshi trades yet — connect & trade, or pull-to-refresh Options"
+            : "No trades yet";
         el.tradeHistorySummary.classList.remove("is-up", "is-down");
       } else {
         const closedRows = list.filter(
@@ -2798,8 +3148,14 @@
           ? ` · open ${open.side === "above" ? "Above" : "Below"}`
           : "";
         const spanBit = span ? ` · ${span}` : "";
+        const scopeBit =
+          analyticsScope === "live"
+            ? "Live · "
+            : analyticsScope === "demo"
+              ? "Demo · "
+              : "All-time · ";
         el.tradeHistorySummary.textContent = closed
-          ? `All-time · ${closed} closed · ${wins}W-${closed - wins}L · ${formatPl(
+          ? `${scopeBit}${closed} closed · ${wins}W-${closed - wins}L · ${formatPl(
               totalPl
             )}${spanBit}${openBit}`
           : open
@@ -2814,76 +3170,169 @@
     if (!el.tradeHistoryList) return;
 
     const rows = [];
-    if (open) {
-      const side = open.side === "above" ? "Above" : "Below";
-      const pl = openMark && openMark.unrealized;
-      const plClass =
-        pl == null ? "" : pl >= 0 ? "is-win" : "is-loss";
-      rows.push(
-        `<article class="trade-history-item is-open ${plClass}">` +
-          `<div class="trade-history-top">` +
-          `<span class="trade-history-kind">OPEN ${side}</span>` +
-          `<span class="trade-history-pl">${
-            pl == null ? "—" : formatPl(pl)
-          }</span>` +
-          `</div>` +
-          `<div class="trade-history-meta">${formatHistoryTime(
-            open.openedAt || open.lastAddedAt || Date.now()
-          )} · ${open.contracts} cts @ avg ${
-            open.askCents != null ? open.askCents + "¢" : "—"
-          }${open.fills > 1 ? ` · ${open.fills} fills` : ""} · paid ${money(
-            open.total
-          )}</div>` +
-          `</article>`
-      );
-    }
+    if (useLedger) {
+      for (const p of ledgerPositions) {
+        const side = p.side === "above" ? "Above" : "Below";
+        rows.push(
+          `<article class="trade-history-item is-open">` +
+            `<div class="trade-history-top">` +
+            `<span class="trade-history-kind">OPEN ${side}</span>` +
+            `<span class="trade-history-pl">${
+              p.market_exposure_dollars != null
+                ? money(p.market_exposure_dollars)
+                : "—"
+            }</span>` +
+            `</div>` +
+            `<div class="trade-history-meta">${
+              p.contracts != null ? p.contracts : "—"
+            } cts · ${(p.ticker || "").slice(0, 28)} · live Kalshi</div>` +
+            `</article>`
+        );
+      }
+      const events = (kalshiLedger.events || [])
+        .slice()
+        .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+      for (const ev of events) {
+        if (ev.kind === "fill") {
+          const side =
+            ev.side === "above" ? "Above" : ev.side === "below" ? "Below" : "—";
+          const act = (ev.action || "").toUpperCase() || "FILL";
+          const plTxt =
+            ev.cash_delta != null && Number.isFinite(Number(ev.cash_delta))
+              ? formatPl(Number(ev.cash_delta))
+              : "—";
+          const plClass =
+            ev.cash_delta == null
+              ? ""
+              : Number(ev.cash_delta) >= 0
+                ? "is-win"
+                : "is-loss";
+          rows.push(
+            `<article class="trade-history-item ${plClass}">` +
+              `<div class="trade-history-top">` +
+              `<span class="trade-history-kind">${act} ${side} · live</span>` +
+              `<span class="trade-history-pl">${plTxt}</span>` +
+              `</div>` +
+              `<div class="trade-history-meta">${formatHistoryTime(ev.at)} · ${
+                ev.contracts != null ? ev.contracts : "—"
+              } cts @ ${
+                ev.price_cents != null ? ev.price_cents + "¢" : "—"
+              } · ${(ev.ticker || "").slice(0, 24)}</div>` +
+              `</article>`
+          );
+        } else if (ev.kind === "settlement") {
+          const side =
+            ev.side === "above" ? "Above" : ev.side === "below" ? "Below" : "—";
+          const kind = ev.won ? "WIN" : "LOSS";
+          const plClass =
+            ev.pl == null ? "" : Number(ev.pl) >= 0 ? "is-win" : "is-loss";
+          rows.push(
+            `<article class="trade-history-item ${plClass}">` +
+              `<div class="trade-history-top">` +
+              `<span class="trade-history-kind">${kind} ${side} · settled</span>` +
+              `<span class="trade-history-pl">${
+                ev.pl == null ? "—" : formatPl(Number(ev.pl))
+              }</span>` +
+              `</div>` +
+              `<div class="trade-history-meta">${formatHistoryTime(ev.at)} · ${
+                ev.contracts != null ? ev.contracts : "—"
+              } cts · paid ${
+                ev.cost_dollars != null ? money(ev.cost_dollars) : "—"
+              } · got ${
+                ev.revenue_dollars != null ? money(ev.revenue_dollars) : "—"
+              } · live</div>` +
+              `</article>`
+          );
+        } else if (ev.kind === "deposit") {
+          rows.push(
+            `<article class="trade-history-item is-win">` +
+              `<div class="trade-history-top">` +
+              `<span class="trade-history-kind">DEPOSIT</span>` +
+              `<span class="trade-history-pl">${
+                ev.amount_dollars != null ? formatPl(Number(ev.amount_dollars)) : "—"
+              }</span>` +
+              `</div>` +
+              `<div class="trade-history-meta">${formatHistoryTime(ev.at)} · ${
+                ev.status || "credited"
+              }</div>` +
+              `</article>`
+          );
+        }
+      }
+    } else {
+      if (open) {
+        const side = open.side === "above" ? "Above" : "Below";
+        const pl = openMark && openMark.unrealized;
+        const plClass =
+          pl == null ? "" : pl >= 0 ? "is-win" : "is-loss";
+        rows.push(
+          `<article class="trade-history-item is-open ${plClass}">` +
+            `<div class="trade-history-top">` +
+            `<span class="trade-history-kind">OPEN ${side}</span>` +
+            `<span class="trade-history-pl">${
+              pl == null ? "—" : formatPl(pl)
+            }</span>` +
+            `</div>` +
+            `<div class="trade-history-meta">${formatHistoryTime(
+              open.openedAt || open.lastAddedAt || Date.now()
+            )} · ${open.contracts} cts @ avg ${
+              open.askCents != null ? open.askCents + "¢" : "—"
+            }${open.fills > 1 ? ` · ${open.fills} fills` : ""} · paid ${money(
+              open.total
+            )}</div>` +
+            `</article>`
+        );
+      }
 
-    for (const t of list) {
-      const side = t.side === "above" ? "Above" : t.side === "below" ? "Below" : "—";
-      let kind = "CLOSED";
-      if (t.kind === "settle") kind = t.won ? "WIN" : "LOSS";
-      else if (t.kind === "buy") kind = "BOUGHT";
-      else if (t.kind === "add") kind = "ADDED";
-      else if (t.kind === "close") kind = "CLOSED";
-      const plClass =
-        t.pl == null ? "" : t.won || t.pl >= 0 ? "is-win" : "is-loss";
-      const fills = t.fills > 1 ? ` · ${t.fills} fills` : "";
-      const exit = t.exitCents != null ? ` @ ${t.exitCents}¢` : "";
-      const tag =
-        t.entrySource === "auto" || t.autoTrade
-          ? " · AUTO"
-          : t.followedSuggest === true
-            ? " · Best Side"
-            : t.followedSuggest === false
-              ? " · Own call"
-              : "";
-      const mode = t.liveKalshi
-        ? " · live"
-        : t.accounted
-          ? ""
-          : " · paper";
-      const plTxt =
-        t.pl == null || !Number.isFinite(Number(t.pl))
-          ? t.text || "—"
-          : formatPl(Number(t.pl));
-      rows.push(
-        `<article class="trade-history-item ${plClass}">` +
-          `<div class="trade-history-top">` +
-          `<span class="trade-history-kind">${kind} ${side}${tag}</span>` +
-          `<span class="trade-history-pl">${plTxt}</span>` +
-          `</div>` +
-          `<div class="trade-history-meta">${formatHistoryTime(t.at)} · ${
-            t.contracts != null ? t.contracts : "—"
-          } cts @ avg ${t.askCents != null ? t.askCents + "¢" : "—"}${fills}${exit} · paid ${
-            t.total != null ? money(t.total) : "—"
-          }${mode}</div>` +
-          `</article>`
-      );
+      for (const t of list) {
+        const side = t.side === "above" ? "Above" : t.side === "below" ? "Below" : "—";
+        let kind = "CLOSED";
+        if (t.kind === "settle") kind = t.won ? "WIN" : "LOSS";
+        else if (t.kind === "buy") kind = "BOUGHT";
+        else if (t.kind === "add") kind = "ADDED";
+        else if (t.kind === "close") kind = "CLOSED";
+        const plClass =
+          t.pl == null ? "" : t.won || t.pl >= 0 ? "is-win" : "is-loss";
+        const fills = t.fills > 1 ? ` · ${t.fills} fills` : "";
+        const exit = t.exitCents != null ? ` @ ${t.exitCents}¢` : "";
+        const tag =
+          t.entrySource === "auto" || t.autoTrade
+            ? " · AUTO"
+            : t.followedSuggest === true
+              ? " · Best Side"
+              : t.followedSuggest === false
+                ? " · Own call"
+                : "";
+        const mode = t.liveKalshi
+          ? " · live"
+          : t.accounted
+            ? ""
+            : " · paper";
+        const plTxt =
+          t.pl == null || !Number.isFinite(Number(t.pl))
+            ? t.text || "—"
+            : formatPl(Number(t.pl));
+        rows.push(
+          `<article class="trade-history-item ${plClass}">` +
+            `<div class="trade-history-top">` +
+            `<span class="trade-history-kind">${kind} ${side}${tag}</span>` +
+            `<span class="trade-history-pl">${plTxt}</span>` +
+            `</div>` +
+            `<div class="trade-history-meta">${formatHistoryTime(t.at)} · ${
+              t.contracts != null ? t.contracts : "—"
+            } cts @ avg ${t.askCents != null ? t.askCents + "¢" : "—"}${fills}${exit} · paid ${
+              t.total != null ? money(t.total) : "—"
+            }${mode}</div>` +
+            `</article>`
+        );
+      }
     }
 
     if (!rows.length) {
       el.tradeHistoryList.innerHTML =
-        '<div class="trade-history-empty">Buy, add, close, or settle — trades will list here.</div>';
+        analyticsScope === "live"
+          ? '<div class="trade-history-empty">No Live Kalshi fills yet. Tap Live Kalshi above after Save &amp; connect — history loads from Kalshi, not paper.</div>'
+          : '<div class="trade-history-empty">Buy, add, close, or settle — trades will list here.</div>';
       renderPlChart();
       return;
     }
@@ -2903,10 +3352,15 @@
     }
     if (el.menuBtn) el.menuBtn.setAttribute("aria-expanded", "true");
     renderDemoUi();
+    paintAnalyticsScopeUi();
     renderTradeHistory();
     renderStrategyReport();
     applyTradeHistoryUi();
     syncAlertsUi();
+    applyLiveTradeLogUi();
+    renderLiveTradeLog();
+    // Pull real Kalshi fills so Live history/chart aren't empty.
+    void refreshAndPaintLiveTradeLog({ force: true });
     const resetScroll = () => {
       if (el.optionsBody) el.optionsBody.scrollTop = 0;
       if (el.optionsSheet) el.optionsSheet.scrollTop = 0;
@@ -4504,6 +4958,8 @@
       el.kalshiApiKeyId.placeholder = "Set via server env KALSHI_API_KEY_ID";
     }
     paintLiveKalshiBadge();
+    applyLiveTradeLogUi();
+    renderLiveTradeLog();
   }
 
 
@@ -4913,6 +5369,9 @@
           // Live buys just unlocked — push Auto-trade preference to server.
           void syncAutoTradeToServer();
           renderAutoTradeUi();
+          liveTradeLogOpen = true;
+          setAnalyticsScope("live", { persist: true });
+          void refreshAndPaintLiveTradeLog({ force: true });
         } else if (!quiet) {
           setStatus(
             data && data.error ? "warn" : "ok",
@@ -10338,6 +10797,25 @@
       el.strategyToggle.setAttribute("aria-expanded", "true");
       if (el.strategySection) el.strategySection.classList.add("is-open");
     }
+    document.querySelectorAll(".analytics-scope-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const scope = btn.dataset.scope;
+        if (scope) setAnalyticsScope(scope);
+      });
+    });
+    paintAnalyticsScopeUi();
+    if (el.liveTradeLogToggle) {
+      el.liveTradeLogToggle.addEventListener("click", () => {
+        liveTradeLogOpen = !liveTradeLogOpen;
+        applyLiveTradeLogUi();
+      });
+    }
+    if (el.liveTradeLogRefresh) {
+      el.liveTradeLogRefresh.addEventListener("click", () => {
+        void refreshAndPaintLiveTradeLog({ force: true });
+      });
+    }
+    applyLiveTradeLogUi();
     if (el.buySuggestUse) {
       el.buySuggestUse.addEventListener("click", () => {
         if (buySuggestStake != null) setBuyAmountUi(buySuggestStake, true);

@@ -4563,3 +4563,72 @@ body.portrait-app #chart {
   font-weight: 650;
   color: #f0c14b;
 }
+
+.live-trade-log {
+  margin: 10px 0 12px;
+  padding: 4px 10px 12px;
+  border: 1px solid rgba(26, 201, 107, 0.35);
+  border-radius: 12px;
+  background: linear-gradient(
+    165deg,
+    rgba(26, 201, 107, 0.1),
+    rgba(11, 18, 16, 0.55) 42%,
+    rgba(11, 18, 16, 0.2)
+  );
+}
+
+.live-trade-log.is-open .pl-chart-chevron {
+  transform: rotate(180deg);
+}
+
+.live-trade-log-body {
+  margin-top: 8px;
+}
+
+.live-trade-log .live-trade-log-summary {
+  margin-top: 2px;
+  display: block;
+  font-style: normal;
+  font-size: 0.78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: rgba(200, 255, 220, 0.85);
+}
+
+.live-trade-log .live-trade-log-summary.is-up {
+  color: var(--accent);
+}
+
+.live-trade-log .live-trade-log-summary.is-down {
+  color: var(--down);
+}
+
+.live-trade-log-cash {
+  font-size: 1.15rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: #e8fff0;
+  margin: 0 0 6px;
+}
+
+.live-trade-log-cash.is-up {
+  color: var(--accent);
+}
+
+.live-trade-log-cash.is-down {
+  color: var(--down);
+}
+
+.live-trade-log-note {
+  margin: 0 0 10px;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.35;
+  color: rgba(200, 255, 220, 0.72);
+}
+
+.live-trade-log #live-trade-log-refresh {
+  margin-top: 10px;
+  width: 100%;
+}

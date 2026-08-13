@@ -2227,6 +2227,501 @@ def kalshi_fetch_balance(creds: dict | None = None) -> dict:
     }
 
 
+def _kalshi_fp_float(value) -> float | None:
+    """Parse Kalshi fixed-point dollar/count strings (and ints) to float."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        s = str(value).strip()
+        if not s:
+            return None
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _kalshi_parse_ts_ms(raw) -> int | None:
+    """Normalize Kalshi timestamps (unix s/ms or ISO) to epoch ms."""
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        n = float(raw)
+        if n > 1e12:
+            return int(n)
+        if n > 1e9:
+            return int(n * 1000)
+        return None
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None
+        try:
+            if s.isdigit():
+                return _kalshi_parse_ts_ms(int(s))
+            # ISO-8601
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            return int(datetime.fromisoformat(s).timestamp() * 1000)
+        except Exception:
+            return None
+    return None
+
+
+def kalshi_paginated_list(
+    rel_path: str,
+    list_key: str,
+    *,
+    limit: int = 200,
+    max_pages: int = 8,
+    creds: dict | None = None,
+    extra_query: str = "",
+) -> dict:
+    """
+    Fetch a cursor-paginated Kalshi portfolio list (fills, settlements, …).
+    Returns {ok, items, pages, error?}.
+    """
+    creds = creds or get_kalshi_credentials()
+    if not creds:
+        return {"ok": False, "items": [], "pages": 0, "error": "not connected"}
+    limit = max(1, min(int(limit or 200), 1000))
+    max_pages = max(1, min(int(max_pages or 8), 20))
+    items: list = []
+    cursor = ""
+    pages = 0
+    last_error = None
+    while pages < max_pages:
+        pages += 1
+        qs = f"limit={limit}"
+        if cursor:
+            qs += f"&cursor={urllib.parse.quote(cursor)}"
+        if extra_query:
+            qs += f"&{extra_query.lstrip('&')}"
+        path = f"{rel_path}?{qs}"
+        code, payload = kalshi_authed_request("GET", path, creds=creds)
+        if code != 200 or not isinstance(payload, dict):
+            last_error = _kalshi_err_text(
+                (payload.get("error") if isinstance(payload, dict) else None)
+                or (payload.get("message") if isinstance(payload, dict) else None)
+                or payload
+                or f"HTTP {code}"
+            )
+            break
+        chunk = payload.get(list_key)
+        if isinstance(chunk, list):
+            items.extend(chunk)
+        cursor = payload.get("cursor") or ""
+        if not cursor or not isinstance(chunk, list) or len(chunk) == 0:
+            break
+    out = {"ok": last_error is None, "items": items, "pages": pages}
+    if last_error:
+        out["error"] = last_error
+        # Partial data is still useful.
+        if items:
+            out["ok"] = True
+            out["partial"] = True
+    return out
+
+
+def _normalize_kalshi_fill(raw: dict) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    ticker = (raw.get("ticker") or raw.get("market_ticker") or "").strip()
+    action = (raw.get("action") or "").strip().lower()  # buy | sell
+    side = (raw.get("side") or raw.get("outcome_side") or "").strip().lower()
+    if side not in ("yes", "no"):
+        # book_side: bid≈yes, ask≈no
+        book = (raw.get("book_side") or "").strip().lower()
+        if book == "bid":
+            side = "yes"
+        elif book == "ask":
+            side = "no"
+    count = _kalshi_fp_float(raw.get("count_fp") if raw.get("count_fp") is not None else raw.get("count"))
+    yes_px = _kalshi_fp_float(
+        raw.get("yes_price_dollars")
+        if raw.get("yes_price_dollars") is not None
+        else (raw.get("yes_price") / 100.0 if isinstance(raw.get("yes_price"), (int, float)) else None)
+    )
+    no_px = _kalshi_fp_float(
+        raw.get("no_price_dollars")
+        if raw.get("no_price_dollars") is not None
+        else (raw.get("no_price") / 100.0 if isinstance(raw.get("no_price"), (int, float)) else None)
+    )
+    fee = _kalshi_fp_float(raw.get("fee_cost")) or 0.0
+    # Price paid/received for this action+side.
+    if side == "yes":
+        price = yes_px
+    elif side == "no":
+        price = no_px if no_px is not None else ((1.0 - yes_px) if yes_px is not None else None)
+    else:
+        price = yes_px
+    notional = None
+    cash_delta = None
+    if count is not None and price is not None and action in ("buy", "sell"):
+        notional = round(count * price, 6)
+        # Buys spend cash; sells free cash. Fees reduce cash either way.
+        cash_delta = round(((-notional) if action == "buy" else notional) - fee, 6)
+    at_ms = _kalshi_parse_ts_ms(raw.get("created_time") or raw.get("ts"))
+    beat_side = "above" if side == "yes" else ("below" if side == "no" else None)
+    return {
+        "kind": "fill",
+        "fill_id": raw.get("fill_id") or raw.get("trade_id"),
+        "order_id": raw.get("order_id"),
+        "ticker": ticker,
+        "action": action or None,
+        "side": beat_side,
+        "kalshi_side": side or None,
+        "contracts": count,
+        "price_dollars": price,
+        "price_cents": int(round(price * 100)) if price is not None else None,
+        "yes_price_dollars": yes_px,
+        "no_price_dollars": no_px,
+        "fee_dollars": fee,
+        "notional_dollars": notional,
+        "cash_delta": cash_delta,
+        "is_taker": raw.get("is_taker"),
+        "at": at_ms,
+        "at_iso": raw.get("created_time"),
+    }
+
+
+def _normalize_kalshi_settlement(raw: dict) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    ticker = (raw.get("ticker") or "").strip()
+    yes_count = _kalshi_fp_float(raw.get("yes_count_fp") if raw.get("yes_count_fp") is not None else raw.get("yes_count")) or 0.0
+    no_count = _kalshi_fp_float(raw.get("no_count_fp") if raw.get("no_count_fp") is not None else raw.get("no_count")) or 0.0
+    yes_cost = _kalshi_fp_float(
+        raw.get("yes_total_cost_dollars")
+        if raw.get("yes_total_cost_dollars") is not None
+        else (
+            (raw.get("yes_total_cost") or 0) / 100.0
+            if raw.get("yes_total_cost") is not None
+            else 0.0
+        )
+    ) or 0.0
+    no_cost = _kalshi_fp_float(
+        raw.get("no_total_cost_dollars")
+        if raw.get("no_total_cost_dollars") is not None
+        else (
+            (raw.get("no_total_cost") or 0) / 100.0
+            if raw.get("no_total_cost") is not None
+            else 0.0
+        )
+    ) or 0.0
+    fee = _kalshi_fp_float(raw.get("fee_cost")) or 0.0
+    revenue_cents = raw.get("revenue")
+    try:
+        revenue_cents = int(revenue_cents) if revenue_cents is not None else 0
+    except (TypeError, ValueError):
+        revenue_cents = 0
+    revenue = revenue_cents / 100.0
+    cost = yes_cost + no_cost
+    # Settlement cash: payout lands in the account (cost already left on buys).
+    cash_delta = round(revenue - fee, 6)
+    pl = round(revenue - cost - fee, 6)
+    result = (raw.get("market_result") or "").strip().lower()
+    # Which side were we holding?
+    if yes_count > 0 and no_count <= 0:
+        held = "above"
+        won = result == "yes"
+    elif no_count > 0 and yes_count <= 0:
+        held = "below"
+        won = result == "no"
+    elif yes_count > 0 and no_count > 0:
+        held = "both"
+        won = pl >= 0
+    else:
+        held = None
+        won = pl >= 0
+    at_ms = _kalshi_parse_ts_ms(raw.get("settled_time") or raw.get("ts"))
+    return {
+        "kind": "settlement",
+        "ticker": ticker,
+        "event_ticker": raw.get("event_ticker"),
+        "market_result": result or None,
+        "side": held,
+        "yes_contracts": yes_count,
+        "no_contracts": no_count,
+        "contracts": yes_count + no_count,
+        "yes_cost_dollars": yes_cost,
+        "no_cost_dollars": no_cost,
+        "cost_dollars": cost,
+        "revenue_dollars": revenue,
+        "fee_dollars": fee,
+        "pl": pl,
+        "won": bool(won),
+        "cash_delta": cash_delta,
+        "at": at_ms,
+        "at_iso": raw.get("settled_time"),
+    }
+
+
+def _normalize_kalshi_deposit(raw: dict) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    # Amount may be cents int or dollar string depending on API vintage.
+    amount = None
+    if raw.get("amount_dollars") is not None:
+        amount = _kalshi_fp_float(raw.get("amount_dollars"))
+    elif raw.get("deposit_amount_dollars") is not None:
+        amount = _kalshi_fp_float(raw.get("deposit_amount_dollars"))
+    elif isinstance(raw.get("amount"), (int, float)):
+        # Heuristic: values > 1000 are likely cents for real deposits.
+        n = float(raw.get("amount"))
+        amount = n / 100.0 if abs(n) >= 1000 or raw.get("unit") == "cents" else n
+    status = (raw.get("status") or "").strip().lower()
+    at_ms = _kalshi_parse_ts_ms(
+        raw.get("created_time") or raw.get("ts") or raw.get("updated_time")
+    )
+    return {
+        "kind": "deposit",
+        "deposit_id": raw.get("deposit_id") or raw.get("id"),
+        "status": status or None,
+        "amount_dollars": amount,
+        "cash_delta": amount if status in ("", "applied", "complete", "completed", "credited") or status is None else None,
+        "at": at_ms,
+        "at_iso": raw.get("created_time") or raw.get("updated_time"),
+    }
+
+
+def kalshi_fetch_open_positions(creds: dict | None = None) -> dict:
+    """All open market positions (not just one ticker)."""
+    creds = creds or get_kalshi_credentials()
+    if not creds:
+        return {"ok": False, "positions": [], "error": "not connected"}
+    code, payload = kalshi_authed_request(
+        "GET", "/portfolio/positions?limit=200&settlement_status=unsettled", creds=creds
+    )
+    if code != 200 or not isinstance(payload, dict):
+        # Fallback without settlement_status filter (older API).
+        code2, payload2 = kalshi_authed_request(
+            "GET", "/portfolio/positions?limit=200", creds=creds
+        )
+        if code2 != 200 or not isinstance(payload2, dict):
+            err = _kalshi_err_text(
+                (payload.get("error") if isinstance(payload, dict) else None)
+                or payload
+                or f"HTTP {code}"
+            )
+            return {"ok": False, "positions": [], "error": err, "status": code}
+        payload = payload2
+    market_positions = payload.get("market_positions") or payload.get("positions") or []
+    out = []
+    for p in market_positions if isinstance(market_positions, list) else []:
+        if not isinstance(p, dict):
+            continue
+        ticker = (p.get("ticker") or p.get("market_ticker") or "").strip()
+        # position / position_fp can be signed (YES positive, NO negative).
+        pos = _kalshi_fp_float(
+            p.get("position_fp") if p.get("position_fp") is not None else p.get("position")
+        )
+        if pos is None or abs(pos) < 0.0001:
+            continue
+        side = "above" if pos > 0 else "below"
+        contracts = abs(pos)
+        out.append(
+            {
+                "ticker": ticker,
+                "side": side,
+                "contracts": contracts,
+                "market_exposure_dollars": _kalshi_fp_float(
+                    p.get("market_exposure_dollars")
+                    if p.get("market_exposure_dollars") is not None
+                    else (
+                        (p.get("market_exposure") or 0) / 100.0
+                        if p.get("market_exposure") is not None
+                        else None
+                    )
+                ),
+                "realized_pnl_dollars": _kalshi_fp_float(
+                    p.get("realized_pnl_dollars")
+                    if p.get("realized_pnl_dollars") is not None
+                    else (
+                        (p.get("realized_pnl") or 0) / 100.0
+                        if p.get("realized_pnl") is not None
+                        else None
+                    )
+                ),
+                "fees_paid_dollars": _kalshi_fp_float(p.get("fees_paid_dollars")),
+            }
+        )
+    return {"ok": True, "positions": out, "raw_count": len(market_positions) if isinstance(market_positions, list) else 0}
+
+
+def kalshi_build_ledger(creds: dict | None = None) -> dict:
+    """
+    Live Kalshi cash ledger: fills + settlements (+ deposits) with equity curve.
+    This is the source of truth for Live history / P/L — not the paper demo log.
+    """
+    creds = creds or get_kalshi_credentials()
+    if not creds:
+        return {
+            "ok": False,
+            "connected": False,
+            "error": "Kalshi not connected — Save & connect in Options",
+            "fills": [],
+            "settlements": [],
+            "deposits": [],
+            "positions": [],
+            "events": [],
+            "equity": [],
+            "summary": None,
+        }
+
+    bal = kalshi_fetch_balance(creds)
+    fills_raw = kalshi_paginated_list("/portfolio/fills", "fills", limit=200, max_pages=10, creds=creds)
+    settles_raw = kalshi_paginated_list(
+        "/portfolio/settlements", "settlements", limit=200, max_pages=10, creds=creds
+    )
+    deposits_raw = kalshi_paginated_list(
+        "/portfolio/deposits", "deposits", limit=100, max_pages=5, creds=creds
+    )
+    # Deposits endpoint may 404 on some accounts — ignore soft failures.
+    if not deposits_raw.get("ok") and not deposits_raw.get("items"):
+        deposits_raw = {"ok": True, "items": [], "pages": 0, "skipped": True}
+    positions = kalshi_fetch_open_positions(creds)
+
+    fills = []
+    for row in fills_raw.get("items") or []:
+        n = _normalize_kalshi_fill(row)
+        if n:
+            fills.append(n)
+    settlements = []
+    for row in settles_raw.get("items") or []:
+        n = _normalize_kalshi_settlement(row)
+        if n:
+            settlements.append(n)
+    deposits = []
+    for row in deposits_raw.get("items") or []:
+        n = _normalize_kalshi_deposit(row)
+        if n:
+            deposits.append(n)
+
+    events: list[dict] = []
+    events.extend(fills)
+    events.extend(settlements)
+    for d in deposits:
+        if d.get("cash_delta") is not None:
+            events.append(d)
+    # Stable chronological order.
+    events.sort(key=lambda e: (e.get("at") is None, e.get("at") or 0, e.get("kind") or ""))
+
+    # Reconstruct cash path. Prefer anchoring so the last point matches live balance.
+    running = 0.0
+    equity_pts = []
+    for ev in events:
+        delta = ev.get("cash_delta")
+        if delta is None:
+            continue
+        try:
+            delta_f = float(delta)
+        except (TypeError, ValueError):
+            continue
+        running = round(running + delta_f, 6)
+        equity_pts.append(
+            {
+                "at": ev.get("at"),
+                "cash_delta": delta_f,
+                "equity_raw": running,
+                "kind": ev.get("kind"),
+                "ticker": ev.get("ticker"),
+                "action": ev.get("action"),
+                "side": ev.get("side"),
+                "pl": ev.get("pl"),
+                "contracts": ev.get("contracts"),
+                "price_cents": ev.get("price_cents"),
+            }
+        )
+
+    live_balance = bal.get("balance") if bal.get("ok") else None
+    # Shift so final equity matches Kalshi cash (accounts for history cutoff / missing deposits).
+    shift = 0.0
+    if live_balance is not None and equity_pts:
+        shift = round(float(live_balance) - float(equity_pts[-1]["equity_raw"]), 6)
+    for pt in equity_pts:
+        pt["equity"] = round(float(pt["equity_raw"]) + shift, 6)
+    start_equity = round(shift, 6) if equity_pts else (float(live_balance) if live_balance is not None else None)
+
+    settle_pls = [float(s["pl"]) for s in settlements if s.get("pl") is not None]
+    fill_buys = [f for f in fills if f.get("action") == "buy"]
+    fill_sells = [f for f in fills if f.get("action") == "sell"]
+    biggest_loss = min(settlements, key=lambda s: float(s.get("pl") or 0), default=None)
+    biggest_win = max(settlements, key=lambda s: float(s.get("pl") or 0), default=None)
+
+    # Peak → current drawdown on reconstructed equity.
+    peak = start_equity if start_equity is not None else 0.0
+    max_dd = 0.0
+    peak_eq = peak
+    trough_eq = peak
+    for pt in equity_pts:
+        eq = float(pt["equity"])
+        if eq > peak:
+            peak = eq
+        dd = eq - peak
+        if dd < max_dd:
+            max_dd = dd
+            peak_eq = peak
+            trough_eq = eq
+
+    summary = {
+        "balance": live_balance,
+        "balance_ok": bool(bal.get("ok")),
+        "balance_error": bal.get("error"),
+        "start_equity": start_equity,
+        "end_equity": equity_pts[-1]["equity"] if equity_pts else live_balance,
+        "fill_count": len(fills),
+        "buy_count": len(fill_buys),
+        "sell_count": len(fill_sells),
+        "settlement_count": len(settlements),
+        "deposit_count": len(deposits),
+        "open_positions": len(positions.get("positions") or []),
+        "settlement_pl_sum": round(sum(settle_pls), 2) if settle_pls else 0.0,
+        "settlement_wins": sum(1 for s in settlements if s.get("won")),
+        "settlement_losses": sum(1 for s in settlements if s.get("won") is False),
+        "max_drawdown": round(max_dd, 2),
+        "drawdown_from_peak": round(max_dd, 2),
+        "peak_equity": round(peak_eq, 2) if equity_pts else None,
+        "trough_equity": round(trough_eq, 2) if equity_pts else None,
+        "biggest_settlement_loss": biggest_loss,
+        "biggest_settlement_win": biggest_win,
+        "equity_shift": shift,
+        "pages": {
+            "fills": fills_raw.get("pages"),
+            "settlements": settles_raw.get("pages"),
+            "deposits": deposits_raw.get("pages"),
+        },
+        "partial": bool(fills_raw.get("partial") or settles_raw.get("partial")),
+        "errors": {
+            k: v
+            for k, v in {
+                "fills": fills_raw.get("error"),
+                "settlements": settles_raw.get("error"),
+                "deposits": None if deposits_raw.get("skipped") else deposits_raw.get("error"),
+                "positions": positions.get("error"),
+                "balance": bal.get("error") if not bal.get("ok") else None,
+            }.items()
+            if v
+        },
+    }
+
+    return {
+        "ok": True,
+        "connected": True,
+        "live_enabled": bool(creds.get("live_enabled")),
+        "key_hint": creds.get("key_hint"),
+        "balance": live_balance,
+        "fills": fills,
+        "settlements": settlements,
+        "deposits": deposits,
+        "positions": positions.get("positions") or [],
+        "events": events,
+        "equity": equity_pts,
+        "summary": summary,
+    }
+
+
 def kalshi_account_status(fetch_balance: bool = True) -> dict:
     creds = get_kalshi_credentials()
     auto = auto_trade_status()
@@ -3206,6 +3701,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, auto_trade_status())
             return
 
+        if path in ("/api/kalshi/ledger", "/api/kalshi/fills", "/api/kalshi/history"):
+            # Live Kalshi fills + settlements + equity (source of truth for Live P/L).
+            self._send_json(200, kalshi_build_ledger())
+            return
+
         if path in ("/api/demo-account", "/api/account"):
             user_id = _normalize_user_id(
                 (qs.get("userId") or qs.get("user_id") or [None])[0]
@@ -3241,7 +3741,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.3.9",
+                    "version": "2.4.0",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

@@ -6457,6 +6457,7 @@
     if (el.buySlide) {
       el.buySlide.classList.remove("is-complete", "is-filled", "is-failed");
     }
+    if (el.buySlideThumb) el.buySlideThumb.textContent = "››";
     setBuySlideProgress(0);
     refreshBuySheetPreview();
   }

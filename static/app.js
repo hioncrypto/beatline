@@ -4919,13 +4919,13 @@
     if (el.kalshiLiveToggleHint) {
       if (!kalshiLive.connected) {
         el.kalshiLiveToggleHint.textContent =
-          "Grayed out until you Save & connect API keys below";
+          "1¢/contract only · grayed out until Save & connect";
       } else if (kalshiLive.liveEnabled) {
         el.kalshiLiveToggleHint.textContent =
-          "ON — slide-to-buy and Auto-trade use real Kalshi money";
+          "ON · 1¢/contract only · uses leftover Kalshi cash";
       } else {
         el.kalshiLiveToggleHint.textContent =
-          "Connected — flip this ON to arm live / auto-trade";
+          "Connected · flip ON for 1¢-only live / auto buys";
       }
     }
     if (el.kalshiLiveStatus) {

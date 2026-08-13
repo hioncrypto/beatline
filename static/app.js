@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.56";
+  const APP_VERSION = "10.57";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -522,6 +522,24 @@
   let suppressTargetChimeUntil = 0;
   /** While > now, do not FG Best-buy chime (resume / open quiet-sync). */
   let suppressEdgeChimeUntil = 0;
+  /** How long to stay silent after returning from background. */
+  const RESUME_QUIET_MS = 12_000;
+
+  /** Quiet-sync after open/resume — no FG chime dump of edges already seen. */
+  function beginResumeQuietSync() {
+    const until = Date.now() + RESUME_QUIET_MS;
+    suppressEdgeChimeUntil = until;
+    suppressTargetChimeUntil = Math.max(suppressTargetChimeUntil, until);
+    pendingEdgeChime = false;
+    if (lastBestPick && lastBestPick.side) {
+      try {
+        markEdgeSounded(lastBestPick);
+        quietArmClearEdge(lastBestPick, { chimed: false });
+      } catch {
+        // ignore
+      }
+    }
+  }
   let lastKalshiUrl = "https://kalshi.com/markets/kxbtc15m";
   let lastYesPct = null;
   let lastSettlementAvg = null;
@@ -7364,7 +7382,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.30", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.35", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -7485,9 +7503,13 @@
     }
     if (!chimeOn) return;
     if (!pageOwnsAlerts()) return;
+    // Resume quiet-sync: do not re-chime the sticky the phone already got.
+    if (Date.now() < suppressEdgeChimeUntil) {
+      quietArmClearEdge(best, { chimed: false, ticker });
+      return;
+    }
     if (sameSoundedSticky(sticky)) return;
     if (demo.position && demo.position.side !== side) return;
-    // Bypass resume suppress — this is a live market signal, not a reopen dump.
     const sideLabel = side === "above" ? "Above" : "Below";
     const sug = best.suggestedStake;
     setStatus(
@@ -10990,10 +11012,8 @@
   }
 
   function boot() {
-    // Short sync window for SW edge-state — do not quiet-ack/mark sounded.
-    suppressEdgeChimeUntil = Date.now() + 2500;
-    suppressTargetChimeUntil = Date.now() + 4000;
-    pendingEdgeChime = false;
+    // Open quiet-sync — no dump of sticky edges on first paint.
+    beginResumeQuietSync();
     if (!window.LightweightCharts) {
       setStatus("warn", "Chart library failed to load");
       return;
@@ -11454,14 +11474,8 @@
         startRolloverBurst();
         // Foreground return: flush local ledger (background often never finishes POST).
         void pushDemoStateToServer();
-        // Quiet-sync any 15m window that rolled while we were away — do not
-        // dump the "new 15m target / Price to beat" chime on open.
-        suppressTargetChimeUntil = Date.now() + 4000;
-        // Brief SW sync only. If BG already notified, swAlreadySoundedEdge
-        // blocks re-chime. If BG missed, allow a real catch-up chime after sync
-        // — that is the buy signal, not a false dump.
-        suppressEdgeChimeUntil = Date.now() + 2500;
-        pendingEdgeChime = false;
+        // Quiet-sync — do NOT dump Best-buy chimes already seen while away.
+        beginResumeQuietSync();
         postToSW({ type: "get-edge-state" });
         if (lastBestPick && lastBestPick.side) {
           const ask = Math.round(Number(lastBestPick.askCents) || 0);
@@ -11469,10 +11483,7 @@
           lastClearEdgeAlertKey = `${ticker}:${lastBestPick.side}:${ask}`;
           persistEdgeAlertKey(lastClearEdgeAlertKey);
           edgeAlertsArmed = true;
-          // Only mark sounded when SW already rang this sticky while away.
-          if (swAlreadySoundedEdge(lastBestPick)) {
-            markEdgeSounded(lastBestPick, { ask });
-          }
+          markEdgeSounded(lastBestPick, { ask });
           quietArmClearEdge(lastBestPick, { chimed: false });
         }
         if (
@@ -11484,15 +11495,17 @@
           subscribePush({ forceRefresh: true }).catch(() => {});
         }
         setTimeout(() => {
-          // Re-read SW state then score — catch-up chime if phone never got it.
+          // Re-read SW state then score — stays quiet under RESUME_QUIET_MS.
           postToSW({ type: "get-edge-state" });
           setTimeout(() => {
             refreshTarget({ forceCandles: true });
           }, 200);
         }, 300);
+        // Health chip only — never a chime.
         runSystemHealthReport({ force: true });
       } else {
-        // Page hidden — system notification is the only audible chime.
+        // Page hidden — prepare quiet resume; tray uses normal dedupe (no spam).
+        beginResumeQuietSync();
         if (
           chimeOn &&
           "Notification" in window &&
@@ -11506,26 +11519,27 @@
           target: lastFifteenTarget,
           chimeOn,
         });
-        // Always poke the SW poll — Chrome suspends the worker after hide.
-        postToSW({ type: "check-now", forceNotify: true });
+        // Poke SW poll without force-firing a duplicate Best-buy dump.
+        postToSW({ type: "check-now", forceNotify: false });
         if (chimeOn && lastBestPick && lastBestPick.side) {
           const ask = Math.round(Number(lastBestPick.askCents) || 0);
           const ticker = lastTicker || lastFifteenTicker || "";
           pendingEdgeChime = false;
-          // Always fire tray when leaving on a clear edge — FG chime is gone
-          // once the app is away; skipping "already sounded" left the phone quiet.
-          postToSW({
-            type: "edge-notify",
-            force: true,
-            bypassDedupe: true,
-            side: lastBestPick.side,
-            askCents: ask || null,
-            pWin: lastBestPick.pWin,
-            suggestStake: lastBestPick.suggestedStake,
-            ticker,
-            beat: lastTarget,
-            chimeOn,
-          });
+          // Tray only if this sticky was never sounded — no bypass spam.
+          if (!sameSoundedSticky(`${ticker}:${lastBestPick.side}`)) {
+            postToSW({
+              type: "edge-notify",
+              force: false,
+              bypassDedupe: false,
+              side: lastBestPick.side,
+              askCents: ask || null,
+              pWin: lastBestPick.pWin,
+              suggestStake: lastBestPick.suggestedStake,
+              ticker,
+              beat: lastTarget,
+              chimeOn,
+            });
+          }
         }
         // Also ask the server — client lastBestPick can lag / miss while away.
         if (chimeOn) {
@@ -11533,23 +11547,26 @@
             .then((r) => r.json())
             .then((edge) => {
               if (!(edge && edge.clear && edge.side)) return;
+              const ticker = edge.ticker || lastTicker || lastFifteenTicker || "";
+              const sticky = `${ticker}:${edge.side}`;
+              if (sameSoundedSticky(sticky)) return;
               if (
                 lastBestPick &&
                 lastBestPick.side === edge.side &&
                 Math.round(Number(lastBestPick.askCents) || 0) ===
                   Math.round(Number(edge.ask_cents) || 0)
               ) {
-                return; // already notified from lastBestPick above
+                return;
               }
               postToSW({
                 type: "edge-notify",
-                force: true,
-                bypassDedupe: true,
+                force: false,
+                bypassDedupe: false,
                 side: edge.side,
                 askCents: edge.ask_cents,
                 pWin: edge.p_win,
                 suggestStake: edge.suggest_stake,
-                ticker: edge.ticker || lastTicker || lastFifteenTicker,
+                ticker,
                 beat: edge.beat ?? edge.price_to_beat ?? lastTarget,
                 chimeOn,
               });

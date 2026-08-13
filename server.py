@@ -3210,9 +3210,7 @@ def place_kalshi_buy(
         return {"ok": False, "error": "Invalid ask"}
     if ask_cents < 1 or ask_cents > 99:
         return {"ok": False, "error": "Ask must be 1–99¢"}
-    # Hard lock: every live buy is 1¢/contract — ignore higher client limits.
-    if ask_cents != LIVE_BUY_ONLY_CENTS:
-        ask_cents = LIVE_BUY_ONLY_CENTS
+    # Manual / API buys may use any 1–99¢ limit. Auto-trade enforces 1¢ earlier.
 
     client_order_id = (client_order_id or "").strip() or str(uuid.uuid4())
     yes_no = "yes" if side == "above" else "no"
@@ -3734,8 +3732,9 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.3",
+                    "version": "2.4.4",
                     "live_buy_only_cents": LIVE_BUY_ONLY_CENTS,
+                    "auto_buy_only_cents": LIVE_BUY_ONLY_CENTS,
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

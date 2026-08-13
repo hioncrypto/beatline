@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.57";
+  const APP_VERSION = "10.58";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -399,6 +399,9 @@
     buySheetMeta: document.getElementById("buy-sheet-meta"),
     buySheetX: document.getElementById("buy-sheet-x"),
     buyAmount: document.getElementById("buy-amount"),
+    buyLimitCents: document.getElementById("buy-limit-cents"),
+    buyLimitLabel: document.getElementById("buy-limit-label"),
+    buyLimitHint: document.getElementById("buy-limit-hint"),
     buyRange: document.getElementById("buy-range"),
     buyRangeValue: document.getElementById("buy-range-value"),
     buySuggest: document.getElementById("buy-suggest"),
@@ -1794,9 +1797,9 @@
     const note =
       (lastAutoTradeNote || "").trim() ||
       (kalshiLive.serverArmed
-        ? "armed · waiting for clear Best Side @ 1¢"
+        ? "armed · auto waits for Best Side @ 1¢"
         : isLiveKalshi()
-          ? "Live ON · watching"
+          ? "Live ON · manual any ¢ · auto @ 1¢"
           : "Connected · turn Live buys on");
     if (el.liveActivityNow) el.liveActivityNow.textContent = note;
 
@@ -2010,7 +2013,7 @@
     if (el.liveTradeLogNote) {
       const bot = (lastAutoTradeNote || "").trim();
       el.liveTradeLogNote.textContent = isLiveKalshi()
-        ? `Live ON · 1¢ buys only · ${bot || "watching"} · full Kalshi ledger + every bot attempt shown below.`
+        ? `Live ON · auto @ 1¢ only · manual any ask · ${bot || "watching"} · full Kalshi ledger + every bot attempt shown below.`
         : `Connected · ${bot || "turn Live buys on"} · ledger + attempts still visible.`;
     }
 
@@ -5295,13 +5298,13 @@
     if (el.kalshiLiveToggleHint) {
       if (!kalshiLive.connected) {
         el.kalshiLiveToggleHint.textContent =
-          "1¢/contract only · grayed out until Save & connect";
+          "Manual any ¢ · auto @ 1¢ · connect API keys first";
       } else if (kalshiLive.liveEnabled) {
         el.kalshiLiveToggleHint.textContent =
-          "ON · 1¢/contract only · uses leftover Kalshi cash";
+          "ON · manual any ask/limit · auto waits for 1¢";
       } else {
         el.kalshiLiveToggleHint.textContent =
-          "Connected · flip ON for 1¢-only live / auto buys";
+          "Connected · flip ON for live manual + 1¢ auto";
       }
     }
     if (el.kalshiLiveStatus) {
@@ -5834,19 +5837,28 @@
     if (!sized || !(sized.contracts > 0)) {
       return { ok: false, error: "Need contracts to buy" };
     }
-    // Live buys hard-locked to 1¢/contract (server enforces the same).
-    const askCents = 1;
+    const slip =
+      opts && Number.isFinite(Number(opts.slipCents))
+        ? Math.max(0, Math.round(Number(opts.slipCents)))
+        : 0;
+    // Manual override: optional limit ¢, else live ask (+ slip).
+    let askCents;
+    if (opts && Number.isFinite(Number(opts.limitCents))) {
+      askCents = Math.min(99, Math.max(1, Math.round(Number(opts.limitCents))));
+    } else {
+      const baseAsk = Math.round(Number(sized.askCents) || 0);
+      askCents = Math.min(99, Math.max(1, baseAsk + slip));
+    }
     const stakeUsd =
       opts && opts.stakeUsd != null
         ? Number(opts.stakeUsd)
-        : Number.isFinite(Number(kalshiLive.balance))
-          ? Number(kalshiLive.balance)
-          : Number(sized.total) || 0;
-    const priced = roiForStake(askCents, Math.max(0.01, stakeUsd)) || sized;
+        : Number(sized.total) || 0;
+    const priced =
+      askCents !== Math.round(Number(sized.askCents) || 0)
+        ? roiForStake(askCents, Math.max(0.01, stakeUsd)) || sized
+        : sized;
     const contracts =
-      priced && priced.contracts > 0
-        ? priced.contracts
-        : Math.max(1, Math.floor(Math.max(0.01, stakeUsd) / 0.01));
+      priced && priced.contracts > 0 ? priced.contracts : sized.contracts;
     try {
       const res = await fetch("/api/kalshi/order", {
         method: "POST",
@@ -6055,11 +6067,32 @@
       setStatus("warn", "Wait for a live window");
       return false;
     }
-    const ask = side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
-    const sized = roiForStake(ask, stake);
+    const ask =
+      opts && Number.isFinite(Number(opts.askCents))
+        ? Math.min(99, Math.max(1, Math.round(Number(opts.askCents))))
+        : side === "above"
+          ? lastRoiAsks.above
+          : lastRoiAsks.below;
+    let sized = roiForStake(ask, stake);
     if (!sized || sized.empty) {
       setStatus("warn", "Need a live ask");
       return false;
+    }
+    const liveOrder = (opts && opts.order) || null;
+    const fillN =
+      liveOrder && Number.isFinite(Number(liveOrder.fill_count))
+        ? Math.max(0, Math.round(Number(liveOrder.fill_count)))
+        : liveOrder && Number.isFinite(Number(liveOrder.fills_count))
+          ? Math.max(0, Math.round(Number(liveOrder.fills_count)))
+          : null;
+    if (fillN != null && fillN > 0 && fillN !== sized.contracts) {
+      // Prefer actual Kalshi fill count when it differs from our size estimate.
+      const refill = roiForStake(ask, Math.max(0.01, (fillN * ask) / 100));
+      if (refill && !refill.empty) {
+        sized = { ...refill, contracts: fillN };
+      } else {
+        sized = { ...sized, contracts: fillN };
+      }
     }
     const accounted = liveKalshi
       ? false
@@ -6078,7 +6111,6 @@
     const entrySpot =
       spotN != null && Number.isFinite(spotN) ? spotN : null;
     const follow = followMetaForSide(side);
-    const liveOrder = (opts && opts.order) || null;
     const entrySource = autoTradeFill
       ? "auto"
       : liveKalshi
@@ -6247,11 +6279,39 @@
     return n;
   }
 
+  function readBuyLimitCents() {
+    if (!el.buyLimitCents) return null;
+    const raw = String(el.buyLimitCents.value || "").trim();
+    if (!raw) return null;
+    const n = Math.round(Number(raw));
+    if (!Number.isFinite(n) || n < 1 || n > 99) return null;
+    return n;
+  }
+
+  function setBuyLimitUi(cents) {
+    if (!el.buyLimitCents) return;
+    if (cents == null || !Number.isFinite(Number(cents))) {
+      if (document.activeElement !== el.buyLimitCents) {
+        el.buyLimitCents.value = "";
+      }
+      return;
+    }
+    const n = Math.min(99, Math.max(1, Math.round(Number(cents))));
+    if (document.activeElement !== el.buyLimitCents) {
+      el.buyLimitCents.value = String(n);
+    }
+  }
+
   function refreshBuySheetPreview() {
     if (!buySheetOpen || !buySheetSide) return;
     const side = buySheetSide;
     const amount = readBuyAmount();
-    const ask = side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
+    const liveAsk = side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
+    const limitOverride =
+      isLiveKalshi() && readBuyLimitCents() != null
+        ? readBuyLimitCents()
+        : null;
+    const ask = limitOverride != null ? limitOverride : liveAsk;
     const sized = roiForStake(ask, amount);
     if (el.buyBalanceHint) {
       if (isLiveKalshi()) {
@@ -6266,7 +6326,14 @@
       }
     }
     if (el.buySheetMeta) {
-      const askTxt = ask != null ? `${Math.round(ask)}¢ ask` : "ask —";
+      const askTxt =
+        liveAsk != null
+          ? limitOverride != null && limitOverride !== Math.round(liveAsk)
+            ? `limit ${limitOverride}¢ · book ${Math.round(liveAsk)}¢`
+            : `${Math.round(liveAsk)}¢ ask`
+          : limitOverride != null
+            ? `limit ${limitOverride}¢`
+            : "ask —";
       const adding = !!(demo.position && demo.position.side === side);
       el.buySheetMeta.textContent = adding
         ? `Add ${side === "above" ? "Above" : "Below"} · ${askTxt} · now ${
@@ -6466,6 +6533,19 @@
       el.buyAmount.max = String(buyAmountCap());
     }
     setBuyAmountUi(preferred, suggested != null);
+    const showLimit = isLiveKalshi();
+    if (el.buyLimitLabel) el.buyLimitLabel.hidden = !showLimit;
+    if (el.buyLimitHint) el.buyLimitHint.hidden = !showLimit;
+    if (el.buyLimitCents) {
+      const row = el.buyLimitCents.closest(".buy-amount-row");
+      if (row) row.hidden = !showLimit;
+      if (showLimit) {
+        // Prefill with live ask so you can edit or leave as-is.
+        setBuyLimitUi(ask);
+      } else {
+        setBuyLimitUi(null);
+      }
+    }
     if (el.buySheet) {
       el.buySheet.hidden = false;
       el.buySheet.removeAttribute("aria-hidden");
@@ -6569,7 +6649,9 @@
 
     if (isLiveKalshi()) {
       const ask = side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
-      const sized = roiForStake(ask, amount);
+      const limitCents = readBuyLimitCents();
+      const pricedAsk = limitCents != null ? limitCents : ask;
+      const sized = roiForStake(pricedAsk, amount);
       if (!sized || sized.empty) {
         buyConfirming = false;
         if (el.buySlide) el.buySlide.classList.remove("is-complete");
@@ -6578,7 +6660,10 @@
         return;
       }
       if (el.buySlideLabel) el.buySlideLabel.textContent = "Sending…";
-      const live = await placeLiveKalshiBuy(side, sized);
+      const live = await placeLiveKalshiBuy(side, sized, {
+        limitCents: limitCents != null ? limitCents : undefined,
+        stakeUsd: amount,
+      });
       if (!live || !live.ok) {
         buyConfirming = false;
         if (el.buySlide) el.buySlide.classList.remove("is-complete");
@@ -6587,7 +6672,11 @@
         return;
       }
       // Track locally for open P/L UI without debiting demo bankroll.
-      const ok = demoBuy(side, amount, { liveKalshi: true, order: live });
+      const ok = demoBuy(side, amount, {
+        liveKalshi: true,
+        order: live,
+        askCents: pricedAsk,
+      });
       if (!ok) {
         buyConfirming = false;
         if (el.buySlide) el.buySlide.classList.remove("is-complete");
@@ -6600,9 +6689,9 @@
       }
       setStatus(
         "ok",
-        `Kalshi filled ${Math.round(live.fill_count || sized.contracts)} cts · ${
+        `Kalshi filled ${Math.round(live.fill_count || live.fills_count || sized.contracts)} cts · ${
           side === "above" ? "Above" : "Below"
-        }`
+        } @${Math.round(live.ask_cents || live.limit_ask_cents || pricedAsk)}¢`
       );
       dismissBuySheet(380);
       return;
@@ -8395,7 +8484,7 @@
         el.autoTradeStatus.textContent =
           note && note !== "waiting for clear Best Side"
             ? `LIVE auto · ${note}`
-            : "LIVE auto · waiting for clear Best Side (≤1% bal)";
+            : "LIVE auto · waiting for Best Side @ 1¢ (≤1% bal)";
         el.autoTradeStatus.classList.add("is-live");
       } else {
         const note = autoTradeDisplayNote();
@@ -8574,7 +8663,8 @@
             return false;
           }
           live = await placeLiveKalshiBuy(best.side, slipSized, {
-            slipCents: 3,
+            // Auto path must stay 1¢-only even on client fallback.
+            limitCents: 1,
             stakeUsd: suggestStake,
           });
         }
@@ -8598,6 +8688,7 @@
           autoTrade: true,
           entrySource: "auto",
           order: live,
+          askCents: live.limit_ask_cents || live.ask_cents || 1,
         });
         if (!ok) {
           lastAutoTradeNote = "filled but local track failed";
@@ -11347,6 +11438,18 @@
       });
       el.buyAmount.addEventListener("change", syncAmt);
       el.buyAmount.addEventListener("blur", syncAmt);
+    }
+    if (el.buyLimitCents) {
+      const syncLimit = () => {
+        const n = readBuyLimitCents();
+        if (n != null) setBuyLimitUi(n);
+        refreshBuySheetPreview();
+      };
+      el.buyLimitCents.addEventListener("input", () => {
+        refreshBuySheetPreview();
+      });
+      el.buyLimitCents.addEventListener("change", syncLimit);
+      el.buyLimitCents.addEventListener("blur", syncLimit);
     }
     if (el.buyRange) {
       const onRange = () => {

@@ -11173,6 +11173,12 @@
     paintAnalyticsScopeUi();
     if (el.liveTradeLogToggle) {
       el.liveTradeLogToggle.addEventListener("click", () => {
+        // While Live is on, keep the full log open — do not hide activity.
+        if (isLiveKalshi()) {
+          liveTradeLogOpen = true;
+          void refreshAndPaintLiveTradeLog({ force: true });
+          return;
+        }
         liveTradeLogOpen = !liveTradeLogOpen;
         applyLiveTradeLogUi();
       });

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.61";
+  const APP_VERSION = "10.62";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -1779,53 +1779,8 @@
   }
 
   function renderLiveActivityFeed() {
-    const show = !!(kalshiLive.connected || isLiveKalshi());
-    if (el.liveActivityFeed) el.liveActivityFeed.hidden = !show;
-    if (!show) return;
-
-    const bal =
-      kalshiLedger && kalshiLedger.balance != null
-        ? Number(kalshiLedger.balance)
-        : kalshiLive.balance != null
-          ? Number(kalshiLive.balance)
-          : null;
-    if (el.liveActivityCash) {
-      el.liveActivityCash.textContent =
-        bal != null && Number.isFinite(bal) ? money(bal) : "cash —";
-    }
-
-    const note =
-      (lastAutoTradeNote || "").trim() ||
-      (kalshiLive.serverArmed
-        ? "armed · waiting for clear Best Side"
-        : isLiveKalshi()
-          ? "Live ON · watching"
-          : "Connected · turn Live buys on");
-    if (el.liveActivityNow) el.liveActivityNow.textContent = note;
-
-    const items = buildLiveActivityItems({ max: 12 });
-    if (el.liveActivityList) {
-      if (!items.length) {
-        el.liveActivityList.innerHTML =
-          '<div class="live-activity-item is-skip">No live events yet — buys, skips, and settlements will list here.</div>';
-      } else {
-        el.liveActivityList.innerHTML = items
-          .map((it) => {
-            const cls =
-              it.tone === "win"
-                ? "is-win"
-                : it.tone === "loss"
-                  ? "is-loss"
-                  : "is-skip";
-            return (
-              `<div class="live-activity-item ${cls}">` +
-              `<span class="live-activity-t">${formatLiveActivityTime(it.at)}</span>` +
-              `${it.text}</div>`
-            );
-          })
-          .join("");
-      }
-    }
+    // Home Live activity list removed — fills stay in Options → Live trading log.
+    if (el.liveActivityFeed) el.liveActivityFeed.hidden = true;
   }
 
   function buildAutoAttemptsHtml(attempts) {

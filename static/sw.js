@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.40-no-home-activity";
+const SW_VERSION = "3.41-bg-alerts-verify";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";

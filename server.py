@@ -122,6 +122,7 @@ _last_edge_key: str | None = None
 _last_edge_at: float = 0.0
 _last_edge_gone_at: float = 0.0
 _last_edge_ask: int | None = None
+_last_push_event: dict | None = None
 _clear_edge_latched: bool = False
 _clear_edge_latch_ticker: str | None = None
 # Require the same clear edge on consecutive polls before Web Push — stops
@@ -1390,20 +1391,47 @@ def remove_push_sub(endpoint: str) -> None:
 
 
 def send_web_push(payload: dict) -> int:
+    global _last_push_event
     app_key, priv = ensure_vapid_keys()
     if not app_key or not priv:
+        _last_push_event = {
+            "at": time.time(),
+            "ok": False,
+            "pushed": 0,
+            "type": (payload or {}).get("type"),
+            "error": "vapid missing",
+        }
         return 0
     try:
         from pywebpush import webpush, WebPushException
     except Exception as exc:
         print(f"[kalshi-btc-target] pywebpush missing: {exc}")
+        _last_push_event = {
+            "at": time.time(),
+            "ok": False,
+            "pushed": 0,
+            "type": (payload or {}).get("type"),
+            "error": str(exc),
+        }
         return 0
 
     body = json.dumps(payload)
     sent = 0
     dead: list[str] = []
+    last_err = None
     with _push_lock:
         subs = list(_push_subs)
+    if not subs:
+        _last_push_event = {
+            "at": time.time(),
+            "ok": False,
+            "pushed": 0,
+            "type": (payload or {}).get("type"),
+            "error": "no subscribers",
+            "side": (payload or {}).get("side"),
+            "ask_cents": (payload or {}).get("ask_cents"),
+        }
+        return 0
     for sub in subs:
         try:
             webpush(
@@ -1417,12 +1445,25 @@ def send_web_push(payload: dict) -> int:
         except Exception as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             msg = str(exc)
+            last_err = msg
             if status in (404, 410) or "410" in msg or "404" in msg:
                 dead.append(sub.get("endpoint") or "")
             else:
                 print(f"[kalshi-btc-target] push failed: {exc}")
     for endpoint in dead:
         remove_push_sub(endpoint)
+    _last_push_event = {
+        "at": time.time(),
+        "ok": sent > 0,
+        "pushed": sent,
+        "subscribers": len(subs),
+        "removed_dead": len(dead),
+        "type": (payload or {}).get("type"),
+        "side": (payload or {}).get("side"),
+        "ask_cents": (payload or {}).get("ask_cents"),
+        "ticker": (payload or {}).get("ticker"),
+        "error": None if sent > 0 else (last_err or "push failed"),
+    }
     return sent
 
 
@@ -3747,7 +3788,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.6",
+                    "version": "2.4.7",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),
@@ -3763,6 +3804,7 @@ class Handler(BaseHTTPRequestHandler):
                         "confirm_count": _edge_confirm_count,
                         "confirm_need": EDGE_CONFIRM_POLLS,
                     },
+                    "last_push": _last_push_event,
                 },
             )
             return

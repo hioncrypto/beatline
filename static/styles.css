@@ -2391,6 +2391,70 @@ body.is-live-kalshi .mark {
   font-weight: 800;
 }
 
+.buy-slide.is-filled {
+  border-color: rgba(26, 201, 107, 0.85);
+  background: #0d2a1a;
+  animation: buy-slide-filled-flash 0.55s ease-out 2;
+}
+
+.buy-slide.is-filled .buy-slide-fill {
+  width: 100% !important;
+  background: #1ac96b;
+}
+
+.buy-slide.is-filled .buy-slide-label {
+  color: #e8fff2;
+  font-size: 0.92rem;
+  font-weight: 850;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+}
+
+.buy-slide.is-filled .buy-slide-thumb {
+  background: #e8fff2;
+  color: #04140c;
+}
+
+.buy-sheet.is-below .buy-slide.is-filled {
+  border-color: rgba(26, 201, 107, 0.85);
+  background: #0d2a1a;
+}
+
+.buy-slide.is-failed {
+  border-color: rgba(212, 84, 84, 0.9);
+  background: #2a1212;
+}
+
+.buy-slide.is-failed .buy-slide-fill {
+  width: 100% !important;
+  background: rgba(212, 84, 84, 0.75);
+}
+
+.buy-slide.is-failed .buy-slide-label {
+  color: #ffe4e4;
+  font-weight: 850;
+}
+
+.buy-slide.is-failed .buy-slide-thumb {
+  background: #ffe4e4;
+  color: #4a1010;
+}
+
+@keyframes buy-slide-filled-flash {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  40% {
+    filter: brightness(1.25);
+  }
+}
+
+.open-pl-peek.is-buy-confirmed {
+  color: #1ac96b !important;
+  font-weight: 850;
+}
+
 .buy-sheet-note {
   margin: 10px 0 0;
   text-align: center;

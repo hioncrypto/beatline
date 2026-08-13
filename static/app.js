@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.60";
+  const APP_VERSION = "10.61";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -6454,9 +6454,71 @@
   function resetBuySlide() {
     buySlideDragging = false;
     buyConfirming = false;
-    if (el.buySlide) el.buySlide.classList.remove("is-complete");
+    if (el.buySlide) {
+      el.buySlide.classList.remove("is-complete", "is-filled", "is-failed");
+    }
     setBuySlideProgress(0);
     refreshBuySheetPreview();
+  }
+
+  function paintBuySlideConfirmed({
+    side,
+    contracts,
+    cents,
+    added = false,
+    live = false,
+  } = {}) {
+    const sideLabel = side === "below" ? "Below" : "Above";
+    const cts =
+      contracts != null && Number.isFinite(Number(contracts))
+        ? Math.round(Number(contracts))
+        : null;
+    const ask =
+      cents != null && Number.isFinite(Number(cents))
+        ? Math.round(Number(cents))
+        : null;
+    const bits = [
+      live ? "FILLED" : added ? "ADDED" : "BOUGHT",
+      sideLabel,
+    ];
+    if (cts != null && cts > 0) bits.push(`${cts} cts`);
+    if (ask != null && ask > 0) bits.push(`@${ask}¢`);
+    if (el.buySlide) {
+      el.buySlide.classList.add("is-complete", "is-filled");
+      el.buySlide.classList.remove("is-failed");
+    }
+    if (el.buySlideLabel) el.buySlideLabel.textContent = bits.join(" · ");
+    if (el.buySlideThumb) el.buySlideThumb.textContent = "✓";
+    setBuySlideProgress(1);
+    // Also flash the open-P/L peek so confirmation survives the sheet closing.
+    if (el.openPlPeek) {
+      el.openPlPeek.dataset.prevPeek = el.openPlPeek.textContent || "";
+      el.openPlPeek.textContent = bits.join(" · ");
+      el.openPlPeek.classList.add("is-buy-confirmed");
+      setTimeout(() => {
+        try {
+          el.openPlPeek.classList.remove("is-buy-confirmed");
+          if (el.openPlPeek.dataset.prevPeek != null) {
+            // renderOpenPlBar will overwrite on next tick anyway.
+            delete el.openPlPeek.dataset.prevPeek;
+          }
+        } catch (_) {}
+      }, 3200);
+    }
+  }
+
+  function paintBuySlideFailed(msg) {
+    if (el.buySlide) {
+      el.buySlide.classList.add("is-complete", "is-failed");
+      el.buySlide.classList.remove("is-filled");
+    }
+    if (el.buySlideLabel) {
+      el.buySlideLabel.textContent = msg
+        ? `FAILED · ${String(msg).slice(0, 42)}`
+        : "FAILED · not filled";
+    }
+    if (el.buySlideThumb) el.buySlideThumb.textContent = "!";
+    setBuySlideProgress(1);
   }
 
   function measureBuySlide() {
@@ -6638,14 +6700,16 @@
   async function confirmBuyFromSheet() {
     if (buyConfirming || !buySheetSide) return;
     buyConfirming = true;
-    if (el.buySlide) el.buySlide.classList.add("is-complete");
-    if (el.buySlideLabel) {
-      el.buySlideLabel.textContent =
-        demo.position && demo.position.side === buySheetSide ? "Added" : "Bought";
+    if (el.buySlide) {
+      el.buySlide.classList.add("is-complete");
+      el.buySlide.classList.remove("is-filled", "is-failed");
     }
+    if (el.buySlideLabel) el.buySlideLabel.textContent = "Sending…";
+    if (el.buySlideThumb) el.buySlideThumb.textContent = "…";
     setBuySlideProgress(1);
     const amount = readBuyAmount();
     const side = buySheetSide;
+    const adding = !!(demo.position && demo.position.side === side);
 
     if (isLiveKalshi()) {
       const ask = side === "above" ? lastRoiAsks.above : lastRoiAsks.below;
@@ -6653,22 +6717,28 @@
       const pricedAsk = limitCents != null ? limitCents : ask;
       const sized = roiForStake(pricedAsk, amount);
       if (!sized || sized.empty) {
-        buyConfirming = false;
-        if (el.buySlide) el.buySlide.classList.remove("is-complete");
-        resetBuySlide();
+        paintBuySlideFailed("Need a live ask");
         setStatus("warn", "Need a live ask");
+        setTimeout(() => {
+          buyConfirming = false;
+          if (el.buySlide) el.buySlide.classList.remove("is-complete", "is-failed");
+          resetBuySlide();
+        }, 900);
         return;
       }
-      if (el.buySlideLabel) el.buySlideLabel.textContent = "Sending…";
       const live = await placeLiveKalshiBuy(side, sized, {
         limitCents: limitCents != null ? limitCents : undefined,
         stakeUsd: amount,
       });
       if (!live || !live.ok) {
-        buyConfirming = false;
-        if (el.buySlide) el.buySlide.classList.remove("is-complete");
-        resetBuySlide();
-        setStatus("warn", (live && live.error) || "Kalshi order failed");
+        const err = (live && live.error) || "Kalshi order failed";
+        paintBuySlideFailed(err);
+        setStatus("warn", err);
+        setTimeout(() => {
+          buyConfirming = false;
+          if (el.buySlide) el.buySlide.classList.remove("is-complete", "is-failed");
+          resetBuySlide();
+        }, 1200);
         return;
       }
       // Track locally for open P/L UI without debiting demo bankroll.
@@ -6678,33 +6748,60 @@
         askCents: pricedAsk,
       });
       if (!ok) {
-        buyConfirming = false;
-        if (el.buySlide) el.buySlide.classList.remove("is-complete");
-        resetBuySlide();
+        paintBuySlideFailed("Filled · local track failed");
         setStatus(
           "warn",
           "Kalshi filled but local track failed — check Kalshi positions"
         );
+        setTimeout(() => {
+          buyConfirming = false;
+          if (el.buySlide) el.buySlide.classList.remove("is-complete", "is-failed");
+          resetBuySlide();
+        }, 1200);
         return;
       }
+      const fillCts = Math.round(
+        live.fill_count || live.fills_count || sized.contracts
+      );
+      const fillAsk = Math.round(
+        live.ask_cents || live.limit_ask_cents || pricedAsk
+      );
+      paintBuySlideConfirmed({
+        side,
+        contracts: fillCts,
+        cents: fillAsk,
+        added: adding,
+        live: true,
+      });
       setStatus(
         "ok",
-        `Kalshi filled ${Math.round(live.fill_count || live.fills_count || sized.contracts)} cts · ${
+        `Kalshi filled ${fillCts} cts · ${
           side === "above" ? "Above" : "Below"
-        } @${Math.round(live.ask_cents || live.limit_ask_cents || pricedAsk)}¢`
+        } @${fillAsk}¢`
       );
-      dismissBuySheet(380);
+      dismissBuySheet(1600);
       return;
     }
 
     const ok = demoBuy(side, amount);
     if (!ok) {
-      buyConfirming = false;
-      if (el.buySlide) el.buySlide.classList.remove("is-complete");
-      resetBuySlide();
+      paintBuySlideFailed("Buy blocked");
+      setTimeout(() => {
+        buyConfirming = false;
+        if (el.buySlide) el.buySlide.classList.remove("is-complete", "is-failed");
+        resetBuySlide();
+      }, 900);
       return;
     }
-    dismissBuySheet(380);
+    const pos = demo.position;
+    paintBuySlideConfirmed({
+      side,
+      contracts: pos && pos.contracts,
+      cents: pos && pos.askCents,
+      added: adding,
+      live: false,
+    });
+    dismissBuySheet(1400);
   }
 
   function onBuySlidePointerDown(ev) {

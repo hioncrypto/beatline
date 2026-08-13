@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.62";
+  const APP_VERSION = "10.63";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -8120,9 +8120,20 @@
     const bestBit = formatBestBuyHealthBit();
     paintEdgeSignal();
     if (healthy) {
-      el.systemHealth.textContent = `Healthy · ${bestBit}`;
-      el.systemHealth.title =
-        "Server, Best-buy alerts, service worker, and push look good · " + bestBit;
+      const waiting =
+        lastHealthEdge &&
+        lastHealthEdge.ok &&
+        !lastHealthEdge.clear &&
+        /p_win|wait|thin|no_clear/i.test(
+          String(lastHealthEdge.reject || lastHealthEdge.reason || "")
+        );
+      el.systemHealth.textContent = waiting
+        ? `BG armed · ${bestBit}`
+        : `Healthy · ${bestBit}`;
+      el.systemHealth.title = waiting
+        ? "Push + alerts look OK — waiting for clear Best buy (≥52%). Wait/thin edges do not ring the phone. · " +
+          bestBit
+        : "Server, Best-buy alerts, service worker, and push look good · " + bestBit;
       return;
     }
     const detail = (issues && issues[0]) || "check Options → Alerts";
@@ -8163,9 +8174,19 @@
         const health = await res.json();
         if (!(health && health.ok)) issues.push("server down");
         else if (health.push === false) issues.push("push disabled");
-      } catch {
-        issues.push("server unreachable");
-      }
+        else if (!(Number(health.subscribers) > 0)) {
+          issues.push("no phone subscribed — Enable alerts");
+        } else if (
+          health.last_push &&
+          health.last_push.ok === false &&
+          health.last_push.type === "clear_edge"
+        ) {
+          issues.push(
+            health.last_push.error
+              ? `push failed · ${health.last_push.error}`
+              : "push failed"
+          );
+        }
 
       try {
         const er = await fetch(`/api/clear-edge?_=${Date.now()}`, {
@@ -8253,7 +8274,7 @@
     if (el.alertsStatusLine) {
       if (on) {
         el.alertsStatusLine.textContent =
-          "On — live Best-buy chime in-app · phone notify when away";
+          "On — BG notify only on clear Best buy (≥52% model). Wait/thin = no alert. Options → Test with app closed to verify phone.";
       } else if (chimeOn && "Notification" in window && Notification.permission === "denied") {
         el.alertsStatusLine.textContent =
           "Blocked — site settings → Notifications → Allow, then Enable";

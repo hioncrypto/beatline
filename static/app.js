@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.65";
+  const APP_VERSION = "10.67";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -494,6 +494,11 @@
   let settleLine = null;
   let breakevenLine = null;
   let entryLine = null;
+  /**
+   * BTC price at fill — stays on the chart after close until the next 15m window.
+   * { price, ticker, side }
+   */
+  let heldEntryMark = null;
   let lastCandleData = [];
   let lastTicker = null;
   let lastTarget = null;
@@ -4766,7 +4771,13 @@
       el.openPlBar.hidden = true;
       document.body.classList.remove("has-open-pl");
       document.body.classList.remove("open-pl-collapsed");
-      clearBreakevenLines();
+      // Keep ENTRY after close so you can see where price went; next 15m clears it.
+      applyBreakevenLines(
+        null,
+        heldEntryMark && heldEntryMark.price,
+        null,
+        heldEntryMark && heldEntryMark.side
+      );
       if (lastTarget != null) applyTargetLine(lastTarget, "TO BEAT");
       if (hadOpen) {
         setTimeout(reflowAfterOpenPlChange, 40);
@@ -5139,6 +5150,7 @@
         suggestSide: pos.suggestSide || null,
         entrySource: pos.entrySource || null,
       });
+      rememberChartEntry(pos);
       demo.position = null;
       saveDemoState();
       renderDemoUi();
@@ -5992,6 +6004,7 @@
     demo.balance = start;
     demo.realizedPl = 0;
     demo.position = null;
+    heldEntryMark = null;
     demo.lastResult = null;
     // NEVER clear trade history — bankroll reset keeps the all-time ledger.
     demo.history = mergeTradeHistory(demo.history, loadTradeHistory());
@@ -6228,6 +6241,7 @@
       entrySource,
       autoTrade: !!autoTradeFill,
     });
+    rememberChartEntry(demo.position);
     saveDemoState();
     refreshBestSide();
     renderDemoUi();
@@ -6986,6 +7000,7 @@
       suggestSide: pos.suggestSide || null,
       entrySource: pos.entrySource || null,
     });
+    rememberChartEntry(pos);
     demo.position = null;
     saveDemoState();
     renderDemoUi();
@@ -10632,6 +10647,7 @@
           lastBreakevenPrice,
           demo.position && demo.position.entrySpot,
           demo.position && demo.position.beat,
+          heldEntryMark && heldEntryMark.price,
         ].filter((v) => v != null && Number.isFinite(v));
         if (!extras.length) return res;
         let min = res.priceRange ? res.priceRange.minValue : extras[0];
@@ -10733,14 +10749,27 @@
     settleLine = null;
   }
 
-  function clearBreakevenLines() {
-    if (breakevenLine && series) {
-      try {
-        series.removePriceLine(breakevenLine);
-      } catch {
-        // ignore
-      }
-    }
+  function rememberChartEntry(pos) {
+    if (!pos) return;
+    const price = Number(pos.entrySpot);
+    if (!Number.isFinite(price)) return;
+    heldEntryMark = {
+      price,
+      ticker: pos.ticker || lastTicker || lastFifteenTicker || null,
+      side: pos.side || null,
+    };
+  }
+
+  function releaseHeldEntryForWindow(nextTicker) {
+    if (!heldEntryMark) return;
+    if (demo.position) return;
+    const next = nextTicker || null;
+    if (next && heldEntryMark.ticker && heldEntryMark.ticker === next) return;
+    heldEntryMark = null;
+    clearEntryLine();
+  }
+
+  function clearEntryLine() {
     if (entryLine && series) {
       try {
         series.removePriceLine(entryLine);
@@ -10748,8 +10777,23 @@
         // ignore
       }
     }
-    breakevenLine = null;
     entryLine = null;
+  }
+
+  function clearModelBeLine() {
+    if (breakevenLine && series) {
+      try {
+        series.removePriceLine(breakevenLine);
+      } catch {
+        // ignore
+      }
+    }
+    breakevenLine = null;
+  }
+
+  function clearBreakevenLines() {
+    clearModelBeLine();
+    clearEntryLine();
     lastBreakevenPrice = null;
   }
 
@@ -10767,36 +10811,56 @@
 
   function applyBreakevenLines(beat, entrySpot, modelBe, side) {
     ensureChart();
-    clearBreakevenLines();
-    if (!series || !demo.position) return;
+    if (!series) return;
+    clearModelBeLine();
+    clearEntryLine();
 
-    // Price to beat stays on TARGET — only add trade-specific model / entry lines.
     const winAt = beat != null && Number.isFinite(Number(beat)) ? Number(beat) : null;
     lastBreakevenPrice = winAt;
 
+    let entryPx =
+      entrySpot != null && Number.isFinite(Number(entrySpot))
+        ? Number(entrySpot)
+        : null;
+    if (entryPx == null && heldEntryMark && Number.isFinite(heldEntryMark.price)) {
+      const t = lastTicker || lastFifteenTicker;
+      if (!heldEntryMark.ticker || !t || heldEntryMark.ticker === t) {
+        entryPx = heldEntryMark.price;
+      }
+    }
+
+    const dash =
+      (ensureChart.LineStyle && ensureChart.LineStyle.Dashed) || 2;
+
+    // Always show the fill price when we have one (open or after close this window).
+    if (entryPx != null) {
+      const below = (side || (heldEntryMark && heldEntryMark.side)) === "below";
+      entryLine = series.createPriceLine({
+        price: entryPx,
+        color: below ? "#f0a0a0" : "#8ab4ff",
+        lineWidth: 2,
+        lineStyle: dash,
+        axisLabelVisible: true,
+        title: "ENTRY",
+      });
+    }
+
+    // Model breakeven is extra while a trade is open — never replaces ENTRY.
     if (
+      demo.position &&
       modelBe != null &&
       Number.isFinite(modelBe) &&
-      (winAt == null || Math.abs(modelBe - winAt) > 8)
+      (entryPx == null || Math.abs(modelBe - entryPx) > 8)
     ) {
-      entryLine = series.createPriceLine({
+      breakevenLine = series.createPriceLine({
         price: modelBe,
         color: "#ffd28a",
-        lineWidth: 2,
+        lineWidth: 1,
         lineStyle: (ensureChart.LineStyle && ensureChart.LineStyle.Dotted) || 1,
         axisLabelVisible: true,
         title: "MODEL B/E",
       });
       lastBreakevenPrice = modelBe;
-    } else if (entrySpot != null && Number.isFinite(entrySpot)) {
-      entryLine = series.createPriceLine({
-        price: entrySpot,
-        color: "#8ab4ff",
-        lineWidth: 1,
-        lineStyle: (ensureChart.LineStyle && ensureChart.LineStyle.Dotted) || 1,
-        axisLabelVisible: true,
-        title: "ENTRY",
-      });
     }
 
     try {
@@ -10915,6 +10979,13 @@
       if (beatKeep != null && Number.isFinite(beatKeep)) {
         applyTargetLine(beatKeep, "TO BEAT");
       }
+    } else if (heldEntryMark && Number.isFinite(heldEntryMark.price)) {
+      applyBreakevenLines(
+        null,
+        heldEntryMark.price,
+        null,
+        heldEntryMark.side
+      );
     }
   }
 
@@ -10977,6 +11048,7 @@
       // Auto-settle as soon as the clock hits zero / window is stale — don't
       // wait for the next ticker (that gap left open trades stuck at 0:00).
       trySettleOpenAfterClose(data, prevTicker, prevSettleSide, prevSettleAvg);
+      if (rolled) releaseHeldEntryForWindow(data.ticker);
 
       if (rolled && (data.odds_fresh || data.stale_previous || data.yes_pct == null)) {
         updateOdds({
@@ -11000,6 +11072,7 @@
 
       if ((!data.ok && beatOk == null) || data.waiting_next) {
         trySettleOpenAfterClose(data, prevTicker, prevSettleSide, prevSettleAvg);
+        if (rolled) releaseHeldEntryForWindow(data.ticker);
         let waitMsg = data.error || "Between 15m windows — waiting for next open";
         try {
           const openMs = data.open_time ? Date.parse(data.open_time) : NaN;

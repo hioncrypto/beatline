@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.54" />
+    <link rel="stylesheet" href="/styles.css?v=10.55" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=10.54" defer></script>
+    <script src="/app.js?v=10.55" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -424,7 +424,9 @@
       <p id="auto-trade-how" class="auto-trade-how">
         To arm live auto-trading: <strong>1)</strong> Save &amp; connect Kalshi below →
         <strong>2)</strong> turn on Live Kalshi buys → <strong>3)</strong> turn on Auto-trade.
-        Fills run on the server as soon as a clear Best Side alert fires (even if the app is in the background).
+        <strong>Live buys are locked to 1¢/contract only</strong> — uses leftover Kalshi cash,
+        skips when the ask is above 1¢. Fills run on the server as soon as a clear Best Side
+        alert fires at 1¢ (even if the app is in the background).
         Green <strong>Saved &amp; connected · bal $…</strong> means connect really worked.
       </p>
       <p id="auto-trade-verify" class="auto-trade-verify">Server auto: checking…</p>
@@ -439,7 +441,7 @@
         <label class="options-row toggle-row" for="kalshi-live-toggle">
           <span>
             <strong>Live Kalshi buys</strong>
-            <em id="kalshi-live-toggle-hint">Connect API keys below first — then flip this on</em>
+            <em id="kalshi-live-toggle-hint">1¢/contract only · connect API keys first</em>
           </span>
           <input id="kalshi-live-toggle" type="checkbox" />
         </label>

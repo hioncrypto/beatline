@@ -154,6 +154,8 @@ AUTO_FILL_SLIP_CENTS = 8
 AUTO_FILL_RETRY_SLIP_CENTS = 18
 AUTO_TRADE_RETRY_SEC = 3.0
 AUTO_TRADE_LOG_LIMIT = 40
+# Hard lock: live Kalshi buys only at 1¢/contract (no higher asks, no slip).
+LIVE_BUY_ONLY_CENTS = 1
 
 
 def _fresh_side_ask_cents(ticker: str, side: str) -> int | None:
@@ -2793,9 +2795,11 @@ def _auto_contracts_for_stake(ask_cents: int, stake_usd) -> int:
         stake = float(stake_usd)
     except (TypeError, ValueError):
         return 0
-    if ask < 1 or ask > 99 or stake < 1:
+    if ask < 1 or ask > 99:
         return 0
     p = ask / 100.0
+    if stake < p:
+        return 0
     return max(1, int(stake // p))
 
 
@@ -3072,78 +3076,67 @@ def try_server_auto_trade(
     if ask < 1 or ask > 99:
         return finish({"ok": False, "error": "Ask must be 1–99¢"}, kind="bad_ask")
 
-    # Re-read the live book — edge ask goes stale in seconds on KXBTC15M.
+    # Live buys are 1¢-only: wait until the book is actually 1¢ (no slip-up).
     live_ask = _fresh_side_ask_cents(ticker, side)
-    if live_ask is not None:
-        ask = max(ask, live_ask)
+    if live_ask is None:
+        live_ask = ask
+    if int(live_ask) > LIVE_BUY_ONLY_CENTS:
+        note = (
+            f"skip — live ask {int(live_ask)}¢ · buys locked to "
+            f"{LIVE_BUY_ONLY_CENTS}¢/contract only"
+        )
+        _last_auto_trade_note = note
+        return finish(
+            {
+                "ok": False,
+                "skipped": True,
+                "error": note,
+                "key": key,
+                "limit_ask_cents": LIVE_BUY_ONLY_CENTS,
+                "live_ask_cents": int(live_ask),
+            },
+            kind="ask_too_high",
+        )
 
-    def _limit_for(slip: int) -> int:
-        return min(99, max(1, ask + int(slip)))
+    used_limit = LIVE_BUY_ONLY_CENTS
+    # Size from leftover Kalshi cash at 1¢ (contracts = floor($ / 0.01)).
+    bal = kalshi_fetch_balance(creds)
+    bank = bal.get("balance") if bal.get("ok") else None
+    stake = float(bank) if bank is not None and float(bank) >= 0.01 else None
+    if stake is None or stake < 0.01:
+        note = "auto-trade size $0 (no cash left for 1¢ contracts)"
+        _last_auto_trade_note = note
+        return finish({"ok": False, "error": note, "key": key}, kind="size_zero")
 
-    limit_ask = _limit_for(AUTO_FILL_SLIP_CENTS)
-    stake = suggest_stake
-    try:
-        stake = float(stake) if stake is not None else None
-    except (TypeError, ValueError):
-        stake = None
-    if stake is None or stake < 1:
-        bal = kalshi_fetch_balance(creds)
-        bank = bal.get("balance") if bal.get("ok") else None
-        stake = float(_green_spike_suggest(limit_ask, 0.55, bank) or 0)
-    if stake < 1:
-        bal = kalshi_fetch_balance(creds)
-        bank = bal.get("balance") if bal.get("ok") else None
-        if bank is not None and float(bank) >= 1:
-            stake = 1.0
-    if stake < 1:
-        note = "auto-trade size $0 (balance too small for $1 entry)"
+    contracts = _auto_contracts_for_stake(used_limit, stake)
+    if contracts < 1:
+        note = "auto-trade size 0 contracts at 1¢"
         _last_auto_trade_note = note
         return finish({"ok": False, "error": note, "key": key}, kind="size_zero")
 
     side_label = "Above" if side == "above" else "Below"
-    result = None
-    used_limit = limit_ask
-    for attempt_i, slip in enumerate(
-        (AUTO_FILL_SLIP_CENTS, AUTO_FILL_RETRY_SLIP_CENTS)
-    ):
-        # Second pass: refresh ask again in case the book jumped.
-        if attempt_i > 0:
-            live_ask2 = _fresh_side_ask_cents(ticker, side)
-            if live_ask2 is not None:
-                ask = max(ask, live_ask2)
-        used_limit = _limit_for(slip)
-        contracts = _auto_contracts_for_stake(used_limit, stake)
-        if contracts < 1:
-            contracts = 1
-        log_auto_trade_attempt(
-            {
-                "kind": "sending_buy",
-                "ticker": ticker,
-                "side": side,
-                "ok": None,
-                "note": (
-                    f"sending IOC buy {side} {contracts} cts @≤{used_limit}¢"
-                    f"{' · retry' if attempt_i else ''}"
-                    f" (live ask ~{ask}¢)"
-                ),
-                "key": key,
-                "limit_ask_cents": used_limit,
-                "suggest_stake": int(round(stake)),
-                "flipped": flipped,
-            }
-        )
-        result = place_kalshi_buy(
-            ticker=ticker,
-            side=side,
-            contracts=contracts,
-            ask_cents=used_limit,
-        )
-        if result.get("ok") and float(result.get("fill_count") or 0) > 0:
-            break
-        # Only one immediate retry on pure no-fill; other errors stop.
-        err_l = str((result or {}).get("error") or "").lower()
-        if "did not fill" not in err_l and "ask may have moved" not in err_l:
-            break
+    log_auto_trade_attempt(
+        {
+            "kind": "sending_buy",
+            "ticker": ticker,
+            "side": side,
+            "ok": None,
+            "note": (
+                f"sending IOC buy {side} {contracts} cts @≤{used_limit}¢ only"
+                f" (live ask ~{int(live_ask)}¢ · stake ~${stake:.2f})"
+            ),
+            "key": key,
+            "limit_ask_cents": used_limit,
+            "suggest_stake": round(float(stake), 2),
+            "flipped": flipped,
+        }
+    )
+    result = place_kalshi_buy(
+        ticker=ticker,
+        side=side,
+        contracts=contracts,
+        ask_cents=used_limit,
+    )
 
     if result and result.get("ok") and float(result.get("fill_count") or 0) > 0:
         fill_n = int(result.get("fill_count") or contracts)
@@ -3155,36 +3148,30 @@ def try_server_auto_trade(
                 "side": side,
                 "contracts": fill_n,
             }
-            prefix = "flipped · " if flipped else ""
-            _last_auto_trade_note = (
-                f"{prefix}bought {side_label} ~${int(round(stake))} "
-                f"@≤{used_limit}¢ ({fill_n} cts)"
-            )
-        result = dict(result)
-        result["auto"] = True
-        result["flipped"] = flipped
+        note = (
+            f"bought {side_label} ~${stake:.2f} @≤{used_limit}¢"
+            f" ({fill_n} cts · 1¢-only)"
+        )
+        if flipped:
+            note = f"flipped · {note}"
+        _last_auto_trade_note = note
+        result["note"] = note
         result["key"] = key
+        result["flipped"] = flipped
         result["limit_ask_cents"] = used_limit
-        result["suggest_stake"] = int(round(stake))
-        result["note"] = _last_auto_trade_note
-        print(f"[kalshi-btc-target] auto-trade FILL {key} {_last_auto_trade_note}")
+        result["suggest_stake"] = round(float(stake), 2)
         return finish(result, kind="fill")
 
-    err = (result or {}).get("error") or "order failed"
-    _last_auto_trade_note = (
-        f"{'flip buy' if flipped else 'failed'} {side_label}: {err}"
-    )
-    print(f"[kalshi-btc-target] auto-trade MISS {key} {err}")
+    err = (result or {}).get("error") or "auto-buy missed"
     out = dict(result or {})
     out["ok"] = False
-    out["auto"] = True
-    out["flipped"] = flipped
     out["key"] = key
-    out["limit_ask_cents"] = used_limit
-    out["note"] = _last_auto_trade_note
+    out["flipped"] = flipped
+    out["note"] = f"failed {side_label} @1¢: {err}"
     out["error"] = err
+    out["limit_ask_cents"] = used_limit
+    _last_auto_trade_note = out["note"]
     return finish(out, kind="miss")
-
 
 def place_kalshi_buy(
     *,
@@ -3220,6 +3207,9 @@ def place_kalshi_buy(
         return {"ok": False, "error": "Invalid ask"}
     if ask_cents < 1 or ask_cents > 99:
         return {"ok": False, "error": "Ask must be 1–99¢"}
+    # Hard lock: every live buy is 1¢/contract — ignore higher client limits.
+    if ask_cents != LIVE_BUY_ONLY_CENTS:
+        ask_cents = LIVE_BUY_ONLY_CENTS
 
     client_order_id = (client_order_id or "").strip() or str(uuid.uuid4())
     yes_no = "yes" if side == "above" else "no"
@@ -3741,7 +3731,8 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.0",
+                    "version": "2.4.1",
+                    "live_buy_only_cents": LIVE_BUY_ONLY_CENTS,
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.54";
+  const APP_VERSION = "10.55";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5455,20 +5455,19 @@
     if (!sized || !(sized.contracts > 0)) {
       return { ok: false, error: "Need contracts to buy" };
     }
-    const slip =
-      opts && Number.isFinite(Number(opts.slipCents))
-        ? Math.max(0, Math.round(Number(opts.slipCents)))
-        : 0;
-    const baseAsk = Math.round(Number(sized.askCents) || 0);
-    const askCents = Math.min(99, Math.max(1, baseAsk + slip));
-    // Re-size to the limit price so $ stake still caps contracts.
-    const priced =
-      slip > 0 && askCents !== baseAsk
-        ? roiForStake(askCents, opts.stakeUsd != null ? opts.stakeUsd : sized.total || 0) ||
-          sized
-        : sized;
+    // Live buys hard-locked to 1¢/contract (server enforces the same).
+    const askCents = 1;
+    const stakeUsd =
+      opts && opts.stakeUsd != null
+        ? Number(opts.stakeUsd)
+        : Number.isFinite(Number(kalshiLive.balance))
+          ? Number(kalshiLive.balance)
+          : Number(sized.total) || 0;
+    const priced = roiForStake(askCents, Math.max(0.01, stakeUsd)) || sized;
     const contracts =
-      priced && priced.contracts > 0 ? priced.contracts : sized.contracts;
+      priced && priced.contracts > 0
+        ? priced.contracts
+        : Math.max(1, Math.floor(Math.max(0.01, stakeUsd) / 0.01));
     try {
       const res = await fetch("/api/kalshi/order", {
         method: "POST",

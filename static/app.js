@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.63";
+  const APP_VERSION = "10.64";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -56,6 +56,35 @@
       return v == null ? fallback : v;
     } catch {
       return fallback;
+    }
+  }
+
+  /** Abort hung network calls so the UI can't stick on Sending… / Connecting… */
+  async function fetchWithTimeout(url, opts = {}, ms = 12_000) {
+    const timeoutMs = Math.max(1_000, Number(ms) || 12_000);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => {
+      try {
+        ctrl.abort();
+      } catch (_) {}
+    }, timeoutMs);
+    try {
+      const merged = { ...opts, signal: ctrl.signal };
+      if (opts && opts.signal) {
+        // Prefer caller's abort if it fires first.
+        opts.signal.addEventListener(
+          "abort",
+          () => {
+            try {
+              ctrl.abort();
+            } catch (_) {}
+          },
+          { once: true }
+        );
+      }
+      return await fetch(url, merged);
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -5763,18 +5792,22 @@
       Math.min(99, Math.round(Number(bidCents) || 1) - slip)
     );
     try {
-      const res = await fetch("/api/kalshi/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "sell",
-          ticker: ticker || lastTicker,
-          side,
-          contracts,
-          bid_cents: limitBid,
-          aggressive,
-        }),
-      });
+      const res = await fetchWithTimeout(
+        "/api/kalshi/order",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "sell",
+            ticker: ticker || lastTicker,
+            side,
+            contracts,
+            bid_cents: limitBid,
+            aggressive,
+          }),
+        },
+        20_000
+      );
       const data = await res.json();
       if (data && data.balance != null && Number.isFinite(Number(data.balance))) {
         kalshiLive.balance = Number(data.balance);
@@ -5784,7 +5817,12 @@
         ? data
         : { ok: false, error: "Bad sell response" };
     } catch (err) {
-      return { ok: false, error: "Sell request failed" };
+      const aborted =
+        err && (err.name === "AbortError" || /abort/i.test(String(err.message || "")));
+      return {
+        ok: false,
+        error: aborted ? "Close timed out — try again" : "Sell request failed",
+      };
     }
   }
 
@@ -5815,16 +5853,20 @@
     const contracts =
       priced && priced.contracts > 0 ? priced.contracts : sized.contracts;
     try {
-      const res = await fetch("/api/kalshi/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticker: lastTicker,
-          side,
-          contracts,
-          ask_cents: askCents,
-        }),
-      });
+      const res = await fetchWithTimeout(
+        "/api/kalshi/order",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ticker: lastTicker,
+            side,
+            contracts,
+            ask_cents: askCents,
+          }),
+        },
+        20_000
+      );
       const data = await res.json();
       if (data && data.balance != null && Number.isFinite(Number(data.balance))) {
         kalshiLive.balance = Number(data.balance);
@@ -5834,7 +5876,12 @@
         ? data
         : { ok: false, error: "Bad order response" };
     } catch (err) {
-      return { ok: false, error: "Order request failed" };
+      const aborted =
+        err && (err.name === "AbortError" || /abort/i.test(String(err.message || "")));
+      return {
+        ok: false,
+        error: aborted ? "Buy timed out — try again" : "Order request failed",
+      };
     }
   }
 
@@ -8187,6 +8234,9 @@
               : "push failed"
           );
         }
+      } catch {
+        issues.push("server unreachable");
+      }
 
       try {
         const er = await fetch(`/api/clear-edge?_=${Date.now()}`, {
@@ -10895,9 +10945,11 @@
     const forceCandles = !!opts.forceCandles;
     try {
       if (isLiveKalshi()) void refreshKalshiBalance();
-      const res = await fetch(`/api/target?tf=15m&_=${Date.now()}`, {
-        cache: "no-store",
-      });
+      const res = await fetchWithTimeout(
+        `/api/target?tf=15m&_=${Date.now()}`,
+        { cache: "no-store" },
+        12_000
+      );
       const data = await res.json();
       const beatRaw = data.price_to_beat ?? data.target;
       const beat =
@@ -10948,9 +11000,17 @@
 
       if ((!data.ok && beatOk == null) || data.waiting_next) {
         trySettleOpenAfterClose(data, prevTicker, prevSettleSide, prevSettleAvg);
-        setStatus("warn", data.error || "Waiting for next window");
-        el.targetValue.textContent = beatOk != null ? money(beatOk) : "—";
-        el.targetMeta.textContent = data.error || "Next Kalshi 15m opening…";
+        let waitMsg = data.error || "Between 15m windows — waiting for next open";
+        try {
+          const openMs = data.open_time ? Date.parse(data.open_time) : NaN;
+          if (Number.isFinite(openMs) && openMs > Date.now()) {
+            const mins = Math.max(1, Math.ceil((openMs - Date.now()) / 60_000));
+            waitMsg = `Between windows · next opens in ~${mins}m (beat TBD)`;
+          }
+        } catch (_) {}
+        setStatus("warn", waitMsg);
+        el.targetValue.textContent = beatOk != null ? money(beatOk) : "TBD";
+        el.targetMeta.textContent = waitMsg;
         if (beatOk == null) applyTargetLine(null);
         else applyTargetLine(beatOk, "TO BEAT");
         startRolloverBurst();
@@ -11011,8 +11071,14 @@
       }
       scheduleBoundaryRefresh(data.close_time);
     } catch (err) {
-      setStatus("warn", "Target fetch failed");
-      el.targetMeta.textContent = String(err.message || err);
+      const aborted =
+        err && (err.name === "AbortError" || /abort/i.test(String(err.message || "")));
+      setStatus("warn", aborted ? "Target slow — retrying…" : "Target fetch failed");
+      if (el.targetMeta) {
+        el.targetMeta.textContent = aborted
+          ? "Network timeout — pull to refresh / reopen app"
+          : String((err && err.message) || err);
+      }
     }
   }
 

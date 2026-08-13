@@ -22,12 +22,12 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.58" />
+    <link rel="stylesheet" href="/styles.css?v=10.60" />
     <script
       src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"
       defer
     ></script>
-    <script src="/app.js?v=10.58" defer></script>
+    <script src="/app.js?v=10.60" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -432,10 +432,9 @@
       <p id="auto-trade-how" class="auto-trade-how">
         To arm live auto-trading: <strong>1)</strong> Save &amp; connect Kalshi below →
         <strong>2)</strong> turn on Live Kalshi buys → <strong>3)</strong> turn on Auto-trade.
-        <strong>Auto-trade is locked to 1¢/contract only</strong> — uses leftover Kalshi cash,
-        skips when the ask is above 1¢. Manual Buy Above / Below / Best can use any live ask
-        or your Limit ¢ override. Auto fills run on the server when a clear Best Side alert
-        fires at 1¢ (even in the background).
+        Auto buys clear Best Side entries at the <strong>live ask</strong> (with a small slip
+        so IOC fills land), sized ≤1% of balance — not penny-only. Manual Buy Above / Below /
+        Best can still set a Limit ¢. Fills run on the server even in the background.
         Green <strong>Saved &amp; connected · bal $…</strong> means connect really worked.
       </p>
       <p id="auto-trade-verify" class="auto-trade-verify">Server auto: checking…</p>
@@ -450,7 +449,7 @@
         <label class="options-row toggle-row" for="kalshi-live-toggle">
           <span>
             <strong>Live Kalshi buys</strong>
-            <em id="kalshi-live-toggle-hint">Manual any ¢ · auto @ 1¢ · connect API keys first</em>
+            <em id="kalshi-live-toggle-hint">Manual + auto at live ask · connect API keys first</em>
           </span>
           <input id="kalshi-live-toggle" type="checkbox" />
         </label>
@@ -873,7 +872,7 @@
         <span class="buy-amount-prefix" style="order: -1">¢</span>
       </div>
       <p id="buy-limit-hint" class="buy-balance-hint">
-        Auto-trade stays 1¢-only. Manual buys use this limit (or the live ask if blank).
+        Auto uses the live ask. Manual buys use this limit (or the live ask if blank).
       </p>
       <div id="buy-suggest" class="buy-suggest" hidden>
         <div class="buy-suggest-text">

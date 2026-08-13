@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.58";
+  const APP_VERSION = "10.60";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -1797,9 +1797,9 @@
     const note =
       (lastAutoTradeNote || "").trim() ||
       (kalshiLive.serverArmed
-        ? "armed · auto waits for Best Side @ 1¢"
+        ? "armed · waiting for clear Best Side"
         : isLiveKalshi()
-          ? "Live ON · manual any ¢ · auto @ 1¢"
+          ? "Live ON · watching"
           : "Connected · turn Live buys on");
     if (el.liveActivityNow) el.liveActivityNow.textContent = note;
 
@@ -2013,7 +2013,7 @@
     if (el.liveTradeLogNote) {
       const bot = (lastAutoTradeNote || "").trim();
       el.liveTradeLogNote.textContent = isLiveKalshi()
-        ? `Live ON · auto @ 1¢ only · manual any ask · ${bot || "watching"} · full Kalshi ledger + every bot attempt shown below.`
+        ? `Live ON · auto at live ask · ${bot || "watching"} · full Kalshi ledger + every bot attempt shown below.`
         : `Connected · ${bot || "turn Live buys on"} · ledger + attempts still visible.`;
     }
 
@@ -5298,13 +5298,13 @@
     if (el.kalshiLiveToggleHint) {
       if (!kalshiLive.connected) {
         el.kalshiLiveToggleHint.textContent =
-          "Manual any ¢ · auto @ 1¢ · connect API keys first";
+          "Manual + auto at live ask · connect API keys first";
       } else if (kalshiLive.liveEnabled) {
         el.kalshiLiveToggleHint.textContent =
-          "ON · manual any ask/limit · auto waits for 1¢";
+          "ON · manual any ask/limit · auto at clear Best Side";
       } else {
         el.kalshiLiveToggleHint.textContent =
-          "Connected · flip ON for live manual + 1¢ auto";
+          "Connected · flip ON for live manual + auto buys";
       }
     }
     if (el.kalshiLiveStatus) {
@@ -7471,7 +7471,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.35", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.38", {
         scope: "/",
       });
       await navigator.serviceWorker.ready;
@@ -8484,7 +8484,7 @@
         el.autoTradeStatus.textContent =
           note && note !== "waiting for clear Best Side"
             ? `LIVE auto · ${note}`
-            : "LIVE auto · waiting for Best Side @ 1¢ (≤1% bal)";
+            : "LIVE auto · waiting for clear Best Side (≤1% bal)";
         el.autoTradeStatus.classList.add("is-live");
       } else {
         const note = autoTradeDisplayNote();
@@ -8663,8 +8663,7 @@
             return false;
           }
           live = await placeLiveKalshiBuy(best.side, slipSized, {
-            // Auto path must stay 1¢-only even on client fallback.
-            limitCents: 1,
+            slipCents: 3,
             stakeUsd: suggestStake,
           });
         }
@@ -8688,7 +8687,7 @@
           autoTrade: true,
           entrySource: "auto",
           order: live,
-          askCents: live.limit_ask_cents || live.ask_cents || 1,
+          askCents: live.limit_ask_cents || live.ask_cents || askCents,
         });
         if (!ok) {
           lastAutoTradeNote = "filled but local track failed";

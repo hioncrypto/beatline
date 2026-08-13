@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.64";
+  const APP_VERSION = "10.65";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -11245,8 +11245,10 @@
     // Open quiet-sync — no dump of sticky edges on first paint.
     beginResumeQuietSync();
     if (!window.LightweightCharts) {
-      setStatus("warn", "Chart library failed to load");
-      return;
+      setStatus(
+        "warn",
+        "Chart library missing — live numbers still loading"
+      );
     }
     syncRotateGate();
     tryLockPortrait();
@@ -11931,6 +11933,6 @@
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
   } else {
-    window.addEventListener("load", boot);
+    boot();
   }
 })();

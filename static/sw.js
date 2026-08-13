@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.42-unfreeze-timeouts";
+const SW_VERSION = "3.43-boot-no-cdn";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";

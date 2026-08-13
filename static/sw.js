@@ -1,5 +1,5 @@
 /* BeatLine service worker — background 15m target + clear-edge alerts */
-const SW_VERSION = "3.43-boot-no-cdn";
+const SW_VERSION = "3.44-bg-tray";
 const TARGET_URL = "/api/target?tf=15m";
 const EDGE_URL = "/api/clear-edge";
 const HEALTH_URL = "/api/health";
@@ -17,6 +17,7 @@ const POLL_MS = 4_000;
 /**
  * Chrome requires showNotification on every push (userVisibleOnly).
  * Returning without one can revoke the push subscription — silent BG death.
+ * Close immediately so silent keepalives do not train Android to mute BeatLine.
  */
 async function showPushKeepalive(body) {
   try {
@@ -30,6 +31,16 @@ async function showPushKeepalive(body) {
       requireInteraction: false,
       data: { url: "/", kind: "keepalive" },
     });
+    const notes = await self.registration.getNotifications({
+      tag: "beatline-push-keepalive",
+    });
+    for (const n of notes) {
+      try {
+        n.close();
+      } catch {
+        // ignore
+      }
+    }
   } catch {
     // ignore
   }
@@ -259,9 +270,6 @@ async function broadcastEdgeNotified(payload) {
 
 async function showEdgeNotification(payload, { force = false } = {}) {
   void force; // force kept for callers; tray always sounds now
-  // Additive FG chime — never a substitute for the tray notify.
-  await broadcastMarketEdgeAlert(payload);
-
   const side = payload && payload.side === "below" ? "Below" : "Above";
   const ask =
     payload && payload.askCents != null
@@ -320,7 +328,9 @@ async function showEdgeNotification(payload, { force = false } = {}) {
       renotify: true,
       requireInteraction: true,
       silent: false,
+      timestamp: Date.now(),
       data: edgeData,
+      actions: [{ action: "open", title: "Open BeatLine" }],
     });
   } catch {
     // Tray failed — do not stamp sounded / edgeAt.
@@ -336,6 +346,8 @@ async function showEdgeNotification(payload, { force = false } = {}) {
   } catch {
     // ignore
   }
+  // Page chime/flash after tray — never delay the phone notify on this.
+  void broadcastMarketEdgeAlert(payload);
   await broadcastEdgeNotified(payload);
   return true;
 }
@@ -605,7 +617,6 @@ self.addEventListener("message", (event) => {
         // force / bypass always sounds. Non-force respects cooldown.
         if (!msg.force && !msg.bypassDedupe) {
           if (sameSide && !askImproved && now - lastAt < EDGE_NOTIFY_COOLDOWN_MS) {
-            await showPushKeepalive("Best buy already alerted");
             return;
           }
         }

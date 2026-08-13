@@ -1432,6 +1432,10 @@ def send_web_push(payload: dict) -> int:
             "ask_cents": (payload or {}).get("ask_cents"),
         }
         return 0
+    push_headers = {"Urgency": "high"}
+    if (payload or {}).get("type") == "clear_edge":
+        # Collapse undelivered Best-buy pushes so opening the app does not dump a stack.
+        push_headers["Topic"] = "beatline-clear-edge"
     for sub in subs:
         try:
             webpush(
@@ -1439,7 +1443,8 @@ def send_web_push(payload: dict) -> int:
                 data=body,
                 vapid_private_key=priv,
                 vapid_claims={"sub": VAPID_SUBJECT},
-                ttl=3600,
+                ttl=86400,
+                headers=push_headers,
             )
             sent += 1
         except Exception as exc:
@@ -3788,7 +3793,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.7",
+                    "version": "2.4.8",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

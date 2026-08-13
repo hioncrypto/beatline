@@ -5285,6 +5285,8 @@
         if (el.kalshiConnect) el.kalshiConnect.textContent = "Saved ✓";
         // Re-arm server Auto-trade after connect (deploys wipe the flag).
         void syncAutoTradeToServer();
+        liveTradeLogOpen = true;
+        void refreshAndPaintLiveTradeLog({ force: true });
         setTimeout(() => {
           if (el.kalshiConnect) el.kalshiConnect.textContent = "Save & connect";
         }, 2500);

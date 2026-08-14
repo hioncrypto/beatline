@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.72";
+  const APP_VERSION = "10.73";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5675,6 +5675,9 @@
     }
     setKalshiConnectConfirm(null, "");
     setStatus("ok", "Saving & connecting Kalshi…");
+    // Uncheck Auto before the round-trip so connect cannot re-arm from stale
+    // phone state (localStorage still "on" from an earlier session).
+    setAutoTrade(false, { quiet: true, skipSync: true });
     try {
       const res = await fetch("/api/kalshi/credentials", {
         method: "POST",
@@ -5685,6 +5688,7 @@
         }),
       });
       const data = await res.json();
+      setAutoTrade(false, { quiet: true, skipSync: true });
       applyKalshiAccountStatus(data);
       const authFailed =
         !!(data && data.auth_failed) ||
@@ -5727,8 +5731,7 @@
         setKalshiConnectConfirm("ok", confirmMsg);
         setStatus("ok", confirmMsg);
         if (el.kalshiConnect) el.kalshiConnect.textContent = "Saved ✓";
-        // Save & connect must not re-arm Auto-trade from stale phone state.
-        setAutoTrade(false);
+        setAutoTrade(false, { quiet: true });
         liveTradeLogOpen = true;
         void refreshAndPaintLiveTradeLog({ force: true });
         setTimeout(() => {
@@ -5753,6 +5756,7 @@
           : "Not connected";
         setKalshiConnectConfirm("warn", `${head} · ${err}${tip}`);
         setStatus("warn", err);
+        setAutoTrade(false, { quiet: true });
         // Keep what they typed so they can fix without re-pasting everything.
         if (el.kalshiConnect) el.kalshiConnect.textContent = "Save & connect";
       }
@@ -5812,8 +5816,6 @@
           ) {
             lastAutoTradeNote = "Live buys ON · waiting for clear Best Side";
           }
-          // Live buys just unlocked — push Auto-trade preference to server.
-          void syncAutoTradeToServer();
           renderAutoTradeUi();
           liveTradeLogOpen = true;
           setAnalyticsScope("live", { persist: true });
@@ -8802,7 +8804,8 @@
     }
   }
 
-  function setAutoTrade(on) {
+  function setAutoTrade(on, opts = {}) {
+    const quiet = !!(opts && opts.quiet);
     autoTradeOn = !!on;
     try {
       localStorage.setItem(AUTO_TRADE_KEY, autoTradeOn ? "1" : "0");
@@ -8818,8 +8821,11 @@
         // ignore
       }
     }
-    void syncAutoTradeToServer();
+    if (el.autoTradeToggle) el.autoTradeToggle.checked = !!autoTradeOn;
+    if (el.autoFlipToggle) el.autoFlipToggle.checked = !!autoFlipOn;
+    if (!(opts && opts.skipSync)) void syncAutoTradeToServer();
     renderAutoTradeUi();
+    if (quiet) return;
     if (autoTradeOn && !tradingArmed()) {
       setStatus("warn", "Auto-trade on — turn on Demo or Live Kalshi buys");
     } else if (autoTradeOn) {

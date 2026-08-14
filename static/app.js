@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.65";
+  const APP_VERSION = "10.66";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -556,6 +556,13 @@
   let suppressEdgeChimeUntil = 0;
   /** How long to stay silent after returning from background. */
   const RESUME_QUIET_MS = 12_000;
+
+  /**
+   * Android PWAs often keep visibilityState "visible" while another app is
+   * in front. Track blur/freeze/pagehide so we still take the phone-tray path.
+   */
+  let pageLikelyBackgrounded = false;
+  let lastFgBgAt = 0;
 
   /** Quiet-sync after open/resume — no FG chime dump of edges already seen. */
   function beginResumeQuietSync() {
@@ -7571,8 +7578,9 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.38", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.44", {
         scope: "/",
+        updateViaCache: "none",
       });
       await navigator.serviceWorker.ready;
       swReg = reg;
@@ -7637,6 +7645,7 @@
    */
   function pageOwnsAlerts() {
     try {
+      if (pageLikelyBackgrounded) return false;
       return (
         document.visibilityState === "visible" &&
         !document.hidden &&
@@ -7644,8 +7653,83 @@
         document.hasFocus()
       );
     } catch {
-      return document.visibilityState === "visible" && !document.hidden;
+      return (
+        !pageLikelyBackgrounded &&
+        document.visibilityState === "visible" &&
+        !document.hidden
+      );
     }
+  }
+
+  /**
+   * Phone tray for a Best-buy. Must run synchronously — never behind
+   * AudioContext resume. Android Chrome drops SW showNotification while the
+   * PWA stays "visible" in the background; page Notification still reaches
+   * the shade.
+   */
+  function firePhoneTray(best, payload) {
+    if (!best || !best.side || !chimeOn) return;
+    const side = best.side === "below" ? "below" : "above";
+    const ticker =
+      (payload && payload.ticker) || lastTicker || lastFifteenTicker || "";
+    const sticky = `${ticker}:${side}`;
+    if (
+      sameSoundedSticky(sticky) &&
+      Date.now() - lastClearEdgeAlertAt < EDGE_ALERT_COOLDOWN_MS
+    ) {
+      return;
+    }
+    const sideLabel = side === "above" ? "Above" : "Below";
+    const ask = Math.round(
+      Number(
+        payload && payload.askCents != null ? payload.askCents : best.askCents
+      ) || 0
+    );
+    const sug =
+      payload && payload.suggestStake != null
+        ? payload.suggestStake
+        : best.suggestedStake;
+    const title =
+      sug != null
+        ? `BeatLine · Best buy ${sideLabel} · $${Math.round(Number(sug) || 0)}`
+        : `BeatLine · Best buy · ${sideLabel}`;
+    const bits = [];
+    if (ask) bits.push(`ask ${ask}¢`);
+    if (best.pWin != null) bits.push(`${Math.round(Number(best.pWin) * 100)}% model`);
+    if (sug != null) bits.push(`suggest $${Math.round(Number(sug) || 0)}`);
+    const body = bits.length ? bits.join(" · ") : "Clear Best Side edge — open BeatLine";
+    if ("Notification" in window && Notification.permission === "granted") {
+      try {
+        new Notification(title, {
+          body,
+          tag: "kalshi-clear-edge",
+          renotify: true,
+          silent: false,
+          icon: "/icons/icon-192.png?v=2.6",
+          badge: "/icons/icon-192.png?v=2.6",
+          requireInteraction: true,
+        });
+      } catch {
+        // ignore — SW path still runs
+      }
+    }
+    try {
+      if (navigator.vibrate) navigator.vibrate([80, 40, 80, 40, 80, 40, 160]);
+    } catch {
+      // ignore
+    }
+    postToSW({
+      type: "edge-notify",
+      force: true,
+      side,
+      askCents: ask || null,
+      pWin: best.pWin,
+      suggestStake: sug,
+      ticker,
+      beat: (payload && payload.beat) || lastTarget,
+      chimeOn,
+    });
+    markEdgeSounded(best, { ask });
   }
 
   /**
@@ -7691,9 +7775,23 @@
       void maybeAutoTrade(best, best.suggestedStake);
     }
     if (!chimeOn) return;
-    if (!pageOwnsAlerts()) return;
+    if (!pageOwnsAlerts()) {
+      firePhoneTray(best, {
+        side,
+        askCents: ask || null,
+        pWin: best.pWin,
+        suggestStake: best.suggestedStake,
+        ticker,
+        beat: lastTarget,
+        chimeOn,
+      });
+      return;
+    }
     // Resume quiet-sync: do not re-chime the sticky the phone already got.
-    if (Date.now() < suppressEdgeChimeUntil) {
+    if (
+      Date.now() < suppressEdgeChimeUntil ||
+      Date.now() - lastFgBgAt < RESUME_QUIET_MS
+    ) {
       quietArmClearEdge(best, { chimed: false, ticker });
       return;
     }
@@ -8922,7 +9020,7 @@
           : `Clear edge · Buy ${sideLabel}${ask ? ` @ ${ask}¢` : ""}`
     );
 
-    const visible = pageOwnsAlerts();
+    const inFront = pageOwnsAlerts();
     const canNotify =
       "Notification" in window && Notification.permission === "granted";
     const edgePayload = {
@@ -8935,77 +9033,50 @@
       chimeOn,
     };
 
-    // Foreground (focused): in-app chime (+ vibrate). Background: system notification.
-    // NOTE: do NOT gate this whole function on pendingEdgeChime — that blocked
-    // every later clear after one failed autoplay and left FG/BG silent.
+    // Background / locked / Android "visible but not in front": phone tray
+    // MUST fire now. Never wait on AudioContext — resume() hangs until the
+    // app is opened again, which is the alert dump the user sees.
+    if (!inFront) {
+      if (canNotify) firePhoneTray(best, edgePayload);
+      return true;
+    }
+
+    // Foreground (focused): in-app chime (+ vibrate). If autoplay is blocked,
+    // still fire the phone tray so an open app is not silent.
     ensureAudioReady().then(async () => {
-      if (visible) {
-        const played = await playEdgeChime(true);
-        vibrateEdge();
-        try {
-          flashBestSide();
-        } catch {
-          // ignore
-        }
-        if (played) {
-          pendingEdgeChime = false;
-          markEdgeSounded(best, { ask });
-          postToSW({
-            type: "edge-armed",
-            side,
-            askCents: ask || null,
-            ticker: lastTicker || lastFifteenTicker || "",
-            chimeOn,
-            chimed: true,
-          });
-          if (!swEdgeState) {
-            swEdgeState = { edgeKey: null, edgeAsk: 0, edgeAt: 0, chimeOn };
-          }
-          const t = lastTicker || lastFifteenTicker || "";
-          swEdgeState.edgeKey = `${t}:${side}`;
-          swEdgeState.edgeAsk = ask || 0;
-          swEdgeState.edgeAt = Date.now();
-          return;
-        }
-        // Autoplay blocked — keep pending for tap-replay, AND fire phone tray
-        // so the user still gets an alert while the app is open.
-        pendingEdgeChime = true;
-        if (canNotify) {
-          postToSW({ type: "edge-notify", force: true, ...edgePayload });
-        }
+      if (!pageOwnsAlerts()) {
+        if (canNotify) firePhoneTray(best, edgePayload);
         return;
       }
-
-      // App in background / locked — phone notification is the chime.
-      // Best Side UI stays on live market only (no notify mirroring).
-      if (canNotify) {
-        const ctrl =
-          navigator.serviceWorker && navigator.serviceWorker.controller;
-        if (ctrl) {
-          // Do NOT mark sounded until SW confirms the tray fired — premature
-          // markEdgeSounded silenced catch-up when the message never ran.
-          postToSW({ type: "edge-notify", force: true, ...edgePayload });
-        } else {
-          try {
-            const title =
-              sug != null
-                ? `BeatLine · Best buy ${sideLabel} · $${sug}`
-                : `BeatLine · Best buy · ${sideLabel}`;
-            const bits = [];
-            if (ask) bits.push(`ask ${ask}¢`);
-            if (best.pWin != null) bits.push(`${Math.round(best.pWin * 100)}% model`);
-            new Notification(title, {
-              body: bits.length ? bits.join(" · ") : "Clear Best Side edge",
-              tag: "kalshi-clear-edge",
-              renotify: true,
-              silent: false,
-            });
-            markEdgeSounded(best, { ask });
-          } catch {
-            // ignore — leave unsounded so a later path can still ring
-          }
-        }
+      const played = await playEdgeChime(true);
+      vibrateEdge();
+      try {
+        flashBestSide();
+      } catch {
+        // ignore
       }
+      if (played) {
+        pendingEdgeChime = false;
+        markEdgeSounded(best, { ask });
+        postToSW({
+          type: "edge-armed",
+          side,
+          askCents: ask || null,
+          ticker: lastTicker || lastFifteenTicker || "",
+          chimeOn,
+          chimed: true,
+        });
+        if (!swEdgeState) {
+          swEdgeState = { edgeKey: null, edgeAsk: 0, edgeAt: 0, chimeOn };
+        }
+        const t = lastTicker || lastFifteenTicker || "";
+        swEdgeState.edgeKey = `${t}:${side}`;
+        swEdgeState.edgeAsk = ask || 0;
+        swEdgeState.edgeAt = Date.now();
+        return;
+      }
+      pendingEdgeChime = true;
+      if (canNotify) firePhoneTray(best, edgePayload);
     });
     return true;
   }
@@ -11712,100 +11783,110 @@
     window.addEventListener("touchstart", unlock, { passive: true });
     window.addEventListener("keydown", unlock);
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") {
-        unlockAudioPlayback();
-        ensurePortraitLock(true);
-        startRolloverBurst();
-        // Foreground return: flush local ledger (background often never finishes POST).
-        void pushDemoStateToServer();
-        // Quiet-sync — do NOT dump Best-buy chimes already seen while away.
-        beginResumeQuietSync();
+      if (document.visibilityState === "visible") onAppForegrounded();
+      else onAppBackgrounded();
+    });
+    window.addEventListener("pageshow", () => onAppForegrounded());
+    window.addEventListener("pagehide", () => onAppBackgrounded());
+    document.addEventListener("freeze", () => onAppBackgrounded());
+    document.addEventListener("resume", () => onAppForegrounded());
+    window.addEventListener("focus", () => onAppForegrounded());
+    window.addEventListener("blur", () => {
+      // Android often blurs without visibilitychange when switching apps.
+      // Delay so in-app sheets don't count as background.
+      setTimeout(() => {
+        if (!pageOwnsAlerts()) onAppBackgrounded();
+      }, 400);
+    });
+
+    function onAppForegrounded() {
+      const wasBg = pageLikelyBackgrounded;
+      pageLikelyBackgrounded = false;
+      if (!wasBg && pageOwnsAlerts() && Date.now() - lastFgBgAt < 500) return;
+      lastFgBgAt = Date.now();
+      unlockAudioPlayback();
+      ensurePortraitLock(true);
+      startRolloverBurst();
+      void pushDemoStateToServer();
+      // Quiet-sync — do NOT dump Best-buy chimes already seen while away.
+      beginResumeQuietSync();
+      postToSW({ type: "get-edge-state" });
+      if (lastBestPick && lastBestPick.side) {
+        const ask = Math.round(Number(lastBestPick.askCents) || 0);
+        const ticker = lastTicker || lastFifteenTicker || "";
+        lastClearEdgeAlertKey = `${ticker}:${lastBestPick.side}:${ask}`;
+        persistEdgeAlertKey(lastClearEdgeAlertKey);
+        edgeAlertsArmed = true;
+        markEdgeSounded(lastBestPick, { ask });
+        quietArmClearEdge(lastBestPick, { chimed: false });
+      }
+      if (
+        chimeOn &&
+        "Notification" in window &&
+        Notification.permission === "granted"
+      ) {
+        subscribePush({ forceRefresh: true }).catch(() => {});
+      }
+      setTimeout(() => {
         postToSW({ type: "get-edge-state" });
-        if (lastBestPick && lastBestPick.side) {
-          const ask = Math.round(Number(lastBestPick.askCents) || 0);
-          const ticker = lastTicker || lastFifteenTicker || "";
-          lastClearEdgeAlertKey = `${ticker}:${lastBestPick.side}:${ask}`;
-          persistEdgeAlertKey(lastClearEdgeAlertKey);
-          edgeAlertsArmed = true;
-          markEdgeSounded(lastBestPick, { ask });
-          quietArmClearEdge(lastBestPick, { chimed: false });
-        }
-        if (
-          chimeOn &&
-          "Notification" in window &&
-          Notification.permission === "granted"
-        ) {
-          // Re-POST sub every return — Render restarts wipe subscribers.
-          subscribePush({ forceRefresh: true }).catch(() => {});
-        }
         setTimeout(() => {
-          // Re-read SW state then score — stays quiet under RESUME_QUIET_MS.
-          postToSW({ type: "get-edge-state" });
-          setTimeout(() => {
-            refreshTarget({ forceCandles: true });
-          }, 200);
-        }, 300);
-        // Health chip only — never a chime.
-        runSystemHealthReport({ force: true });
-      } else {
-        // Page hidden — prepare quiet resume; tray uses normal dedupe (no spam).
-        beginResumeQuietSync();
-        if (
-          chimeOn &&
-          "Notification" in window &&
-          Notification.permission === "granted"
-        ) {
-          subscribePush({ forceRefresh: true }).catch(() => {});
+          refreshTarget({ forceCandles: true });
+        }, 200);
+      }, 300);
+      runSystemHealthReport({ force: true });
+    }
+
+    function onAppBackgrounded() {
+      if (pageLikelyBackgrounded && Date.now() - lastFgBgAt < 500) return;
+      pageLikelyBackgrounded = true;
+      lastFgBgAt = Date.now();
+      // Do NOT mark sounded here — that skipped the phone tray.
+      if (
+        chimeOn &&
+        "Notification" in window &&
+        Notification.permission === "granted"
+      ) {
+        subscribePush({ forceRefresh: true }).catch(() => {});
+      }
+      postToSW({
+        type: "arm-state",
+        ticker: lastFifteenTicker,
+        target: lastFifteenTarget,
+        chimeOn,
+      });
+      postToSW({ type: "check-now", forceNotify: false });
+      if (chimeOn && lastBestPick && lastBestPick.side) {
+        const ask = Math.round(Number(lastBestPick.askCents) || 0);
+        const ticker = lastTicker || lastFifteenTicker || "";
+        pendingEdgeChime = false;
+        if (!sameSoundedSticky(`${ticker}:${lastBestPick.side}`)) {
+          firePhoneTray(lastBestPick, {
+            side: lastBestPick.side,
+            askCents: ask || null,
+            pWin: lastBestPick.pWin,
+            suggestStake: lastBestPick.suggestedStake,
+            ticker,
+            beat: lastTarget,
+            chimeOn,
+          });
         }
-        postToSW({
-          type: "arm-state",
-          ticker: lastFifteenTicker,
-          target: lastFifteenTarget,
-          chimeOn,
-        });
-        // Poke SW poll without force-firing a duplicate Best-buy dump.
-        postToSW({ type: "check-now", forceNotify: false });
-        if (chimeOn && lastBestPick && lastBestPick.side) {
-          const ask = Math.round(Number(lastBestPick.askCents) || 0);
-          const ticker = lastTicker || lastFifteenTicker || "";
-          pendingEdgeChime = false;
-          // Tray only if this sticky was never sounded — no bypass spam.
-          if (!sameSoundedSticky(`${ticker}:${lastBestPick.side}`)) {
-            postToSW({
-              type: "edge-notify",
-              force: false,
-              bypassDedupe: false,
-              side: lastBestPick.side,
-              askCents: ask || null,
-              pWin: lastBestPick.pWin,
-              suggestStake: lastBestPick.suggestedStake,
-              ticker,
-              beat: lastTarget,
-              chimeOn,
-            });
-          }
-        }
-        // Also ask the server — client lastBestPick can lag / miss while away.
-        if (chimeOn) {
-          fetch(`/api/clear-edge?_=${Date.now()}`, { cache: "no-store" })
-            .then((r) => r.json())
-            .then((edge) => {
-              if (!(edge && edge.clear && edge.side)) return;
-              const ticker = edge.ticker || lastTicker || lastFifteenTicker || "";
-              const sticky = `${ticker}:${edge.side}`;
-              if (sameSoundedSticky(sticky)) return;
-              if (
-                lastBestPick &&
-                lastBestPick.side === edge.side &&
-                Math.round(Number(lastBestPick.askCents) || 0) ===
-                  Math.round(Number(edge.ask_cents) || 0)
-              ) {
-                return;
-              }
-              postToSW({
-                type: "edge-notify",
-                force: false,
-                bypassDedupe: false,
+      }
+      if (chimeOn) {
+        fetch(`/api/clear-edge?_=${Date.now()}`, { cache: "no-store" })
+          .then((r) => r.json())
+          .then((edge) => {
+            if (!(edge && edge.clear && edge.side)) return;
+            const ticker = edge.ticker || lastTicker || lastFifteenTicker || "";
+            const sticky = `${ticker}:${edge.side}`;
+            if (sameSoundedSticky(sticky)) return;
+            firePhoneTray(
+              {
+                side: edge.side,
+                askCents: edge.ask_cents,
+                pWin: edge.p_win,
+                suggestedStake: edge.suggest_stake,
+              },
+              {
                 side: edge.side,
                 askCents: edge.ask_cents,
                 pWin: edge.p_win,
@@ -11813,12 +11894,12 @@
                 ticker,
                 beat: edge.beat ?? edge.price_to_beat ?? lastTarget,
                 chimeOn,
-              });
-            })
-            .catch(() => {});
-        }
+              }
+            );
+          })
+          .catch(() => {});
       }
-    });
+    }
 
     setTfLabel();
     ensureChart();
@@ -11867,7 +11948,7 @@
         if (msg.type === "play-edge-chime") {
           // Legacy SW messages — ignore on open/resume quiet-sync and when hidden.
           if (!chimeOn) return;
-          if (document.visibilityState !== "visible") return;
+          if (!pageOwnsAlerts()) return;
           if (Date.now() < suppressEdgeChimeUntil) return;
           unlockAudioPlayback();
           playEdgeChime(true);

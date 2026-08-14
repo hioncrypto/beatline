@@ -163,11 +163,6 @@ AUTO_FLIP_MIN_HOLD_SECS = 2 * 60
 AUTO_CLOSE_MIN_HOLD_SECS = AUTO_FLIP_MIN_HOLD_SECS
 # Never let Auto spend the account through this cash floor. Manual buys can.
 AUTO_CASH_FLOOR_USD = 10.0
-# WAIT / no-clear must hold this many watcher polls (~1s each) before close.
-AUTO_WAIT_CONFIRM_TICKS = 2
-_auto_wait_ticks = 0
-# Ticker we already confirmed flat (or closed) during this WAIT episode.
-_auto_wait_flat_ticker: str | None = None
 
 
 def _fresh_side_ask_cents(ticker: str, side: str) -> int | None:
@@ -1837,7 +1832,6 @@ def push_watcher_loop() -> None:
     global _last_edge_ask, _clear_edge_latched, _clear_edge_latch_ticker
     global _edge_confirm_key, _edge_confirm_count
     global _last_auto_trade_key, _last_auto_position
-    global _auto_wait_ticks, _auto_wait_flat_ticker
     print("[kalshi-btc-target] background push watcher started")
     while True:
         try:
@@ -1870,8 +1864,6 @@ def push_watcher_loop() -> None:
                 with _auto_trade_lock:
                     _last_auto_trade_key = None
                     _last_auto_position = None
-                _auto_wait_ticks = 0
-                _auto_wait_flat_ticker = None
             if ticker:
                 _last_push_ticker = ticker
 
@@ -1891,7 +1883,6 @@ def push_watcher_loop() -> None:
             edge = score_clear_edge(data, spot, latched=latched)
             now = time.time()
             if edge:
-                _auto_wait_ticks = 0
                 _clear_edge_latched = True
                 _clear_edge_latch_ticker = ticker
                 sticky = f"{ticker}:{edge['side']}"
@@ -1974,32 +1965,8 @@ def push_watcher_loop() -> None:
                 _clear_edge_latched = False
                 _edge_confirm_key = None
                 _edge_confirm_count = 0
-                _auto_wait_ticks += 1
-                # Confirmed WAIT / no-clear: close the open auto trade at bid
-                # (after the 2-minute hold). Do not buy the other side.
-                if (
-                    ticker
-                    and _auto_wait_ticks >= AUTO_WAIT_CONFIRM_TICKS
-                    and _auto_wait_flat_ticker != ticker
-                ):
-                    try:
-                        close_res = try_server_auto_close(
-                            ticker=ticker,
-                            reason="wait",
-                            yes_bid_cents=data.get("yes_bid_pct"),
-                            no_bid_cents=data.get("no_bid_pct"),
-                        )
-                        kind = str((close_res or {}).get("kind") or "")
-                        if kind in (
-                            "wait_closed",
-                            "already_flat",
-                            "no_position",
-                        ):
-                            _auto_wait_flat_ticker = ticker
-                    except Exception as close_exc:
-                        print(
-                            f"[kalshi-btc-target] auto-close error: {close_exc}"
-                        )
+                # Trigger gone / WAIT does not auto-close. Hold until settle,
+                # you close, or Auto-flip reverses after the 2-minute hold.
                 # Only forget the edge after it has been gone for a while —
                 # prevents push loops when the score flickers around threshold.
                 if _last_edge_key is not None:
@@ -3329,7 +3296,7 @@ def _try_server_auto_trade_body(
     finish,
 ) -> dict:
     global _last_auto_trade_key, _last_auto_trade_at, _last_auto_trade_note
-    global _last_auto_position, _auto_wait_flat_ticker
+    global _last_auto_position
 
     # Resolve any open position on this ticker (Kalshi truth, then local memory).
     held_side, held_contracts = _resolve_held_position(ticker, creds)
@@ -3583,7 +3550,6 @@ def _try_server_auto_trade_body(
                 "contracts": fill_n,
                 "opened_at": time.time(),
             }
-            _auto_wait_flat_ticker = None
         prefix = "flipped · " if flipped else ""
         note = (
             f"{prefix}bought {side_label} ~${int(round(stake))} "
@@ -4419,7 +4385,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.17",
+                    "version": "2.4.18",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

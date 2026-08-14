@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.76";
+  const APP_VERSION = "10.77";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -524,13 +524,11 @@
   const AUTO_FLIP_KEY = "beatlineAutoFlip";
   /** Auto-trade disengages once ≤5 minutes remain — will not open a new buy. */
   const AUTO_TRADE_CUTOFF_SECS = 5 * 60;
-  /** Auto-close (WAIT or Flip) must not dump a fresh fill — give the trade time to move. */
+  /** Auto-flip must not dump a fresh fill — give the trade time to move. */
   const AUTO_FLIP_MIN_HOLD_SECS = 2 * 60;
   const AUTO_CLOSE_MIN_HOLD_SECS = AUTO_FLIP_MIN_HOLD_SECS;
   /** Auto will not spend cash through this floor. Manual buys can. */
   const AUTO_CASH_FLOOR_USD = 10;
-  /** Best Side must stay WAIT this long before auto-close (matches ~2 server polls). */
-  const AUTO_WAIT_CONFIRM_MS = 2000;
   const ANALYTICS_SCOPE_KEY = "beatlineAnalyticsScope";
   let autoTradeOn = false;
   let autoFlipOn = false;
@@ -550,8 +548,6 @@
   let lastAutoTradeKey = null;
   let lastAutoTradeAt = 0;
   let lastAutoTradeNote = "";
-  let autoWaitSince = 0;
-  let waitCloseFlatTicker = null;
   let analyticsScope = "all";
   /** Live Kalshi fills/settlements from /api/kalshi/ledger (source of truth). */
   let kalshiLedger = null;
@@ -6084,42 +6080,6 @@
     }
   }
 
-  /** Live auto-close via server (WAIT / no-clear). Does not buy the other side. */
-  async function placeServerAutoClose() {
-    const ticker = lastTicker || lastFifteenTicker || "";
-    const pos = demo.position;
-    const side = pos && pos.side;
-    const sameBid =
-      side === "above"
-        ? lastRoiBids.above
-        : side === "below"
-          ? lastRoiBids.below
-          : null;
-    try {
-      const res = await fetch("/api/kalshi/auto-close", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticker,
-          reason: "wait",
-          bid_cents: sameBid,
-          yes_bid_cents: lastRoiBids.above,
-          no_bid_cents: lastRoiBids.below,
-        }),
-      });
-      const data = await res.json();
-      if (data && data.balance != null && Number.isFinite(Number(data.balance))) {
-        kalshiLive.balance = Number(data.balance);
-        renderKalshiLiveUi();
-      }
-      return data && typeof data === "object"
-        ? data
-        : { ok: false, error: "Bad auto-close response" };
-    } catch {
-      return { ok: false, error: "Auto-close request failed" };
-    }
-  }
-
   function resetDemoAccount() {
     let start = Number(el.demoStart && el.demoStart.value);
     if (!Number.isFinite(start) || start < 10) start = DEMO_DEFAULT_START;
@@ -8786,12 +8746,8 @@
 
     const beatReady = beat != null && Number.isFinite(beat);
     // Quiet sync only — never chime or notify on TO BEAT generation.
-    const prevTicker = lastFifteenTicker;
     if (ticker) lastFifteenTicker = ticker;
     if (beatReady) lastFifteenTarget = beat;
-    if (ticker && prevTicker && ticker !== prevTicker) {
-      resetAutoWaitCloseState();
-    }
     postToSW({
       type: "arm-state",
       ticker: lastFifteenTicker,
@@ -8832,7 +8788,7 @@
           "Off — BeatLine will not place buys for you";
       } else if (autoTradeLateWindow()) {
         el.autoTradeStatus.textContent =
-          "Disengaged · last 5 min — no new buys (still closes if Best Side waits)";
+          "Disengaged · last 5 min — will not open a buy";
         el.autoTradeStatus.classList.add("is-warn");
       } else if (!kalshiLive.connected && !demo.on) {
         el.autoTradeStatus.textContent =
@@ -8945,20 +8901,6 @@
     const maxSpend = cash - AUTO_CASH_FLOOR_USD;
     if (maxSpend < BUY_AMOUNT_MIN) return null;
     return Math.min(s, maxSpend);
-  }
-
-  function autoFillHeldSecs() {
-    const pos = demo.position;
-    const openedAt = Number(
-      (pos && (pos.openedAt || pos.lastAddedAt)) || lastAutoTradeAt || 0
-    );
-    if (!(openedAt > 0)) return AUTO_CLOSE_MIN_HOLD_SECS;
-    return (Date.now() - openedAt) / 1000;
-  }
-
-  function resetAutoWaitCloseState() {
-    autoWaitSince = 0;
-    waitCloseFlatTicker = null;
   }
 
   /**
@@ -9199,77 +9141,6 @@
         setStatus("ok", `Auto demo buy ${sideLabel} · $${suggestStake}`);
         return true;
       }
-      return false;
-    } finally {
-      autoTradeBusy = false;
-    }
-  }
-
-  async function maybeAutoCloseOnWait() {
-    if (!autoTradeOn || !tradingArmed()) return false;
-    if (autoTradeBusy || closePositionBusy) return false;
-    const ticker = lastTicker || lastFifteenTicker || "";
-    if (!ticker) return false;
-    if (waitCloseFlatTicker === ticker) return false;
-    const pos = demo.position;
-    const live = isLiveKalshi();
-    if (!pos && !live) return false;
-    if (pos && pos.ticker && ticker && pos.ticker !== ticker) {
-      // Different window — don't dump a stale local mark here.
-    }
-    const held = autoFillHeldSecs();
-    if (pos && held < AUTO_CLOSE_MIN_HOLD_SECS) {
-      const left = Math.max(1, Math.ceil(AUTO_CLOSE_MIN_HOLD_SECS - held));
-      lastAutoTradeNote = `holding · ${left}s more before auto-close`;
-      renderAutoTradeUi();
-      return false;
-    }
-    autoTradeBusy = true;
-    try {
-      if (el.autoTradeStatus) {
-        el.autoTradeStatus.textContent = "Auto · closing at bid (WAIT)…";
-        el.autoTradeStatus.classList.add("is-live");
-      }
-      if (live) {
-        const res = await placeServerAutoClose();
-        const kind = String((res && res.kind) || "");
-        if (kind === "wait_close_hold" || /more before auto-close/i.test(String((res && (res.note || res.error)) || ""))) {
-          lastAutoTradeNote = (res && (res.note || res.error)) || "holding before auto-close";
-          renderAutoTradeUi();
-          return false;
-        }
-        if (res && (res.closed || res.already_flat || (res.ok && !res.error))) {
-          if (pos) {
-            await closeDemoPosition({ quiet: true, alreadySold: true });
-          }
-          lastAutoTradeKey = null;
-          lastAutoTradeAt = 0;
-          waitCloseFlatTicker = ticker;
-          lastAutoTradeNote = (res && res.note) || "closed at bid · WAIT";
-          renderAutoTradeUi();
-          setStatus("ok", lastAutoTradeNote);
-          return true;
-        }
-        lastAutoTradeNote = (res && (res.note || res.error)) || "WAIT close failed";
-        renderAutoTradeUi();
-        return false;
-      }
-      if (pos) {
-        const closed = await closeDemoPosition({ quiet: true });
-        if (!closed || !closed.ok) {
-          lastAutoTradeNote = (closed && closed.error) || "WAIT close failed";
-          renderAutoTradeUi();
-          return false;
-        }
-        lastAutoTradeKey = null;
-        lastAutoTradeAt = 0;
-        waitCloseFlatTicker = ticker;
-        lastAutoTradeNote = "closed at bid · WAIT / no clear edge";
-        renderAutoTradeUi();
-        setStatus("ok", lastAutoTradeNote);
-        return true;
-      }
-      waitCloseFlatTicker = ticker;
       return false;
     } finally {
       autoTradeBusy = false;
@@ -10321,14 +10192,8 @@
       } else {
         markClearEdgeGone();
       }
-      if (!autoWaitSince) autoWaitSince = Date.now();
-      if (Date.now() - autoWaitSince >= AUTO_WAIT_CONFIRM_MS) {
-        void maybeAutoCloseOnWait();
-      }
       return;
     }
-
-    resetAutoWaitCloseState();
 
     lastClearEdgeGoneAt = 0;
     const suggestion = suggestStakeForEdge(best);

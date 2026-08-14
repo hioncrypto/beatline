@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.73";
+  const APP_VERSION = "10.74";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -8965,10 +8965,19 @@
         }
         if (live && live.skipped && !live.ok) {
           const why = String((live && live.error) || "");
+          const oppositeOpen =
+            !!(demo.position && demo.position.side !== best.side);
           // Preference not armed on server yet — fall back to direct IOC + slip.
           // Cooldown / already-handled skips must not place a second order.
-          if (/retry cooldown|already/i.test(why)) {
+          // Opposite open: never buy the other side until the close fills.
+          if (/retry cooldown|already|in flight/i.test(why)) {
             lastAutoTradeNote = why;
+            renderAutoTradeUi();
+            return false;
+          }
+          if (oppositeOpen) {
+            lastAutoTradeNote =
+              why || "blocked · close current trade before flip buy";
             renderAutoTradeUi();
             return false;
           }
@@ -8995,6 +9004,17 @@
           lastAutoTradeNote = (live && (live.note || live.error)) || "order failed";
           renderAutoTradeUi();
           setStatus("warn", `Auto-trade failed · ${lastAutoTradeNote}`);
+          return false;
+        }
+        if (
+          demo.position &&
+          demo.position.side !== best.side &&
+          !live.flipped
+        ) {
+          lastAutoTradeNote =
+            "blocked · current trade still open — close before flip buy";
+          renderAutoTradeUi();
+          setStatus("warn", lastAutoTradeNote);
           return false;
         }
         // Server may have closed opposite — clear local open before tracking new side.

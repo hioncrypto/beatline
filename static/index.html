@@ -22,9 +22,9 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.73" />
+    <link rel="stylesheet" href="/styles.css?v=10.74" />
     <script src="/vendor/lightweight-charts.js?v=4.2.1" defer></script>
-    <script src="/app.js?v=10.73" defer></script>
+    <script src="/app.js?v=10.74" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -420,7 +420,7 @@
       <label class="options-row toggle-row auto-flip-row" for="auto-flip-toggle" id="auto-flip-row">
         <span>
           <strong>Auto-flip opposite</strong>
-          <em>If Best Side reverses, close the open side and buy the other</em>
+          <em>If Best Side reverses, close the open trade first, then buy the other side</em>
         </span>
         <input id="auto-flip-toggle" type="checkbox" />
       </label>
@@ -428,8 +428,10 @@
         To arm live auto-trading: <strong>1)</strong> Save &amp; connect Kalshi below →
         <strong>2)</strong> turn on Live Kalshi buys → <strong>3)</strong> turn on Auto-trade.
         Save &amp; connect leaves Auto-trade <strong>unchecked</strong> — you have to turn it
-        on yourself. Auto buys clear Best Side entries at the <strong>live ask</strong> (with a small slip
-        so IOC fills land), sized ≤1% of balance — not penny-only. At the
+        on yourself. Auto buys the clear Best Side trigger immediately at the
+        <strong>live ask</strong> (with a small slip so IOC fills land), sized ≤1% of
+        balance — not penny-only. Auto-flip <strong>closes the current trade first</strong>
+        and will not buy the other side until that close fills. At the
         <strong>5-minute mark</strong> Auto-trade <strong>disengages</strong> and will
         not open a new buy (or auto-flip entry) until the next 15m window. Manual Buy Above / Below /
         Best can still set a Limit ¢. Fills run on the server even in the background.

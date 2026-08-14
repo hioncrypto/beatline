@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.77";
+  const APP_VERSION = "10.78";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -8869,7 +8869,7 @@
     if (autoFlipOn) {
       setStatus(
         "ok",
-        "Auto-flip ON — will close and reverse when Best Side flips"
+        "Auto-flip does not auto-sell — close is manual"
       );
     } else {
       setStatus("ok", "Auto-flip off — opposite Best Side waits until you close");
@@ -8945,47 +8945,11 @@
       lastAutoTradeKey = key;
       return false;
     }
-    // Opposite open: only flip if Auto-flip is checked.
+    // Opposite open: Auto never sells. Hold until settle or a manual close.
     if (demo.position && demo.position.side !== best.side) {
-      if (!autoFlipOn) {
-        lastAutoTradeNote = "skipped · opposite open (enable Auto-flip)";
-        renderAutoTradeUi();
-        return false;
-      }
-      const openedAt = Number(demo.position.openedAt || demo.position.lastAddedAt || 0);
-      const heldSec = openedAt > 0 ? (Date.now() - openedAt) / 1000 : AUTO_CLOSE_MIN_HOLD_SECS;
-      if (heldSec < AUTO_CLOSE_MIN_HOLD_SECS) {
-        const left = Math.max(1, Math.ceil(AUTO_CLOSE_MIN_HOLD_SECS - heldSec));
-        lastAutoTradeNote = `holding · ${left}s more before auto-flip can close`;
-        renderAutoTradeUi();
-        return false;
-      }
-      // Live: server auto-buy closes opposite then buys (one path).
-      // Demo: close locally first, then buy.
-      if (!isLiveKalshi()) {
-        autoTradeBusy = true;
-        try {
-          if (el.autoTradeStatus) {
-            el.autoTradeStatus.textContent = "Auto-flip · closing opposite…";
-            el.autoTradeStatus.classList.add("is-live");
-          }
-          const closed = await closeDemoPosition({ quiet: true });
-          if (!closed || !closed.ok || demo.position) {
-            lastAutoTradeNote = (closed && closed.error) || "flip close failed";
-            renderAutoTradeUi();
-            setStatus("warn", `Auto-flip close failed · ${lastAutoTradeNote}`);
-            return false;
-          }
-          lastAutoTradeNote = `flipped off ${
-            best.side === "above" ? "Below" : "Above"
-          } · opening ${best.side === "above" ? "Above" : "Below"}`;
-        } finally {
-          autoTradeBusy = false;
-        }
-      } else if (el.autoTradeStatus) {
-        el.autoTradeStatus.textContent = "Auto-flip · close + reverse…";
-        el.autoTradeStatus.classList.add("is-live");
-      }
+      lastAutoTradeNote = "skipped · Auto will not sell (close is manual)";
+      renderAutoTradeUi();
+      return false;
     }
     const ask =
       best.side === "above" ? lastRoiAsks.above : lastRoiAsks.below;

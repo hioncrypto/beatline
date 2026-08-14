@@ -3122,7 +3122,7 @@ def try_server_auto_trade(
     """
     Place a live Best Side buy when Auto-trade is armed on the server.
     Uses IOC with a small ask bump so fills land quickly as the book moves.
-    If Auto-flip is on and the opposite side is open, sell that first then buy.
+    If opposite is open, Auto does not sell — it holds until settle or a manual close.
     Dedupes per ticker:side; retries failed IOCs after AUTO_TRADE_RETRY_SEC.
     Every outcome is logged so we can verify the bot actually tried.
     Disengaged in the last 5 minutes of the window — no new auto buys.
@@ -3146,6 +3146,7 @@ def try_server_auto_trade(
             "wait_close_no_pos",
             "already_flat",
             "cash_floor",
+            "no_auto_sell",
         ):
             log_auto_trade_attempt(
                 {
@@ -3171,6 +3172,7 @@ def try_server_auto_trade(
             "flip_hold",
             "wait_close_hold",
             "cash_floor",
+            "no_auto_sell",
         ):
             global _last_auto_trade_note
             _last_auto_trade_note = str(note)
@@ -3321,101 +3323,15 @@ def _try_server_auto_trade_body(
 
     flipped = False
     if held_side and held_side != side and held_contracts > 0:
-        if not creds.get("auto_flip"):
-            note = (
-                "skipped · opposite open (enable Auto-flip) — "
-                f"holding {'Above' if held_side == 'above' else 'Below'}"
-            )
-            _last_auto_trade_note = note
-            return finish(
-                {"ok": False, "skipped": True, "error": note, "key": key},
-                kind="need_flip",
-            )
-
-        held = _auto_fill_held_secs(ticker)
-        if held < AUTO_CLOSE_MIN_HOLD_SECS:
-            left = AUTO_CLOSE_MIN_HOLD_SECS - held
-            note = (
-                f"holding {'Above' if held_side == 'above' else 'Below'} · "
-                f"{max(1, int(left))}s more before auto-flip can close"
-            )
-            _last_auto_trade_note = note
-            return finish(
-                {
-                    "ok": True,
-                    "skipped": True,
-                    "error": note,
-                    "note": note,
-                    "key": key,
-                },
-                kind="flip_hold",
-            )
-
-        # Close opposite with escalating IOC aggression (same miss pattern as buys).
-        opp_bid = _usable_bid_cents(opposite_bid_cents)
-        if opp_bid is None:
-            opp_bid = _usable_bid_cents(bid_cents)
-        fresh_bid = _fresh_side_bid_cents(ticker, held_side)
-        if fresh_bid is not None:
-            opp_bid = fresh_bid if opp_bid is None else min(opp_bid, fresh_bid)
-        if opp_bid is None:
-            try:
-                ask_i = int(ask_cents)
-                opp_bid = max(1, min(99, 100 - ask_i))
-            except (TypeError, ValueError):
-                opp_bid = None
-
-        log_auto_trade_attempt(
-            {
-                "kind": "flip_closing",
-                "ticker": ticker,
-                "side": side,
-                "ok": None,
-                "note": (
-                    f"auto-flip closing {'Above' if held_side == 'above' else 'Below'} "
-                    f"{held_contracts} cts before opening "
-                    f"{'Above' if side == 'above' else 'Below'}"
-                ),
-                "key": key,
-                "flipped": False,
-            }
+        # Auto never sells. Hold the open side until settle or a manual close.
+        note = (
+            "skipped · Auto will not sell — "
+            f"holding {'Above' if held_side == 'above' else 'Below'}"
         )
-
-        closed = _aggressive_close_held(
-            ticker=ticker,
-            held_side=held_side,
-            held_contracts=held_contracts,
-            creds=creds,
-            bid_cents=opp_bid,
-            key=key,
-            log_kind="flip_closing",
-            log_note=(
-                f"auto-flip still long "
-                f"{'Above' if held_side == 'above' else 'Below'} "
-                "· retry close before buy"
-            ),
-        )
-        sold = closed.get("sold")
-        left = int(closed.get("left") or 0)
-        if not closed.get("ok") or left > 0:
-            err = closed.get("error") or "opposite still open after close"
-            note = f"auto-flip close failed · still holding {left} cts · {err}"
-            _last_auto_trade_note = note
-            print(f"[kalshi-btc-target] auto-flip CLOSE MISS {ticker}:{held_side} {err}")
-            return finish(
-                {"ok": False, "error": note, "key": key, "sell": sold},
-                kind="flip_close_fail",
-            )
-
-        _clear_last_auto_fill(ticker)
-        flipped = True
-        _last_auto_trade_note = (
-            f"closed {'Above' if held_side == 'above' else 'Below'} · "
-            f"opening {'Above' if side == 'above' else 'Below'}"
-        )
-        print(
-            f"[kalshi-btc-target] auto-flip CLOSED {ticker}:{held_side} "
-            f"before buy {side}"
+        _last_auto_trade_note = note
+        return finish(
+            {"ok": False, "skipped": True, "error": note, "note": note, "key": key},
+            kind="no_auto_sell",
         )
 
     try:
@@ -4393,7 +4309,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.18",
+                    "version": "2.4.19",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

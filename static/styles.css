@@ -520,6 +520,32 @@ body.is-live-kalshi .mark {
   accent-color: var(--accent);
 }
 
+.options-current-balance {
+  padding: 14px 0 16px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.options-current-balance strong {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.options-current-balance .demo-balance {
+  margin-top: 6px;
+  font-size: 2.15rem;
+}
+
+.options-current-balance em {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
 .kalshi-live-section {
   display: grid;
   gap: 10px;

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.66";
+  const APP_VERSION = "10.68";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -7578,7 +7578,7 @@
   async function ensureServiceWorker() {
     if (!("serviceWorker" in navigator)) return null;
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js?v=3.44", {
+      const reg = await navigator.serviceWorker.register("/sw.js?v=3.45", {
         scope: "/",
         updateViaCache: "none",
       });

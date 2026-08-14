@@ -158,6 +158,8 @@ AUTO_TRADE_RETRY_SEC = 1.0
 AUTO_TRADE_LOG_LIMIT = 200
 # Disengage Auto-trade once ≤5 minutes remain — no new buys or auto-flip entries.
 AUTO_TRADE_CUTOFF_SECS = 5 * 60
+# After an auto buy, do not close/reverse for this long — let the trade breathe.
+AUTO_FLIP_MIN_HOLD_SECS = 2 * 60
 
 
 def _fresh_side_ask_cents(ticker: str, side: str) -> int | None:
@@ -2975,6 +2977,7 @@ def try_server_auto_trade(
             "already_long",
             "late_window",
             "inflight",
+            "flip_hold",
         ):
             log_auto_trade_attempt(
                 {
@@ -2993,7 +2996,12 @@ def try_server_auto_trade(
                     "suggest_stake": out.get("suggest_stake"),
                 }
             )
-        elif note and kind in ("already", "already_long", "late_window"):
+        elif note and kind in (
+            "already",
+            "already_long",
+            "late_window",
+            "flip_hold",
+        ):
             global _last_auto_trade_note
             _last_auto_trade_note = str(note)
         return out
@@ -3165,6 +3173,35 @@ def _try_server_auto_trade_body(
             return finish(
                 {"ok": False, "skipped": True, "error": note, "key": key},
                 kind="need_flip",
+            )
+
+        opened_at = None
+        if (
+            isinstance(_last_auto_position, dict)
+            and _last_auto_position.get("ticker") == ticker
+        ):
+            try:
+                opened_at = float(_last_auto_position.get("opened_at") or 0)
+            except (TypeError, ValueError):
+                opened_at = None
+        if not opened_at and _last_auto_trade_at:
+            opened_at = float(_last_auto_trade_at)
+        if opened_at and (time.time() - opened_at) < AUTO_FLIP_MIN_HOLD_SECS:
+            left = AUTO_FLIP_MIN_HOLD_SECS - (time.time() - opened_at)
+            note = (
+                f"holding {'Above' if held_side == 'above' else 'Below'} · "
+                f"{max(1, int(left))}s more before auto-flip can close"
+            )
+            _last_auto_trade_note = note
+            return finish(
+                {
+                    "ok": True,
+                    "skipped": True,
+                    "error": note,
+                    "note": note,
+                    "key": key,
+                },
+                kind="flip_hold",
             )
 
         # Close opposite with escalating IOC aggression (same miss pattern as buys).
@@ -3352,6 +3389,7 @@ def _try_server_auto_trade_body(
                 "ticker": ticker,
                 "side": side,
                 "contracts": fill_n,
+                "opened_at": time.time(),
             }
         prefix = "flipped · " if flipped else ""
         note = (
@@ -3943,7 +3981,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.15",
+                    "version": "2.4.16",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

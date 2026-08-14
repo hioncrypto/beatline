@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.74";
+  const APP_VERSION = "10.75";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -524,6 +524,8 @@
   const AUTO_FLIP_KEY = "beatlineAutoFlip";
   /** Auto-trade disengages once ≤5 minutes remain — will not open a new buy. */
   const AUTO_TRADE_CUTOFF_SECS = 5 * 60;
+  /** Auto-flip must not dump a fresh fill — give the trade time to move. */
+  const AUTO_FLIP_MIN_HOLD_SECS = 2 * 60;
   const ANALYTICS_SCOPE_KEY = "beatlineAnalyticsScope";
   let autoTradeOn = false;
   let autoFlipOn = false;
@@ -8897,6 +8899,14 @@
     if (demo.position && demo.position.side !== best.side) {
       if (!autoFlipOn) {
         lastAutoTradeNote = "skipped · opposite open (enable Auto-flip)";
+        renderAutoTradeUi();
+        return false;
+      }
+      const openedAt = Number(demo.position.openedAt || demo.position.lastAddedAt || 0);
+      const heldSec = openedAt > 0 ? (Date.now() - openedAt) / 1000 : AUTO_FLIP_MIN_HOLD_SECS;
+      if (heldSec < AUTO_FLIP_MIN_HOLD_SECS) {
+        const left = Math.max(1, Math.ceil(AUTO_FLIP_MIN_HOLD_SECS - heldSec));
+        lastAutoTradeNote = `holding · ${left}s more before auto-flip can close`;
         renderAutoTradeUi();
         return false;
       }

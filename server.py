@@ -160,6 +160,14 @@ AUTO_TRADE_LOG_LIMIT = 200
 AUTO_TRADE_CUTOFF_SECS = 5 * 60
 # After an auto buy, do not close/reverse for this long — let the trade breathe.
 AUTO_FLIP_MIN_HOLD_SECS = 2 * 60
+AUTO_CLOSE_MIN_HOLD_SECS = AUTO_FLIP_MIN_HOLD_SECS
+# Never let Auto spend the account through this cash floor. Manual buys can.
+AUTO_CASH_FLOOR_USD = 10.0
+# WAIT / no-clear must hold this many watcher polls (~1s each) before close.
+AUTO_WAIT_CONFIRM_TICKS = 2
+_auto_wait_ticks = 0
+# Ticker we already confirmed flat (or closed) during this WAIT episode.
+_auto_wait_flat_ticker: str | None = None
 
 
 def _fresh_side_ask_cents(ticker: str, side: str) -> int | None:
@@ -283,6 +291,8 @@ def auto_trade_status() -> dict:
         "last_auto_trade_at": _last_auto_trade_at or None,
         "last_auto_trade_note": note,
         "last_auto_position": _last_auto_position,
+        "cash_floor_usd": AUTO_CASH_FLOOR_USD,
+        "close_min_hold_secs": AUTO_CLOSE_MIN_HOLD_SECS,
         "attempts": attempts[-50:],
         "attempt_count": len(attempts),
     }
@@ -1827,6 +1837,7 @@ def push_watcher_loop() -> None:
     global _last_edge_ask, _clear_edge_latched, _clear_edge_latch_ticker
     global _edge_confirm_key, _edge_confirm_count
     global _last_auto_trade_key, _last_auto_position
+    global _auto_wait_ticks, _auto_wait_flat_ticker
     print("[kalshi-btc-target] background push watcher started")
     while True:
         try:
@@ -1859,6 +1870,8 @@ def push_watcher_loop() -> None:
                 with _auto_trade_lock:
                     _last_auto_trade_key = None
                     _last_auto_position = None
+                _auto_wait_ticks = 0
+                _auto_wait_flat_ticker = None
             if ticker:
                 _last_push_ticker = ticker
 
@@ -1878,6 +1891,7 @@ def push_watcher_loop() -> None:
             edge = score_clear_edge(data, spot, latched=latched)
             now = time.time()
             if edge:
+                _auto_wait_ticks = 0
                 _clear_edge_latched = True
                 _clear_edge_latch_ticker = ticker
                 sticky = f"{ticker}:{edge['side']}"
@@ -1960,6 +1974,32 @@ def push_watcher_loop() -> None:
                 _clear_edge_latched = False
                 _edge_confirm_key = None
                 _edge_confirm_count = 0
+                _auto_wait_ticks += 1
+                # Confirmed WAIT / no-clear: close the open auto trade at bid
+                # (after the 2-minute hold). Do not buy the other side.
+                if (
+                    ticker
+                    and _auto_wait_ticks >= AUTO_WAIT_CONFIRM_TICKS
+                    and _auto_wait_flat_ticker != ticker
+                ):
+                    try:
+                        close_res = try_server_auto_close(
+                            ticker=ticker,
+                            reason="wait",
+                            yes_bid_cents=data.get("yes_bid_pct"),
+                            no_bid_cents=data.get("no_bid_pct"),
+                        )
+                        kind = str((close_res or {}).get("kind") or "")
+                        if kind in (
+                            "wait_closed",
+                            "already_flat",
+                            "no_position",
+                        ):
+                            _auto_wait_flat_ticker = ticker
+                    except Exception as close_exc:
+                        print(
+                            f"[kalshi-btc-target] auto-close error: {close_exc}"
+                        )
                 # Only forget the edge after it has been gone for a while —
                 # prevents push loops when the score flickers around threshold.
                 if _last_edge_key is not None:
@@ -2944,6 +2984,163 @@ def _auto_trade_secs_left(secs_left=None) -> float | None:
     return (close_ms - time.time() * 1000.0) / 1000.0
 
 
+def auto_stake_after_cash_floor(
+    stake,
+    cash,
+    *,
+    floor: float = AUTO_CASH_FLOOR_USD,
+    min_stake: float = 1.0,
+) -> tuple[float | None, str | None]:
+    """Cap an auto-buy so cash after the fill stays at/above the floor.
+
+    Returns (stake, None) or (None, reason). cash=None (balance unknown) leaves
+    stake unchanged so a transient balance blip doesn't brick Auto.
+    """
+    try:
+        s = float(stake)
+    except (TypeError, ValueError):
+        return None, "size_zero"
+    if cash is None:
+        if s < min_stake:
+            return None, "size_zero"
+        return s, None
+    try:
+        c = float(cash)
+    except (TypeError, ValueError):
+        if s < min_stake:
+            return None, "size_zero"
+        return s, None
+    if c <= float(floor) + 0.01:
+        return None, "cash_floor"
+    max_spend = c - float(floor)
+    if max_spend < min_stake:
+        return None, "cash_floor"
+    if s > max_spend:
+        s = max_spend
+    if s < min_stake:
+        return None, "cash_floor"
+    return s, None
+
+
+def _clear_last_auto_fill(ticker: str | None = None) -> None:
+    """Forget the last auto fill so a new clear trigger can buy again."""
+    global _last_auto_trade_key, _last_auto_position
+    with _auto_trade_lock:
+        _last_auto_position = None
+        if not ticker:
+            _last_auto_trade_key = None
+        elif _last_auto_trade_key and str(_last_auto_trade_key).startswith(f"{ticker}:"):
+            _last_auto_trade_key = None
+
+
+def _auto_fill_held_secs(ticker: str) -> float:
+    """Seconds since the last auto fill on this ticker. Unknown age → old enough."""
+    opened = 0.0
+    last = _last_auto_position
+    if isinstance(last, dict) and last.get("ticker") == ticker:
+        try:
+            opened = float(last.get("opened_at") or 0)
+        except (TypeError, ValueError):
+            opened = 0.0
+    if opened <= 0 and _last_auto_trade_at:
+        try:
+            opened = float(_last_auto_trade_at)
+        except (TypeError, ValueError):
+            opened = 0.0
+    if opened <= 0:
+        return float(AUTO_CLOSE_MIN_HOLD_SECS)
+    return time.time() - opened
+
+
+def _resolve_held_position(ticker: str, creds: dict | None) -> tuple[str | None, int]:
+    """Kalshi position first; local last-fill only if the fetch failed."""
+    pos = kalshi_fetch_market_position(ticker, creds)
+    if pos.get("ok"):
+        side = pos.get("side")
+        try:
+            n = int(pos.get("contracts") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if side in ("above", "below") and n > 0:
+            return side, n
+        return None, 0
+    last = _last_auto_position
+    if (
+        isinstance(last, dict)
+        and last.get("ticker") == ticker
+        and last.get("side") in ("above", "below")
+        and int(last.get("contracts") or 0) > 0
+    ):
+        return last["side"], int(last["contracts"])
+    return None, 0
+
+
+def _bid_for_held_side(held_side: str, *, bid_cents=None, yes_bid_cents=None, no_bid_cents=None):
+    if held_side == "above":
+        return _usable_bid_cents(yes_bid_cents) or _usable_bid_cents(bid_cents)
+    if held_side == "below":
+        return _usable_bid_cents(no_bid_cents) or _usable_bid_cents(bid_cents)
+    return _usable_bid_cents(bid_cents)
+
+
+def _aggressive_close_held(
+    *,
+    ticker: str,
+    held_side: str,
+    held_contracts: int,
+    creds: dict,
+    bid_cents=None,
+    key: str = "",
+    log_kind: str = "wait_closing",
+    log_note: str | None = None,
+) -> dict:
+    """Sell until Kalshi shows 0 contracts on this ticker/side. No buy."""
+
+    def _held_contracts_now() -> int:
+        pos2 = kalshi_fetch_market_position(ticker, creds)
+        if (
+            pos2.get("ok")
+            and pos2.get("side") == held_side
+            and int(pos2.get("contracts") or 0) > 0
+        ):
+            return int(pos2["contracts"])
+        return 0
+
+    close_qty = int(held_contracts)
+    sold = None
+    for close_i in range(2):
+        sold = aggressive_kalshi_sell(
+            ticker=ticker,
+            side=held_side,
+            contracts=close_qty,
+            bid_cents=bid_cents,
+        )
+        left = _held_contracts_now()
+        if left <= 0:
+            return {"ok": True, "sold": sold, "left": 0, "fill_count": (sold or {}).get("fill_count")}
+        close_qty = left
+        if close_i == 0:
+            log_auto_trade_attempt(
+                {
+                    "kind": log_kind,
+                    "ticker": ticker,
+                    "side": held_side,
+                    "ok": None,
+                    "note": log_note
+                    or (
+                        f"still long {'Above' if held_side == 'above' else 'Below'} "
+                        f"{left} cts · retry close"
+                    ),
+                    "key": key,
+                }
+            )
+    left = _held_contracts_now()
+    if left <= 0:
+        return {"ok": True, "sold": sold, "left": 0, "fill_count": (sold or {}).get("fill_count")}
+    err = (sold and sold.get("error")) or "still open after close"
+    return {"ok": False, "sold": sold, "left": left, "error": err}
+
+
 def try_server_auto_trade(
     *,
     ticker: str,
@@ -2978,6 +3175,10 @@ def try_server_auto_trade(
             "late_window",
             "inflight",
             "flip_hold",
+            "wait_close_hold",
+            "wait_close_no_pos",
+            "already_flat",
+            "cash_floor",
         ):
             log_auto_trade_attempt(
                 {
@@ -3001,6 +3202,8 @@ def try_server_auto_trade(
             "already_long",
             "late_window",
             "flip_hold",
+            "wait_close_hold",
+            "cash_floor",
         ):
             global _last_auto_trade_note
             _last_auto_trade_note = str(note)
@@ -3126,23 +3329,10 @@ def _try_server_auto_trade_body(
     finish,
 ) -> dict:
     global _last_auto_trade_key, _last_auto_trade_at, _last_auto_trade_note
-    global _last_auto_position
+    global _last_auto_position, _auto_wait_flat_ticker
 
     # Resolve any open position on this ticker (Kalshi truth, then local memory).
-    held_side = None
-    held_contracts = 0
-    pos = kalshi_fetch_market_position(ticker, creds)
-    if pos.get("ok") and pos.get("side") and int(pos.get("contracts") or 0) > 0:
-        held_side = pos["side"]
-        held_contracts = int(pos["contracts"])
-    elif (
-        isinstance(_last_auto_position, dict)
-        and _last_auto_position.get("ticker") == ticker
-        and _last_auto_position.get("side") in ("above", "below")
-        and int(_last_auto_position.get("contracts") or 0) > 0
-    ):
-        held_side = _last_auto_position["side"]
-        held_contracts = int(_last_auto_position["contracts"])
+    held_side, held_contracts = _resolve_held_position(ticker, creds)
 
     if held_side == side and held_contracts > 0:
         with _auto_trade_lock:
@@ -3175,19 +3365,9 @@ def _try_server_auto_trade_body(
                 kind="need_flip",
             )
 
-        opened_at = None
-        if (
-            isinstance(_last_auto_position, dict)
-            and _last_auto_position.get("ticker") == ticker
-        ):
-            try:
-                opened_at = float(_last_auto_position.get("opened_at") or 0)
-            except (TypeError, ValueError):
-                opened_at = None
-        if not opened_at and _last_auto_trade_at:
-            opened_at = float(_last_auto_trade_at)
-        if opened_at and (time.time() - opened_at) < AUTO_FLIP_MIN_HOLD_SECS:
-            left = AUTO_FLIP_MIN_HOLD_SECS - (time.time() - opened_at)
+        held = _auto_fill_held_secs(ticker)
+        if held < AUTO_CLOSE_MIN_HOLD_SECS:
+            left = AUTO_CLOSE_MIN_HOLD_SECS - held
             note = (
                 f"holding {'Above' if held_side == 'above' else 'Below'} · "
                 f"{max(1, int(left))}s more before auto-flip can close"
@@ -3234,49 +3414,24 @@ def _try_server_auto_trade_body(
             }
         )
 
-        def _held_contracts_now() -> int:
-            pos2 = kalshi_fetch_market_position(ticker, creds)
-            if (
-                pos2.get("ok")
-                and pos2.get("side") == held_side
-                and int(pos2.get("contracts") or 0) > 0
-            ):
-                return int(pos2["contracts"])
-            return 0
-
-        close_qty = held_contracts
-        sold = None
-        for close_i in range(2):
-            sold = aggressive_kalshi_sell(
-                ticker=ticker,
-                side=held_side,
-                contracts=close_qty,
-                bid_cents=opp_bid,
-            )
-            left = _held_contracts_now()
-            if left <= 0:
-                break
-            close_qty = left
-            if close_i == 0:
-                log_auto_trade_attempt(
-                    {
-                        "kind": "flip_closing",
-                        "ticker": ticker,
-                        "side": side,
-                        "ok": None,
-                        "note": (
-                            f"auto-flip still long "
-                            f"{'Above' if held_side == 'above' else 'Below'} "
-                            f"{left} cts · retry close before buy"
-                        ),
-                        "key": key,
-                        "flipped": False,
-                    }
-                )
-
-        left = _held_contracts_now()
-        if left > 0:
-            err = (sold and sold.get("error")) or "opposite still open after close"
+        closed = _aggressive_close_held(
+            ticker=ticker,
+            held_side=held_side,
+            held_contracts=held_contracts,
+            creds=creds,
+            bid_cents=opp_bid,
+            key=key,
+            log_kind="flip_closing",
+            log_note=(
+                f"auto-flip still long "
+                f"{'Above' if held_side == 'above' else 'Below'} "
+                "· retry close before buy"
+            ),
+        )
+        sold = closed.get("sold")
+        left = int(closed.get("left") or 0)
+        if not closed.get("ok") or left > 0:
+            err = closed.get("error") or "opposite still open after close"
             note = f"auto-flip close failed · still holding {left} cts · {err}"
             _last_auto_trade_note = note
             print(f"[kalshi-btc-target] auto-flip CLOSE MISS {ticker}:{held_side} {err}")
@@ -3285,10 +3440,7 @@ def _try_server_auto_trade_body(
                 kind="flip_close_fail",
             )
 
-        with _auto_trade_lock:
-            _last_auto_position = None
-            if _last_auto_trade_key and _last_auto_trade_key.startswith(f"{ticker}:"):
-                _last_auto_trade_key = None
+        _clear_last_auto_fill(ticker)
         flipped = True
         _last_auto_trade_note = (
             f"closed {'Above' if held_side == 'above' else 'Below'} · "
@@ -3320,19 +3472,38 @@ def _try_server_auto_trade_body(
         stake = float(stake) if stake is not None else None
     except (TypeError, ValueError):
         stake = None
+    bal = kalshi_fetch_balance(creds)
+    cash = None
+    if bal.get("ok") and bal.get("balance") is not None:
+        try:
+            cash = float(bal["balance"])
+        except (TypeError, ValueError):
+            cash = None
     if stake is None or stake < 1:
-        bal = kalshi_fetch_balance(creds)
-        bank = bal.get("balance") if bal.get("ok") else None
-        stake = float(_green_spike_suggest(limit_ask, 0.55, bank) or 0)
-    if stake < 1:
-        bal = kalshi_fetch_balance(creds)
-        bank = bal.get("balance") if bal.get("ok") else None
-        if bank is not None and float(bank) >= 1:
-            stake = 1.0
+        stake = float(_green_spike_suggest(limit_ask, 0.55, cash) or 0)
+    if stake < 1 and cash is not None and cash >= 1:
+        stake = 1.0
     if stake < 1:
         note = "auto-trade size $0 (balance too small for $1 entry)"
         _last_auto_trade_note = note
         return finish({"ok": False, "error": note, "key": key}, kind="size_zero")
+
+    sized, floor_why = auto_stake_after_cash_floor(stake, cash)
+    if sized is None:
+        if floor_why == "cash_floor":
+            cash_txt = f"${cash:.2f}" if cash is not None else "unknown"
+            note = (
+                f"cash floor · {cash_txt} at/under ${AUTO_CASH_FLOOR_USD:.0f} "
+                "— no auto buy (manual still ok)"
+            )
+        else:
+            note = "auto-trade size $0 (balance too small for $1 entry)"
+        _last_auto_trade_note = note
+        return finish(
+            {"ok": False, "skipped": True, "error": note, "note": note, "key": key},
+            kind=floor_why or "size_zero",
+        )
+    stake = sized
 
     side_label = "Above" if side == "above" else "Below"
     result = None
@@ -3348,8 +3519,29 @@ def _try_server_auto_trade_body(
                 ask = max(ask, live_ask2)
         used_limit = _limit_for(slip)
         contracts = _auto_contracts_for_stake(used_limit, stake)
-        if contracts < 1:
+        if cash is not None:
+            px = used_limit / 100.0
+            max_cts = int((cash - AUTO_CASH_FLOOR_USD) / px) if px > 0 else 0
+            contracts = min(max(contracts, 0), max(0, max_cts))
+        elif contracts < 1:
             contracts = 1
+        if contracts < 1:
+            cash_txt = f"${cash:.2f}" if cash is not None else "unknown"
+            note = (
+                f"cash floor · {cash_txt} can't buy 1 ct and keep "
+                f"${AUTO_CASH_FLOOR_USD:.0f}"
+            )
+            _last_auto_trade_note = note
+            return finish(
+                {
+                    "ok": False,
+                    "skipped": True,
+                    "error": note,
+                    "note": note,
+                    "key": key,
+                },
+                kind="cash_floor",
+            )
         log_auto_trade_attempt(
             {
                 "kind": "sending_buy",
@@ -3391,6 +3583,7 @@ def _try_server_auto_trade_body(
                 "contracts": fill_n,
                 "opened_at": time.time(),
             }
+            _auto_wait_flat_ticker = None
         prefix = "flipped · " if flipped else ""
         note = (
             f"{prefix}bought {side_label} ~${int(round(stake))} "
@@ -3421,6 +3614,232 @@ def _try_server_auto_trade_body(
     out["note"] = _last_auto_trade_note
     out["error"] = err
     return finish(out, kind="miss")
+
+
+def try_server_auto_close(
+    *,
+    ticker: str,
+    reason: str = "wait",
+    bid_cents=None,
+    yes_bid_cents=None,
+    no_bid_cents=None,
+    force: bool = False,
+) -> dict:
+    """
+    Close an open live position at bid when Best Side goes WAIT / no-clear.
+    Does not buy the other side. Honors the 2-minute hold. Allowed in the
+    last 5 minutes (that cutoff only blocks new buys).
+    """
+    global _last_auto_trade_note, _auto_trade_inflight
+
+    def finish(result: dict, *, kind: str) -> dict:
+        out = dict(result or {})
+        out.setdefault("auto", True)
+        out["kind"] = kind
+        out.setdefault("closed", False)
+        note = out.get("note") or out.get("error") or kind
+        if kind not in (
+            "inflight",
+            "wait_close_hold",
+            "wait_close_no_pos",
+            "already_flat",
+            "not_armed",
+        ):
+            log_auto_trade_attempt(
+                {
+                    "kind": kind,
+                    "ticker": ticker,
+                    "side": out.get("side"),
+                    "ok": bool(out.get("ok")),
+                    "skipped": bool(out.get("skipped")),
+                    "closed": bool(out.get("closed")),
+                    "note": note,
+                    "error": out.get("error"),
+                }
+            )
+        elif note and kind in ("wait_close_hold", "already_flat"):
+            _last_auto_trade_note = str(note)
+        return out
+
+    ticker = (ticker or "").strip()
+    if not ticker:
+        return finish(
+            {"ok": False, "skipped": True, "error": "Need ticker"},
+            kind="bad_args",
+        )
+
+    creds = get_kalshi_credentials()
+    if not creds:
+        return finish(
+            {"ok": False, "skipped": True, "error": "Kalshi not connected"},
+            kind="not_armed",
+        )
+    if not creds.get("live_enabled") and not os.environ.get("KALSHI_LIVE_FORCE"):
+        return finish(
+            {"ok": False, "skipped": True, "error": "Live Kalshi buys off"},
+            kind="not_armed",
+        )
+    if not creds.get("auto_trade") and not force:
+        return finish(
+            {"ok": False, "skipped": True, "error": "Auto-trade off"},
+            kind="not_armed",
+        )
+
+    with _auto_trade_lock:
+        if _auto_trade_inflight:
+            return finish(
+                {
+                    "ok": False,
+                    "skipped": True,
+                    "error": "auto-trade in flight",
+                },
+                kind="inflight",
+            )
+        _auto_trade_inflight = True
+
+    try:
+        return _try_server_auto_close_body(
+            ticker=ticker,
+            reason=reason,
+            bid_cents=bid_cents,
+            yes_bid_cents=yes_bid_cents,
+            no_bid_cents=no_bid_cents,
+            creds=creds,
+            finish=finish,
+        )
+    finally:
+        with _auto_trade_lock:
+            _auto_trade_inflight = False
+
+
+def _try_server_auto_close_body(
+    *,
+    ticker: str,
+    reason: str,
+    bid_cents,
+    yes_bid_cents,
+    no_bid_cents,
+    creds: dict,
+    finish,
+) -> dict:
+    global _last_auto_trade_note
+
+    last = _last_auto_position if isinstance(_last_auto_position, dict) else None
+    if last and last.get("ticker") == ticker:
+        held = _auto_fill_held_secs(ticker)
+        if held < AUTO_CLOSE_MIN_HOLD_SECS:
+            left = AUTO_CLOSE_MIN_HOLD_SECS - held
+            note = (
+                f"holding {'Above' if last.get('side') == 'above' else 'Below'} · "
+                f"{max(1, int(left))}s more before auto-close"
+            )
+            _last_auto_trade_note = note
+            return finish(
+                {
+                    "ok": True,
+                    "skipped": True,
+                    "error": note,
+                    "note": note,
+                    "held_secs": held,
+                },
+                kind="wait_close_hold",
+            )
+
+    held_side, held_contracts = _resolve_held_position(ticker, creds)
+    if not held_side or held_contracts < 1:
+        _clear_last_auto_fill(ticker)
+        note = "already flat"
+        _last_auto_trade_note = note
+        return finish(
+            {
+                "ok": True,
+                "skipped": True,
+                "already_flat": True,
+                "note": note,
+            },
+            kind="already_flat",
+        )
+
+    held = _auto_fill_held_secs(ticker)
+    if held < AUTO_CLOSE_MIN_HOLD_SECS:
+        left = AUTO_CLOSE_MIN_HOLD_SECS - held
+        note = (
+            f"holding {'Above' if held_side == 'above' else 'Below'} · "
+            f"{max(1, int(left))}s more before auto-close"
+        )
+        _last_auto_trade_note = note
+        return finish(
+            {
+                "ok": True,
+                "skipped": True,
+                "error": note,
+                "note": note,
+                "held_secs": held,
+            },
+            kind="wait_close_hold",
+        )
+
+    opp_bid = _bid_for_held_side(
+        held_side,
+        bid_cents=bid_cents,
+        yes_bid_cents=yes_bid_cents,
+        no_bid_cents=no_bid_cents,
+    )
+    side_label = "Above" if held_side == "above" else "Below"
+    log_auto_trade_attempt(
+        {
+            "kind": "wait_closing",
+            "ticker": ticker,
+            "side": held_side,
+            "ok": None,
+            "note": (
+                f"WAIT close {side_label} {held_contracts} cts at bid "
+                f"({reason})"
+            ),
+        }
+    )
+    closed = _aggressive_close_held(
+        ticker=ticker,
+        held_side=held_side,
+        held_contracts=held_contracts,
+        creds=creds,
+        bid_cents=opp_bid,
+        log_kind="wait_closing",
+    )
+    sold = closed.get("sold")
+    left = int(closed.get("left") or 0)
+    if not closed.get("ok") or left > 0:
+        err = closed.get("error") or "still open after close"
+        note = f"WAIT close failed · still holding {left} cts · {err}"
+        _last_auto_trade_note = note
+        print(f"[kalshi-btc-target] WAIT CLOSE MISS {ticker}:{held_side} {err}")
+        return finish(
+            {
+                "ok": False,
+                "error": note,
+                "note": note,
+                "sell": sold,
+                "side": held_side,
+            },
+            kind="wait_close_fail",
+        )
+
+    _clear_last_auto_fill(ticker)
+    note = f"closed {side_label} at bid · WAIT / no clear edge"
+    _last_auto_trade_note = note
+    print(f"[kalshi-btc-target] WAIT CLOSED {ticker}:{held_side}")
+    return finish(
+        {
+            "ok": True,
+            "closed": True,
+            "already_flat": True,
+            "note": note,
+            "side": held_side,
+            "sell": sold,
+        },
+        kind="wait_closed",
+    )
+
 
 def place_kalshi_buy(
     *,
@@ -3809,6 +4228,25 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(code, result)
             return
 
+        if path == "/api/kalshi/auto-close":
+            result = try_server_auto_close(
+                ticker=str(body.get("ticker") or "").strip(),
+                reason=str(body.get("reason") or "wait").strip() or "wait",
+                bid_cents=body.get("bid_cents")
+                if body.get("bid_cents") is not None
+                else body.get("bidCents"),
+                yes_bid_cents=body.get("yes_bid_cents")
+                if body.get("yes_bid_cents") is not None
+                else body.get("yesBidCents"),
+                no_bid_cents=body.get("no_bid_cents")
+                if body.get("no_bid_cents") is not None
+                else body.get("noBidCents"),
+                force=bool(body.get("force")),
+            )
+            code = 200 if result.get("ok") or result.get("skipped") else 400
+            self._send_json(code, result)
+            return
+
         if path == "/api/kalshi/order":
             side = str(body.get("side") or "").strip().lower()
             if side in ("yes", "y"):
@@ -3981,7 +4419,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.16",
+                    "version": "2.4.17",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

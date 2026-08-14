@@ -3591,11 +3591,19 @@ def try_server_auto_close(
     no_bid_cents=None,
     force: bool = False,
 ) -> dict:
+    """WAIT / trigger-gone auto-close is disabled. Trades hold until settle,
+    a manual close, or Auto-flip. Kept as a no-op so a stale app cannot dump.
     """
-    Close an open live position at bid when Best Side goes WAIT / no-clear.
-    Does not buy the other side. Honors the 2-minute hold. Allowed in the
-    last 5 minutes (that cutoff only blocks new buys).
-    """
+    note = "WAIT auto-close off — holding until settle, manual close, or Auto-flip"
+    return {
+        "ok": True,
+        "skipped": True,
+        "closed": False,
+        "kind": "wait_close_disabled",
+        "note": note,
+        "error": note,
+        "auto": True,
+    }
     global _last_auto_trade_note, _auto_trade_inflight
 
     def finish(result: dict, *, kind: str) -> dict:

@@ -22,9 +22,9 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.78" />
+    <link rel="stylesheet" href="/styles.css?v=10.79" />
     <script src="/vendor/lightweight-charts.js?v=4.2.1" defer></script>
-    <script src="/app.js?v=10.78" defer></script>
+    <script src="/app.js?v=10.79" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -555,74 +555,6 @@
           <div id="demo-pl" class="demo-pl">Session P/L $0.00</div>
         </div>
 
-        <section class="pl-chart-section" aria-label="Wins and P/L chart">
-          <button
-            type="button"
-            id="pl-chart-toggle"
-            class="pl-chart-toggle"
-            aria-expanded="false"
-            aria-controls="pl-chart-body"
-          >
-            <span>
-              <strong>Wins &amp; P/L chart</strong>
-              <em id="pl-chart-toggle-meta">Collapsed · from your trade log</em>
-            </span>
-            <span id="pl-chart-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
-          </button>
-          <div id="pl-chart-body" class="pl-chart-body" hidden>
-            <div id="pl-chart-caption" class="pl-chart-caption">
-              All-time trade log · green win · red loss · pinch to zoom
-            </div>
-            <label class="pl-day-lines-toggle" for="pl-day-lines-check">
-              <input id="pl-day-lines-check" type="checkbox" checked />
-              <span>Midnight day lines</span>
-            </label>
-            <div id="pl-chart-stage" class="pl-chart-stage">
-              <div id="pl-chart" class="pl-chart" aria-label="Trade history profit and loss chart"></div>
-              <div id="pl-day-lines" class="pl-day-lines" hidden aria-hidden="true"></div>
-              <div id="pl-crosshair" class="pl-crosshair" hidden aria-hidden="true">
-                <div class="pl-crosshair-v"></div>
-                <div class="pl-crosshair-h"></div>
-                <div id="pl-crosshair-date" class="pl-crosshair-tag pl-crosshair-date">—</div>
-                <div class="pl-crosshair-right">
-                  <div id="pl-crosshair-price" class="pl-crosshair-tag pl-crosshair-price">—</div>
-                  <div id="pl-crosshair-balance" class="pl-crosshair-tag pl-crosshair-balance" hidden>
-                    <span id="pl-crosshair-balance-amt" class="pl-crosshair-balance-amt">—</span>
-                    <span id="pl-crosshair-balance-note" class="pl-crosshair-balance-note"
-                      >(account at the time)</span
-                    >
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div id="pl-chart-readout" class="pl-chart-readout" hidden>
-              <div id="pl-chart-readout-main" class="pl-chart-readout-main">
-                Tap a trade to inspect
-              </div>
-              <div
-                id="pl-chart-readout-balance"
-                class="pl-chart-readout-balance"
-                hidden
-              >
-                <span id="pl-chart-readout-balance-amt">—</span>
-                <span id="pl-chart-readout-balance-note" class="pl-chart-readout-balance-note"
-                  >(account at the time)</span
-                >
-              </div>
-            </div>
-            <div id="pl-chart-empty" class="pl-chart-empty">
-              Wins/losses candle here after settlements. For Live Kalshi, open
-              Options → Live Kalshi — chart loads from your Kalshi account.
-            </div>
-            <p class="pl-chart-hint">
-              Opens on full history. Pinch to zoom, slide to pan. Light-press a
-              candle for the crosshair, then slide to scrub; tap again to clear.
-              Drag the price numbers on the right to stretch or shrink the
-              candles — chart size stays put.
-            </p>
-          </div>
-        </section>
-
         <div class="demo-start-row">
           <label for="demo-start">Starting bankroll</label>
           <div class="demo-start-controls">
@@ -675,6 +607,74 @@
           Update now
         </button>
       </div>
+
+      <section class="pl-chart-section" aria-label="Wins and P/L chart">
+        <button
+          type="button"
+          id="pl-chart-toggle"
+          class="pl-chart-toggle"
+          aria-expanded="false"
+          aria-controls="pl-chart-body"
+        >
+          <span>
+            <strong>Wins &amp; P/L chart</strong>
+            <em id="pl-chart-toggle-meta">Collapsed · from your trade log</em>
+          </span>
+          <span id="pl-chart-chevron" class="pl-chart-chevron" aria-hidden="true">▾</span>
+        </button>
+        <div id="pl-chart-body" class="pl-chart-body" hidden>
+          <div id="pl-chart-caption" class="pl-chart-caption">
+            All-time trade log · green win · red loss · pinch to zoom
+          </div>
+          <label class="pl-day-lines-toggle" for="pl-day-lines-check">
+            <input id="pl-day-lines-check" type="checkbox" checked />
+            <span>Midnight day lines</span>
+          </label>
+          <div id="pl-chart-stage" class="pl-chart-stage">
+            <div id="pl-chart" class="pl-chart" aria-label="Trade history profit and loss chart"></div>
+            <div id="pl-day-lines" class="pl-day-lines" hidden aria-hidden="true"></div>
+            <div id="pl-crosshair" class="pl-crosshair" hidden aria-hidden="true">
+              <div class="pl-crosshair-v"></div>
+              <div class="pl-crosshair-h"></div>
+              <div id="pl-crosshair-date" class="pl-crosshair-tag pl-crosshair-date">—</div>
+              <div class="pl-crosshair-right">
+                <div id="pl-crosshair-price" class="pl-crosshair-tag pl-crosshair-price">—</div>
+                <div id="pl-crosshair-balance" class="pl-crosshair-tag pl-crosshair-balance" hidden>
+                  <span id="pl-crosshair-balance-amt" class="pl-crosshair-balance-amt">—</span>
+                  <span id="pl-crosshair-balance-note" class="pl-crosshair-balance-note"
+                    >(account at the time)</span
+                  >
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="pl-chart-readout" class="pl-chart-readout" hidden>
+            <div id="pl-chart-readout-main" class="pl-chart-readout-main">
+              Tap a trade to inspect
+            </div>
+            <div
+              id="pl-chart-readout-balance"
+              class="pl-chart-readout-balance"
+              hidden
+            >
+              <span id="pl-chart-readout-balance-amt">—</span>
+              <span id="pl-chart-readout-balance-note" class="pl-chart-readout-balance-note"
+                >(account at the time)</span
+              >
+            </div>
+          </div>
+          <div id="pl-chart-empty" class="pl-chart-empty">
+            Wins/losses candles from your Live Kalshi or Demo closes. Tap
+            <strong>Live Kalshi</strong> in Strategy report to load the live account.
+          </div>
+          <p class="pl-chart-hint">
+            Opens on full history. Pinch to zoom, slide to pan. Light-press a
+            candle for the crosshair, then slide to scrub; tap again to clear.
+            Drag the price numbers on the right to stretch or shrink the
+            candles — chart size stays put.
+          </p>
+        </div>
+      </section>
 
       <section id="strategy-section" class="strategy-section" aria-label="Strategy report">
         <button

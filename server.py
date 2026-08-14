@@ -2614,6 +2614,133 @@ def kalshi_fetch_open_positions(creds: dict | None = None) -> dict:
     return {"ok": True, "positions": out, "raw_count": len(market_positions) if isinstance(market_positions, list) else 0}
 
 
+def _kalshi_realized_closes(fills: list, settlements: list) -> list:
+    """
+    Round-trip P/L for the live chart / W-L: early sell-to-close plus expire.
+    FIFO-match sell fills against buy lots; leftover lots are settled by Kalshi
+    settlement rows (do not double-count).
+    """
+    from collections import defaultdict, deque
+
+    lots: dict[tuple, deque] = defaultdict(deque)
+    timed: list[tuple[str, dict]] = []
+    for f in fills or []:
+        if isinstance(f, dict) and f.get("action") in ("buy", "sell"):
+            timed.append(("fill", f))
+    for s in settlements or []:
+        if isinstance(s, dict):
+            timed.append(("settle", s))
+    timed.sort(
+        key=lambda item: (
+            item[1].get("at") is None,
+            item[1].get("at") or 0,
+            0 if item[0] == "fill" else 1,
+        )
+    )
+
+    closes: list[dict] = []
+    for kind, ev in timed:
+        ticker = str(ev.get("ticker") or "").strip()
+        if kind == "fill" and ev.get("action") == "buy":
+            side = ev.get("side")
+            try:
+                n = float(ev.get("contracts") or 0)
+            except (TypeError, ValueError):
+                n = 0.0
+            if n <= 0 or side not in ("above", "below") or not ticker:
+                continue
+            lots[(ticker, side)].append(
+                {
+                    "contracts": n,
+                    "cost": float(ev.get("notional_dollars") or 0),
+                    "fee": float(ev.get("fee_dollars") or 0),
+                }
+            )
+            continue
+        if kind == "fill" and ev.get("action") == "sell":
+            side = ev.get("side")
+            try:
+                n = float(ev.get("contracts") or 0)
+            except (TypeError, ValueError):
+                n = 0.0
+            if n <= 0 or side not in ("above", "below") or not ticker:
+                continue
+            proceeds = float(ev.get("notional_dollars") or 0)
+            sell_fee = float(ev.get("fee_dollars") or 0)
+            remaining = n
+            alloc_cost = 0.0
+            alloc_buy_fee = 0.0
+            q = lots[(ticker, side)]
+            while remaining > 1e-9 and q:
+                lot = q[0]
+                lot_n = float(lot["contracts"] or 0)
+                if lot_n <= 1e-9:
+                    q.popleft()
+                    continue
+                take = min(lot_n, remaining)
+                frac = take / lot_n
+                alloc_cost += float(lot["cost"] or 0) * frac
+                alloc_buy_fee += float(lot["fee"] or 0) * frac
+                lot["contracts"] = lot_n - take
+                lot["cost"] = float(lot["cost"] or 0) * (1.0 - frac)
+                lot["fee"] = float(lot["fee"] or 0) * (1.0 - frac)
+                remaining -= take
+                if lot["contracts"] <= 1e-9:
+                    q.popleft()
+            sold = n - remaining
+            if sold <= 1e-9 or alloc_cost <= 0:
+                continue
+            frac_sold = sold / n
+            rev = proceeds * frac_sold
+            fees = alloc_buy_fee + sell_fee * frac_sold
+            pl = round(rev - alloc_cost - fees, 6)
+            closes.append(
+                {
+                    "kind": "close",
+                    "ticker": ticker,
+                    "side": side,
+                    "contracts": round(sold, 6),
+                    "cost_dollars": round(alloc_cost, 6),
+                    "revenue_dollars": round(rev, 6),
+                    "fee_dollars": round(fees, 6),
+                    "pl": pl,
+                    "won": pl >= 0,
+                    "at": ev.get("at"),
+                    "source": "kalshi_sell",
+                }
+            )
+            continue
+        if kind == "settle":
+            side = ev.get("side")
+            if side in ("above", "below"):
+                lots[(ticker, side)].clear()
+            else:
+                lots[(ticker, "above")].clear()
+                lots[(ticker, "below")].clear()
+            try:
+                pl_f = float(ev.get("pl"))
+            except (TypeError, ValueError):
+                continue
+            won = ev.get("won")
+            closes.append(
+                {
+                    "kind": "settle",
+                    "ticker": ticker,
+                    "side": side if side in ("above", "below") else None,
+                    "contracts": ev.get("contracts"),
+                    "cost_dollars": ev.get("cost_dollars"),
+                    "revenue_dollars": ev.get("revenue_dollars"),
+                    "fee_dollars": ev.get("fee_dollars"),
+                    "pl": pl_f,
+                    "won": bool(won) if won is not None else pl_f >= 0,
+                    "at": ev.get("at"),
+                    "source": "kalshi_settle",
+                }
+            )
+    closes.sort(key=lambda c: (c.get("at") is None, c.get("at") or 0))
+    return closes
+
+
 def kalshi_build_ledger(creds: dict | None = None) -> dict:
     """
     Live Kalshi cash ledger: fills + settlements (+ deposits) with equity curve.
@@ -2631,6 +2758,7 @@ def kalshi_build_ledger(creds: dict | None = None) -> dict:
             "positions": [],
             "events": [],
             "equity": [],
+            "closes": [],
             "summary": None,
         }
 
@@ -2711,8 +2839,10 @@ def kalshi_build_ledger(creds: dict | None = None) -> dict:
     settle_pls = [float(s["pl"]) for s in settlements if s.get("pl") is not None]
     fill_buys = [f for f in fills if f.get("action") == "buy"]
     fill_sells = [f for f in fills if f.get("action") == "sell"]
-    biggest_loss = min(settlements, key=lambda s: float(s.get("pl") or 0), default=None)
-    biggest_win = max(settlements, key=lambda s: float(s.get("pl") or 0), default=None)
+    closes = _kalshi_realized_closes(fills, settlements)
+    close_pls = [float(c["pl"]) for c in closes if c.get("pl") is not None]
+    biggest_loss = min(closes, key=lambda s: float(s.get("pl") or 0), default=None)
+    biggest_win = max(closes, key=lambda s: float(s.get("pl") or 0), default=None)
 
     # Peak → current drawdown on reconstructed equity.
     peak = start_equity if start_equity is not None else 0.0
@@ -2744,6 +2874,12 @@ def kalshi_build_ledger(creds: dict | None = None) -> dict:
         "settlement_pl_sum": round(sum(settle_pls), 2) if settle_pls else 0.0,
         "settlement_wins": sum(1 for s in settlements if s.get("won")),
         "settlement_losses": sum(1 for s in settlements if s.get("won") is False),
+        "close_count": len(closes),
+        "close_pl_sum": round(sum(close_pls), 2) if close_pls else 0.0,
+        "close_wins": sum(1 for c in closes if c.get("won") or float(c.get("pl") or 0) >= 0),
+        "close_losses": sum(
+            1 for c in closes if not (c.get("won") or float(c.get("pl") or 0) >= 0)
+        ),
         "max_drawdown": round(max_dd, 2),
         "drawdown_from_peak": round(max_dd, 2),
         "peak_equity": round(peak_eq, 2) if equity_pts else None,
@@ -2782,6 +2918,7 @@ def kalshi_build_ledger(creds: dict | None = None) -> dict:
         "positions": positions.get("positions") or [],
         "events": events,
         "equity": equity_pts,
+        "closes": closes,
         "summary": summary,
     }
 
@@ -4309,7 +4446,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.19",
+                    "version": "2.4.20",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

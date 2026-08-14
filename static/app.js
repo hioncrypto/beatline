@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.78";
+  const APP_VERSION = "10.79";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -1536,8 +1536,9 @@
     return !!(
       t.liveKalshi ||
       t.entrySource === "kalshi" ||
-      t.entrySource === "auto" ||
-      t.source === "kalshi_ledger"
+      t.source === "kalshi_ledger" ||
+      t.source === "kalshi_sell" ||
+      t.source === "kalshi_settle"
     );
   }
 
@@ -1567,30 +1568,77 @@
     return kalshiLedger;
   }
 
-  /** Settlement rows from Kalshi ledger → demo-shaped close records for charts. */
+  /** Tag a Kalshi close with Best Side vs own-call using local buy metadata. */
+  function tagLiveClosedTrade(row) {
+    if (!row || typeof row !== "object") return row;
+    const ticker = row.ticker;
+    if (!ticker) return row;
+    const at = Number(row.at) || 0;
+    const hist = Array.isArray(demo.history) ? demo.history : [];
+    let best = null;
+    let bestDt = Infinity;
+    for (const t of hist) {
+      if (!t || t.ticker !== ticker) continue;
+      if (t.kind !== "buy" && t.kind !== "add") continue;
+      if (!tradeIsLiveKalshi(t) && t.entrySource !== "auto") continue;
+      const dt = at - (Number(t.at) || 0);
+      if (dt < -8000) continue;
+      if (dt >= 0 && dt < bestDt) {
+        bestDt = dt;
+        best = t;
+      }
+    }
+    if (best) {
+      if (best.followedSuggest === true || best.followedSuggest === false) {
+        row.followedSuggest = best.followedSuggest;
+      } else if (best.entrySource === "auto" || best.entrySource === "best") {
+        row.followedSuggest = true;
+      } else if (best.entrySource === "own") {
+        row.followedSuggest = false;
+      }
+      if (best.entrySource) row.entrySource = best.entrySource;
+      return row;
+    }
+    for (const a of liveAutoAttempts || []) {
+      if (!a || a.ticker !== ticker) continue;
+      const kind = String(a.kind || "");
+      if (kind !== "fill" && kind !== "sending_buy") continue;
+      if (a.ok === false) continue;
+      row.followedSuggest = true;
+      row.entrySource = "auto";
+      break;
+    }
+    return row;
+  }
+
+  /** Settlement + sell-to-close rows from Kalshi ledger → demo-shaped closes. */
   function liveLedgerClosedTrades() {
-    const settlements =
-      kalshiLedger && Array.isArray(kalshiLedger.settlements)
-        ? kalshiLedger.settlements
-        : [];
-    return settlements
+    const raw =
+      kalshiLedger && Array.isArray(kalshiLedger.closes) && kalshiLedger.closes.length
+        ? kalshiLedger.closes
+        : kalshiLedger && Array.isArray(kalshiLedger.settlements)
+          ? kalshiLedger.settlements
+          : [];
+    return raw
       .filter((s) => s && Number.isFinite(Number(s.pl)))
-      .map((s) => ({
-        kind: "settle",
-        side: s.side === "above" || s.side === "below" ? s.side : null,
-        pl: Number(s.pl),
-        won: s.won === true || Number(s.pl) >= 0,
-        at: Number(s.at) || Date.now(),
-        contracts: s.contracts,
-        askCents: null,
-        total: s.cost_dollars,
-        ticker: s.ticker,
-        liveKalshi: true,
-        entrySource: "kalshi",
-        source: "kalshi_ledger",
-        revenue: s.revenue_dollars,
-        fee: s.fee_dollars,
-      }))
+      .map((s) =>
+        tagLiveClosedTrade({
+          kind: s.kind === "close" ? "close" : "settle",
+          side: s.side === "above" || s.side === "below" ? s.side : null,
+          pl: Number(s.pl),
+          won: s.won === true || Number(s.pl) >= 0,
+          at: Number(s.at) || Date.now(),
+          contracts: s.contracts,
+          askCents: null,
+          total: s.cost_dollars,
+          ticker: s.ticker,
+          liveKalshi: true,
+          entrySource: s.entrySource || "kalshi",
+          source: s.source || "kalshi_ledger",
+          revenue: s.revenue_dollars,
+          fee: s.fee_dollars,
+        })
+      )
       .sort((a, b) => (Number(a.at) || 0) - (Number(b.at) || 0));
   }
 
@@ -1889,13 +1937,18 @@
   function applyLedgerToAccountHistory(ledger) {
     if (!ledger || !ledger.ok) return false;
     const incoming = [];
-    for (const s of ledger.settlements || []) {
+    const closeRows =
+      Array.isArray(ledger.closes) && ledger.closes.length
+        ? ledger.closes
+        : ledger.settlements || [];
+    for (const s of closeRows) {
       if (!s || !Number.isFinite(Number(s.pl))) continue;
       const at = Number(s.at) || Date.now();
-      const id = `kalshi-settle:${s.ticker || "?"}:${at}:${s.pl}`;
+      const kind = s.kind === "close" ? "close" : "settle";
+      const id = `kalshi-${kind}:${s.ticker || "?"}:${at}:${s.pl}`;
       incoming.push({
         id,
-        kind: "settle",
+        kind,
         side: s.side === "above" || s.side === "below" ? s.side : null,
         pl: Number(s.pl),
         won: s.won === true || Number(s.pl) >= 0,
@@ -1991,10 +2044,19 @@
 
     if (el.liveTradeLogSummary) {
       if (ledger && ledger.ok) {
-        const closed = Number(sum.settlement_count) || 0;
-        const wins = Number(sum.settlement_wins) || 0;
-        const losses = Number(sum.settlement_losses) || 0;
-        const totalPl = Number(sum.settlement_pl_sum) || 0;
+        const closed =
+          Number(sum.close_count != null ? sum.close_count : sum.settlement_count) ||
+          0;
+        const wins =
+          Number(sum.close_wins != null ? sum.close_wins : sum.settlement_wins) || 0;
+        const losses =
+          Number(
+            sum.close_losses != null ? sum.close_losses : sum.settlement_losses
+          ) || 0;
+        const totalPl =
+          Number(
+            sum.close_pl_sum != null ? sum.close_pl_sum : sum.settlement_pl_sum
+          ) || 0;
         const nFills =
           Number(sum.fill_count) ||
           (Array.isArray(ledger.fills) ? ledger.fills.length : 0);
@@ -2048,7 +2110,10 @@
       applyLedgerToAccountHistory(kalshiLedger);
     }
     // When Live is on, lock analytics + chart onto this live log.
-    if (isLiveKalshi() && analyticsScope !== "live") {
+    if (
+      (isLiveKalshi() || (kalshiLive.connected && !demo.on)) &&
+      analyticsScope !== "live"
+    ) {
       setAnalyticsScope("live", { persist: true });
     } else {
       paintAnalyticsScopeUi();
@@ -2089,13 +2154,15 @@
           const res = await fetch("/api/kalshi/auto-status", { cache: "no-store" });
           const data = await res.json();
           adoptLiveAutoAttempts(data);
-          if (isLiveKalshi()) {
+          if (kalshiLive.connected || isLiveKalshi()) {
             await refreshKalshiLedger({ force: false });
             if (kalshiLedger && kalshiLedger.ok) {
               applyLedgerToAccountHistory(kalshiLedger);
             }
             renderLiveTradeLog();
             renderLiveActivityFeed();
+            renderTradeHistory();
+            renderStrategyReport();
           }
         } catch {
           // keep last paint
@@ -2164,6 +2231,9 @@
   /** Closed settle/close rows with a real P/L, oldest → newest (scoped). */
   function closedPlTrades() {
     if (analyticsScope === "live") {
+      if (kalshiLedger && kalshiLedger.ok) {
+        return liveLedgerClosedTrades();
+      }
       const fromLedger = liveLedgerClosedTrades();
       if (fromLedger.length) return fromLedger;
     }
@@ -3483,10 +3553,19 @@
     if (el.tradeHistorySummary) {
       if (useLedger) {
         const sum = kalshiLedger.summary || {};
-        const closed = Number(sum.settlement_count) || 0;
-        const wins = Number(sum.settlement_wins) || 0;
-        const losses = Number(sum.settlement_losses) || 0;
-        const totalPl = Number(sum.settlement_pl_sum) || 0;
+        const closed =
+          Number(sum.close_count != null ? sum.close_count : sum.settlement_count) ||
+          0;
+        const wins =
+          Number(sum.close_wins != null ? sum.close_wins : sum.settlement_wins) || 0;
+        const losses =
+          Number(
+            sum.close_losses != null ? sum.close_losses : sum.settlement_losses
+          ) || 0;
+        const totalPl =
+          Number(
+            sum.close_pl_sum != null ? sum.close_pl_sum : sum.settlement_pl_sum
+          ) || 0;
         const bal =
           kalshiLedger.balance != null ? ` · cash ${money(kalshiLedger.balance)}` : "";
         const openBit = ledgerPositions.length
@@ -4006,6 +4085,39 @@
     return lo;
   }
 
+  function liveDayChangeFromLedger() {
+    if (!kalshiLedger || !kalshiLedger.ok) return null;
+    const nowEq = Number(
+      kalshiLedger.balance != null
+        ? kalshiLedger.balance
+        : kalshiLedger.summary && kalshiLedger.summary.end_equity
+    );
+    if (!Number.isFinite(nowEq)) return null;
+    const since = startOfAppDayMs();
+    const pts = Array.isArray(kalshiLedger.equity) ? kalshiLedger.equity : [];
+    let start = null;
+    for (const pt of pts) {
+      const at = Number(pt.at);
+      if (!Number.isFinite(at) || !Number.isFinite(Number(pt.equity))) continue;
+      if (at < since) start = Number(pt.equity);
+    }
+    if (start == null || !Number.isFinite(start)) {
+      const firstToday = pts.find((p) => Number(p.at) >= since);
+      if (firstToday && Number.isFinite(Number(firstToday.equity))) {
+        start = Number(firstToday.equity) - Number(firstToday.cash_delta || 0);
+      }
+    }
+    if (start == null || !Number.isFinite(start) || start <= 0) {
+      start = nowEq;
+    }
+    const pct = start ? ((nowEq - start) / start) * 100 : 0;
+    return {
+      start: Math.round(start * 100) / 100,
+      now: Math.round(nowEq * 100) / 100,
+      pct,
+    };
+  }
+
   /**
    * Best-effort equity at Pacific midnight today:
    * current equity minus today's closed P/L minus open mark.
@@ -4013,6 +4125,10 @@
    */
   function estimateAppDayStartEquity(currentEquity) {
     if (!Number.isFinite(currentEquity)) return null;
+    if (analyticsScope === "live" || isLiveKalshi()) {
+      const live = liveDayChangeFromLedger();
+      if (live && Number.isFinite(live.start)) return live.start;
+    }
     const since = startOfAppDayMs();
     let closedPl = 0;
     const hist = mergeTradeHistory(
@@ -4201,7 +4317,7 @@
 
   function summarizeStrategyBucket(trades) {
     const n = trades.length;
-    const wins = trades.filter((t) => t.won === true || Number(t.pl) > 0).length;
+    const wins = trades.filter((t) => t.won === true || Number(t.pl) >= 0).length;
     const losses = n - wins;
     const pl = trades.reduce(
       (sum, t) => sum + (Number.isFinite(Number(t.pl)) ? Number(t.pl) : 0),
@@ -4254,6 +4370,10 @@
       verdict = `Building the sample: Best Side ${followedS.n} closes · your calls ${ownS.n}${
         prior.length ? ` · ${prior.length} older untagged` : ""
       }. Aim for ~5+ of each before trusting the split.`;
+    } else if (allS.n > 0 && analyticsScope === "live") {
+      verdict = `Live Kalshi ${allS.n} closes (${allS.wins}W-${allS.losses}L · ${formatPl(
+        allS.pl
+      )}). Best vs Own tags fill in when BeatLine placed the buy.`;
     } else if (allS.n > 0) {
       verdict = `${allS.n} closes on file (${allS.wins}W-${allS.losses}L · ${formatPl(
         allS.pl
@@ -4261,8 +4381,15 @@
     }
 
     const mark = markOpenPosition(demo.position);
-    const equity = demo.on ? accountEquityNow(mark) : null;
-    const day = equity != null ? dayChangePct(equity) : null;
+    let equity = null;
+    let day = null;
+    if (analyticsScope === "live" || isLiveKalshi()) {
+      day = liveDayChangeFromLedger();
+      equity = day ? day.now : accountEquityNow(mark);
+    } else {
+      equity = demo.on ? accountEquityNow(mark) : null;
+      day = equity != null ? dayChangePct(equity) : null;
+    }
 
     return {
       followedS,
@@ -4375,7 +4502,7 @@
         el.strategyToday.classList.toggle("is-up", report.day.pct > 0);
         el.strategyToday.classList.toggle("is-down", report.day.pct < 0);
       } else {
-        el.strategyToday.textContent = "Today — turn on Demo to track day %";
+        el.strategyToday.textContent = "Today — connect Kalshi to track live day %";
         el.strategyToday.classList.remove("is-up", "is-down");
       }
     }

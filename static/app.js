@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.70";
+  const APP_VERSION = "10.71";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -5713,8 +5713,8 @@
         setKalshiConnectConfirm("ok", confirmMsg);
         setStatus("ok", confirmMsg);
         if (el.kalshiConnect) el.kalshiConnect.textContent = "Saved ✓";
-        // Re-arm server Auto-trade after connect (deploys wipe the flag).
-        void syncAutoTradeToServer();
+        // Save & connect must not re-arm Auto-trade from stale phone state.
+        setAutoTrade(false);
         liveTradeLogOpen = true;
         void refreshAndPaintLiveTradeLog({ force: true });
         setTimeout(() => {
@@ -12083,8 +12083,10 @@
       ensureServiceWorker(),
       refreshKalshiAccountStatus(),
     ]).finally(() => {
-      void syncAutoTradeToServer().then(() => refreshAutoTradeStatus());
+      // Do not push phone Auto-trade ON to the server on launch — that re-armed
+      // after deploys and after Save & connect. The checkbox turns it on.
       renderAutoTradeUi();
+      void refreshAutoTradeStatus();
       refreshTarget()
         .then(() => refreshCandles())
         .then(refreshSpot);

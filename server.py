@@ -2103,6 +2103,9 @@ def save_kalshi_credentials(api_key_id: str, private_key_pem: str, live_enabled=
         data["private_key_pem"] = private_key_pem
         if live_enabled is not None:
             data["live_enabled"] = bool(live_enabled)
+        # Save & connect is not an Auto-trade arm — leave the checkbox off.
+        data["auto_trade"] = False
+        data["auto_flip"] = False
         data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _save_kalshi_creds_file(data)
     return kalshi_account_status(fetch_balance=True)
@@ -3793,7 +3796,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.11",
+                    "version": "2.4.12",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

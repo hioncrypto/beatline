@@ -521,21 +521,13 @@ body.is-live-kalshi .mark {
 }
 
 .options-current-balance {
-  padding: 14px 0 16px;
+  padding: 12px 0 10px;
   border-top: 1px solid var(--border);
   text-align: center;
 }
 
-.options-current-balance strong {
-  display: block;
-  font-size: 0.95rem;
-  font-weight: 750;
-  letter-spacing: -0.02em;
-}
-
 .options-current-balance .demo-balance {
-  margin-top: 6px;
-  font-size: 2.15rem;
+  margin-top: 2px;
 }
 
 .options-current-balance em {
@@ -645,6 +637,7 @@ body.is-live-kalshi .mark {
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
   line-height: 1.05;
+  color: var(--accent);
 }
 
 .demo-pl {

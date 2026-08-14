@@ -5763,6 +5763,7 @@
     } catch (err) {
       setKalshiConnectConfirm("warn", "Not connected · could not reach server");
       setStatus("warn", "Kalshi connect failed");
+      setAutoTrade(false, { quiet: true });
       if (el.kalshiConnect) el.kalshiConnect.textContent = "Save & connect";
     } finally {
       if (el.kalshiConnect) el.kalshiConnect.disabled = false;

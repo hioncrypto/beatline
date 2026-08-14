@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.71";
+  const APP_VERSION = "10.72";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -226,7 +226,7 @@
     },
     {
       title: "Demo & alerts",
-      body: "⋮ Options → Demo mode for paper trades, Live Kalshi for real buys, and Auto-trade Best Side to let BeatLine take clear-edge entries at ≤1% of balance. The bell enables alerts.",
+      body: "⋮ Options → Demo mode for paper trades, Live Kalshi for real buys, and Auto-trade Best Side to let BeatLine take clear-edge entries at ≤1% of balance (disengaged with 5 minutes or less left). The bell enables alerts.",
     },
   ];
 
@@ -522,9 +522,12 @@
   };
   const AUTO_TRADE_KEY = "beatlineAutoTrade";
   const AUTO_FLIP_KEY = "beatlineAutoFlip";
+  /** Auto-trade disengages once ≤5 minutes remain — will not open a new buy. */
+  const AUTO_TRADE_CUTOFF_SECS = 5 * 60;
   const ANALYTICS_SCOPE_KEY = "beatlineAnalyticsScope";
   let autoTradeOn = false;
   let autoFlipOn = false;
+  let lastAutoLateWindow = null;
   try {
     autoTradeOn = localStorage.getItem(AUTO_TRADE_KEY) === "1";
   } catch {
@@ -5506,9 +5509,20 @@
     const armed = tradingArmed();
     const live = isLiveKalshi();
     const serverArmed = !!kalshiLive.serverArmed;
-    el.autoTradeBadge.classList.toggle("is-armed", armed && (!live || serverArmed));
-    el.autoTradeBadge.classList.toggle("is-waiting", on && (!armed || (live && !serverArmed)));
-    if (live && serverArmed) {
+    const late = autoTradeLateWindow();
+    el.autoTradeBadge.classList.toggle(
+      "is-armed",
+      armed && !late && (!live || serverArmed)
+    );
+    el.autoTradeBadge.classList.toggle(
+      "is-waiting",
+      on && (late || !armed || (live && !serverArmed))
+    );
+    if (late) {
+      el.autoTradeBadge.textContent = "AUTO PAUSED";
+      el.autoTradeBadge.title =
+        "Disengaged — no auto buys with 5 minutes or less left in this window";
+    } else if (live && serverArmed) {
       el.autoTradeBadge.textContent = "AUTO ARMED";
       el.autoTradeBadge.title =
         "Server auto-trader ARMED — will buy clear Best Side on Kalshi (≤1%)";
@@ -6033,6 +6047,7 @@
           suggest_stake: suggestStake,
           bid_cents: sameBid,
           opposite_bid_cents: oppBid,
+          secs_left: secondsLeft(),
         }),
       });
       const data = await res.json();
@@ -8725,8 +8740,13 @@
   }
 
 
+  function autoTradeLateWindow() {
+    const secs = secondsLeft();
+    return secs != null && secs <= AUTO_TRADE_CUTOFF_SECS;
+  }
+
   function autoTradeArmed() {
-    return !!autoTradeOn && tradingArmed();
+    return !!autoTradeOn && tradingArmed() && !autoTradeLateWindow();
   }
 
   function renderAutoTradeUi() {
@@ -8749,6 +8769,10 @@
       if (!autoTradeOn) {
         el.autoTradeStatus.textContent =
           "Off — BeatLine will not place buys for you";
+      } else if (autoTradeLateWindow()) {
+        el.autoTradeStatus.textContent =
+          "Disengaged · last 5 min — will not open a buy";
+        el.autoTradeStatus.classList.add("is-warn");
       } else if (!kalshiLive.connected && !demo.on) {
         el.autoTradeStatus.textContent =
           "On · next: Save & connect Kalshi, then Live Kalshi buys";
@@ -8801,9 +8825,11 @@
     } else if (autoTradeOn) {
       setStatus(
         "ok",
-        isLiveKalshi()
-          ? "Auto-trade ON · server fills on clear Best Side (even in background)"
-          : "Auto-trade ON · demo buys on clear Best Side"
+        autoTradeLateWindow()
+          ? "Auto-trade on · disengaged until next window (last 5 min)"
+          : isLiveKalshi()
+            ? "Auto-trade ON · clear Best Side fills, none in the last 5 min"
+            : "Auto-trade ON · demo buys on clear Best Side, none in the last 5 min"
       );
     } else {
       setStatus("ok", "Auto-trade off");
@@ -8841,6 +8867,15 @@
     if (!(suggestStake >= BUY_AMOUNT_MIN)) return false;
     const ticker = lastTicker || lastFifteenTicker || "";
     if (!ticker) return false;
+    const secs = secondsLeft();
+    if (secs != null && secs <= AUTO_TRADE_CUTOFF_SECS) {
+      lastAutoTradeNote =
+        secs > 0
+          ? `disengaged · ${Math.max(1, Math.ceil(secs / 60))}m left (no auto buys in last 5 min)`
+          : "disengaged · window over (no auto buys in last 5 min)";
+      renderAutoTradeUi();
+      return false;
+    }
     const key = `${ticker}:${best.side}`;
     if (lastAutoTradeKey === key) return false;
     if (
@@ -10646,6 +10681,7 @@
       }
       refreshBestSide();
       if (demo.position) renderDemoUi();
+      noteAutoLateWindow(true);
       return;
     }
     const totalSec = Math.floor(ms / 1000);
@@ -10662,6 +10698,19 @@
     if (totalSec <= 25) startRolloverBurst();
     refreshBestSide();
     if (demo.position) renderDemoUi();
+    noteAutoLateWindow(totalSec <= AUTO_TRADE_CUTOFF_SECS);
+  }
+
+  function noteAutoLateWindow(late) {
+    if (late === lastAutoLateWindow) return;
+    lastAutoLateWindow = late;
+    if (!autoTradeOn) return;
+    lastAutoTradeNote = late
+      ? "disengaged · last 5 min (no auto buys)"
+      : /last 5 min/.test(lastAutoTradeNote || "")
+        ? "waiting for clear Best Side"
+        : lastAutoTradeNote;
+    renderAutoTradeUi();
   }
 
   function clearRolloverBurst() {

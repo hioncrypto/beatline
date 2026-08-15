@@ -163,6 +163,12 @@ AUTO_FLIP_MIN_HOLD_SECS = 2 * 60
 AUTO_CLOSE_MIN_HOLD_SECS = AUTO_FLIP_MIN_HOLD_SECS
 # Never let Auto spend the account through this cash floor. Manual buys can.
 AUTO_CASH_FLOOR_USD = 10.0
+# Clear-edge buy gate — keep in sync with client CLEAR_EDGE_* constants.
+CLEAR_EDGE_MIN_PWIN = 0.51
+CLEAR_EDGE_MIN_EV = 0.005
+CLEAR_EDGE_MIN_SCORE = 0.025
+CLEAR_EDGE_EARLY_SECS = 13 * 60
+CLEAR_EDGE_EARLY_ABS_EV = 0.02
 
 
 def _fresh_side_ask_cents(ticker: str, side: str) -> int | None:
@@ -1726,15 +1732,15 @@ def evaluate_clear_edge(
     if data.get("thin_book"):
         best = {**best, "score": best["score"] - 0.08}
 
-    # Profile Green Spike: pWin ≥ 52% favorites only (August 5 / v9.33).
+    # Profile Green Spike: favorite-ish entries (v10.80 slightly looser).
     reject = None
-    if best["p_win"] < 0.52:
+    if best["p_win"] < CLEAR_EDGE_MIN_PWIN:
         reject = "p_win"
-    elif best["ev"] <= 0.01:
+    elif best["ev"] <= CLEAR_EDGE_MIN_EV:
         reject = "ev"
-    elif best["score"] <= 0.04:
+    elif best["score"] <= CLEAR_EDGE_MIN_SCORE:
         reject = "score"
-    elif secs > 12 * 60 and abs(best["ev"]) < 0.03:
+    elif secs > CLEAR_EDGE_EARLY_SECS and abs(best["ev"]) < CLEAR_EDGE_EARLY_ABS_EV:
         reject = "early_window"
     clear = reject is None
 
@@ -4446,7 +4452,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.20",
+                    "version": "2.4.21",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

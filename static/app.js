@@ -13,20 +13,27 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.79";
+  const APP_VERSION = "10.80";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
    * "green-spike" / Green Spike = August 5 morning rules (through v9.33):
-   * clear-edge only when the model is a favorite (≥52% pWin). That selective
-   * gate made the steep green climb on the Wins & P/L chart, before evening
-   * v9.34–9.37 loosened alerts.
+   * clear-edge only when the model is a favorite. v10.80 loosens the
+   * entry a notch (51% / smaller EV) so more real setups fire, without
+   * going back to the v9.34–9.37 evening loosen.
    *
    * Say "switch to Green Spike" later to mean this exact profile.
    * Do not edit thresholds casually — change BEST_SIDE_PROFILE for a new name.
    */
   const BEST_SIDE_PROFILE = "green-spike";
   const BEST_SIDE_PROFILE_LABEL = "Green Spike";
+  /** Clear-edge buy gate — keep in sync with server evaluate_clear_edge. */
+  const CLEAR_EDGE_MIN_PWIN = 0.51;
+  const CLEAR_EDGE_MIN_EV = 0.005;
+  const CLEAR_EDGE_MIN_SCORE = 0.025;
+  const CLEAR_EDGE_EARLY_SECS = 13 * 60;
+  const CLEAR_EDGE_EARLY_ABS_EV = 0.02;
+  const CLEAR_EDGE_PWIN_PCT = Math.round(CLEAR_EDGE_MIN_PWIN * 100);
   /** Tape bias stays off under Green Spike (window-vs-beat only). */
   const TREND_BIAS_ENABLED = false;
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
@@ -8294,7 +8301,7 @@
 
   function formatEdgeThicknessBit(ev) {
     if (ev == null || !Number.isFinite(Number(ev))) return null;
-    return Number(ev) > 0.01 ? "edge ok" : "edge thin";
+    return Number(ev) > CLEAR_EDGE_MIN_EV ? "edge ok" : "edge thin";
   }
 
   /** % + edge thickness — large duplicate above Best Side. */
@@ -8309,7 +8316,9 @@
       const parts = [];
       if (conf != null) {
         parts.push(
-          !snap.clear && conf < 52 ? `${conf}% (need ≥52%)` : `${conf}%`
+          !snap.clear && conf < CLEAR_EDGE_PWIN_PCT
+            ? `${conf}% (need ≥${CLEAR_EDGE_PWIN_PCT}%)`
+            : `${conf}%`
         );
       } else if (snap.waitWhy) {
         parts.push(snap.waitWhy);
@@ -8339,14 +8348,16 @@
       if (
         !edgeBit &&
         (edge.reject === "ev" ||
-          (edge.ev != null && Number(edge.ev) <= 0.01))
+          (edge.ev != null && Number(edge.ev) <= CLEAR_EDGE_MIN_EV))
       ) {
         edgeBit = "edge thin";
       }
       const parts = [];
       if (conf != null) {
         parts.push(
-          !edge.clear && conf < 52 ? `${conf}% (need ≥52%)` : `${conf}%`
+          !edge.clear && conf < CLEAR_EDGE_PWIN_PCT
+            ? `${conf}% (need ≥${CLEAR_EDGE_PWIN_PCT}%)`
+            : `${conf}%`
         );
       }
       if (edgeBit) parts.push(edgeBit);
@@ -8403,8 +8414,8 @@
       let s = `Wait ${side}`;
       if (conf != null) {
         s +=
-          conf < 52
-            ? ` · ${conf}% (need ≥52%)`
+          conf < CLEAR_EDGE_PWIN_PCT
+            ? ` · ${conf}% (need ≥${CLEAR_EDGE_PWIN_PCT}%)`
             : ` · ${conf}%`;
       }
       if (edgeBit) s += ` · ${edgeBit}`;
@@ -8457,14 +8468,14 @@
       let s = `Wait ${side}`;
       if (conf != null) {
         s +=
-          conf < 52
-            ? ` · ${conf}% (need ≥52%)`
+          conf < CLEAR_EDGE_PWIN_PCT
+            ? ` · ${conf}% (need ≥${CLEAR_EDGE_PWIN_PCT}%)`
             : ` · ${conf}%`;
       }
       if (edgeBit) s += ` · ${edgeBit}`;
       else if (
         edge.reject === "ev" ||
-        (edge.ev != null && Number(edge.ev) <= 0.01)
+        (edge.ev != null && Number(edge.ev) <= CLEAR_EDGE_MIN_EV)
       ) {
         s += " · edge thin";
       }
@@ -8495,7 +8506,7 @@
         ? `BG armed · ${bestBit}`
         : `Healthy · ${bestBit}`;
       el.systemHealth.title = waiting
-        ? "Push + alerts look OK — waiting for clear Best buy (≥52%). Wait/thin edges do not ring the phone. · " +
+        ? `Push + alerts look OK — waiting for clear Best buy (≥${CLEAR_EDGE_PWIN_PCT}%). Wait/thin edges do not ring the phone. · ` +
           bestBit
         : "Server, Best-buy alerts, service worker, and push look good · " + bestBit;
       return;
@@ -8641,7 +8652,7 @@
     if (el.alertsStatusLine) {
       if (on) {
         el.alertsStatusLine.textContent =
-          "On — BG notify only on clear Best buy (≥52% model). Wait/thin = no alert. Options → Test with app closed to verify phone.";
+          `On — BG notify only on clear Best buy (≥${CLEAR_EDGE_PWIN_PCT}% model). Wait/thin = no alert. Options → Test with app closed to verify phone.`;
       } else if (chimeOn && "Notification" in window && Notification.permission === "denied") {
         el.alertsStatusLine.textContent =
           "Blocked — site settings → Notifications → Allow, then Enable";
@@ -10195,14 +10206,14 @@
     let best = scored[0];
     // Haircut noisy/thin books and early-window coin flips with tiny edge.
     if (lastThinBook) best = { ...best, score: best.score - 0.08 };
-    // Profile: Green Spike (August 5 morning / v9.33).
-    // Simple favorites-only clear edge — no sticky latch, no cheap underdogs.
+    // Profile: Green Spike — favorite-ish clear edge (v10.80 a bit looser).
+    // No sticky latch, no cheap underdogs.
     clearEdgeLatched = false;
     const clear =
-      best.ev > 0.01 &&
-      best.score > 0.04 &&
-      best.pWin >= 0.52 &&
-      !(secs > 12 * 60 && Math.abs(best.ev) < 0.03);
+      best.ev > CLEAR_EDGE_MIN_EV &&
+      best.score > CLEAR_EDGE_MIN_SCORE &&
+      best.pWin >= CLEAR_EDGE_MIN_PWIN &&
+      !(secs > CLEAR_EDGE_EARLY_SECS && Math.abs(best.ev) < CLEAR_EDGE_EARLY_ABS_EV);
 
     if (clear) {
       // Keep a matching held alert for open-time dedupe; only drop stale
@@ -10241,9 +10252,9 @@
         const lead = spot - beat;
         const conf = Math.round((Number(best.pWin) || 0) * 100);
         const why =
-          best.pWin < 0.52
-            ? `${conf}% model (need ≥52%)`
-            : best.ev <= 0.01
+          best.pWin < CLEAR_EDGE_MIN_PWIN
+            ? `${conf}% model (need ≥${CLEAR_EDGE_PWIN_PCT}%)`
+            : best.ev <= CLEAR_EDGE_MIN_EV
               ? "edge too thin"
               : "wait for better ask";
         el.bestSideMeta.textContent = `Live ${
@@ -10255,9 +10266,9 @@
       lastBestPick = null;
       const conf = Math.round((Number(best.pWin) || 0) * 100);
       const waitWhy =
-        best.pWin < 0.52
-          ? `${conf}% (need ≥52%)`
-          : best.ev <= 0.01
+        best.pWin < CLEAR_EDGE_MIN_PWIN
+          ? `${conf}% (need ≥${CLEAR_EDGE_PWIN_PCT}%)`
+          : best.ev <= CLEAR_EDGE_MIN_EV
             ? "edge thin"
             : "better ask";
       setBestHealthSnap({

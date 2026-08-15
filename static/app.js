@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.80";
+  const APP_VERSION = "10.81";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -34,6 +34,21 @@
   const CLEAR_EDGE_EARLY_SECS = 13 * 60;
   const CLEAR_EDGE_EARLY_ABS_EV = 0.02;
   const CLEAR_EDGE_PWIN_PCT = Math.round(CLEAR_EDGE_MIN_PWIN * 100);
+  /** Growth Auto — keep in sync with server AUTO_* manage constants. */
+  const AUTO_TAKE_PROFIT_CENTS = 10;
+  const AUTO_TAKE_PROFIT_MIN_HOLD_SECS = 15;
+  const AUTO_LATE_BAG_SECS = 2 * 60;
+  const AUTO_HOLD_SETTLE_MIN_ASK = 68;
+  const AUTO_MIN_ENTRY_ASK = 20;
+  const AUTO_MAX_ENTRY_ASK = 80;
+  const AUTO_MODEL_DEAD_PWIN = 0.38;
+  const AUTO_GROWTH_BANK_USD = 50;
+  const AUTO_GROWTH_RISK_PCT = 0.1;
+  const AUTO_GROWTH_RISK_CAP = 5;
+  const AUTO_STEADY_RISK_PCT = 0.05;
+  const AUTO_STEADY_RISK_CAP = 20;
+  const AUTO_SMALL_CASH_USD = 25;
+  const AUTO_SMALL_CASH_FLOOR_USD = 2;
   /** Tape bias stays off under Green Spike (window-vs-beat only). */
   const TREND_BIAS_ENABLED = false;
   /** Display + day-boundary timezone for the whole app (PST/PDT). */
@@ -221,7 +236,7 @@
     },
     {
       title: "Odds & Best Side",
-      body: "Market chance shows Above/Below pricing. Best Side scores distance from the beat, time left, ask, and fees — then suggests a dollar size capped at 1% of your bankroll (Kalshi balance when live). When a clear edge appears, BeatLine chimes; tap Best to open the buy sheet pre-filled.",
+      body: "Market chance shows Above/Below pricing. Best Side scores distance from the beat, time left, ask, and fees — then suggests a dollar size (about 10% of cash until $50, then 5%). When a clear edge appears, BeatLine chimes; tap Best to open the buy sheet pre-filled.",
     },
     {
       title: "Set size, then buy",
@@ -233,7 +248,7 @@
     },
     {
       title: "Demo & alerts",
-      body: "⋮ Options → Demo mode for paper trades, Live Kalshi for real buys, and Auto-trade Best Side to let BeatLine take clear-edge entries at ≤1% of balance (disengaged with 5 minutes or less left). The bell enables alerts.",
+      body: "⋮ Options → Demo mode for paper trades, Live Kalshi for real buys, and Auto-trade Best Side to let BeatLine take clear-edge entries, bank +10¢ winners, and dump late mid-ask bags. The bell enables alerts.",
     },
   ];
 
@@ -551,10 +566,13 @@
     autoFlipOn = false;
   }
   let autoTradeBusy = false;
+  let autoManageBusy = false;
   /** Dedupe: one auto entry per ticker+side until window rolls. */
   let lastAutoTradeKey = null;
   let lastAutoTradeAt = 0;
   let lastAutoTradeNote = "";
+  let lastAutoManageAt = 0;
+  let lastAutoManageKey = "";
   let analyticsScope = "all";
   /** Live Kalshi fills/settlements from /api/kalshi/ledger (source of truth). */
   let kalshiLedger = null;
@@ -5673,7 +5691,7 @@
     } else if (live && serverArmed) {
       el.autoTradeBadge.textContent = "AUTO ARMED";
       el.autoTradeBadge.title =
-        "Server auto-trader ARMED — will buy clear Best Side on Kalshi (≤1%)";
+        "Server auto-trader ARMED — buy clear Best Side, bank +10¢, dump late bags";
     } else if (live && on && !serverArmed) {
       el.autoTradeBadge.textContent = "AUTO NOT ARMED";
       el.autoTradeBadge.title =
@@ -5681,7 +5699,7 @@
     } else if (armed) {
       el.autoTradeBadge.textContent = "AUTO TRADER";
       el.autoTradeBadge.title =
-        "Auto trader ON · demo · ≤1% per clear Best Side";
+        "Auto trader ON · demo · bank +10¢ winners · no late bags";
     } else {
       el.autoTradeBadge.textContent = "AUTO TRADER";
       el.autoTradeBadge.title =
@@ -6211,6 +6229,140 @@
         : { ok: false, error: "Bad auto-buy response" };
     } catch {
       return { ok: false, error: "Auto-buy request failed" };
+    }
+  }
+
+  async function placeServerAutoManage() {
+    const pos = demo.position;
+    const ticker = (pos && pos.ticker) || lastTicker || lastFifteenTicker || "";
+    const spotRaw = el.spotValue && el.spotValue.dataset.last;
+    const spot = spotRaw != null ? Number(spotRaw) : null;
+    try {
+      const res = await fetch("/api/kalshi/auto-manage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker,
+          spot: Number.isFinite(spot) ? spot : null,
+          yes_bid_cents: lastRoiBids.above,
+          no_bid_cents: lastRoiBids.below,
+        }),
+      });
+      const data = await res.json();
+      if (data && data.balance != null && Number.isFinite(Number(data.balance))) {
+        kalshiLive.balance = Number(data.balance);
+        renderKalshiLiveUi();
+      }
+      return data && typeof data === "object"
+        ? data
+        : { ok: false, error: "Bad auto-manage response" };
+    } catch {
+      return { ok: false, error: "Auto-manage request failed" };
+    }
+  }
+
+  function evaluateAutoManage(pos, mark, best) {
+    if (!pos || !mark) return null;
+    const entry = Math.round(Number(pos.askCents) || 0) || null;
+    const bid = mark.bidCents != null ? Math.round(Number(mark.bidCents)) : null;
+    const opened = Number(pos.openedAt || pos.lastAddedAt || 0);
+    const heldSecs = opened > 0 ? (Date.now() - opened) / 1000 : 999;
+    const secs = mark.secs != null ? Number(mark.secs) : secondsLeft();
+    let heldPwin = null;
+    if (best && Number.isFinite(Number(best.pWin))) {
+      heldPwin =
+        best.side === pos.side
+          ? Number(best.pWin)
+          : 1 - Number(best.pWin);
+    }
+    const holdOk =
+      entry != null &&
+      entry >= AUTO_HOLD_SETTLE_MIN_ASK &&
+      !!mark.settleNowWin;
+    if (
+      heldSecs < AUTO_TAKE_PROFIT_MIN_HOLD_SECS &&
+      !(secs != null && secs <= AUTO_LATE_BAG_SECS)
+    ) {
+      return null;
+    }
+    if (entry != null && bid != null && bid - entry >= AUTO_TAKE_PROFIT_CENTS) {
+      const edge = bid - entry;
+      return {
+        shouldClose: true,
+        reason: "take_profit",
+        note: `bank +${edge}¢ vs entry ${entry}¢ → bid ${bid}¢`,
+      };
+    }
+    if (secs != null && secs >= 0 && secs <= AUTO_LATE_BAG_SECS && !holdOk) {
+      return {
+        shouldClose: true,
+        reason: "late_bag",
+        note: `<${AUTO_LATE_BAG_SECS / 60}m left · not a hold-to-settle setup — close`,
+      };
+    }
+    if (
+      heldPwin != null &&
+      heldPwin < AUTO_MODEL_DEAD_PWIN &&
+      !holdOk &&
+      heldSecs >= 45
+    ) {
+      return {
+        shouldClose: true,
+        reason: "model_dead",
+        note: `model ${Math.round(heldPwin * 100)}% on open side — cut loser`,
+      };
+    }
+    return null;
+  }
+
+  async function maybeAutoManage(best) {
+    if (!autoTradeOn || !tradingArmed()) return false;
+    if (autoManageBusy || autoTradeBusy || closePositionBusy) return false;
+    const pos = demo.position;
+    if (!pos || !pos.side) return false;
+    const mark = markOpenPosition(pos);
+    const decision = evaluateAutoManage(pos, mark, best);
+    if (!decision || !decision.shouldClose) return false;
+    const key = `${pos.ticker || ""}:${pos.side}:${decision.reason}`;
+    if (key === lastAutoManageKey && Date.now() - lastAutoManageAt < 8000) {
+      return false;
+    }
+    autoManageBusy = true;
+    lastAutoManageKey = key;
+    lastAutoManageAt = Date.now();
+    try {
+      if (isLiveKalshi()) {
+        const live = await placeServerAutoManage();
+        if (live && live.closed) {
+          lastAutoTradeNote = live.note || decision.note;
+          await closeDemoPosition({ alreadySold: true, quiet: true });
+          renderAutoTradeUi();
+          setStatus("ok", lastAutoTradeNote);
+          return true;
+        }
+        if (live && (live.skipped || live.ok)) {
+          if (live.note && !/already flat|no take-profit/i.test(String(live.note))) {
+            lastAutoTradeNote = live.note;
+            renderAutoTradeUi();
+          }
+          return false;
+        }
+        lastAutoTradeNote = (live && (live.note || live.error)) || decision.note;
+        renderAutoTradeUi();
+        return false;
+      }
+      if (demo.on) {
+        const closed = await closeDemoPosition({ quiet: true });
+        if (closed && closed.ok) {
+          lastAutoTradeNote = decision.note;
+          renderAutoTradeUi();
+          setStatus("ok", `Auto ${decision.reason} · ${decision.note}`);
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      autoManageBusy = false;
     }
   }
 
@@ -6866,7 +7018,7 @@
     if (kicker) {
       if (isLiveKalshi()) {
         kicker.textContent = suggested != null
-          ? `Live Kalshi · suggested $${suggested} · ≤1% bal`
+          ? `Live Kalshi · suggested $${suggested} · growth size`
           : adding
             ? "Live Kalshi add · real money"
             : "Live Kalshi order · real money";
@@ -6874,8 +7026,8 @@
         kicker.textContent =
           suggested != null
             ? demo.on
-              ? `Suggested $${suggested} · ≤1% bal`
-              : `Suggested $${suggested} · ≤1% bal`
+              ? `Suggested $${suggested} · growth size`
+              : `Suggested $${suggested} · growth size`
             : adding
               ? demo.on
                 ? "Demo add · averages into open position"
@@ -8199,7 +8351,7 @@
           roiIfWin: null,
           bankPct: bank > 0 ? (clamped / bank) * 100 : null,
           streak: 0,
-          note: "from alert · ≤1% bal",
+          note: "from alert · growth size",
         };
       }
     }
@@ -8945,14 +9097,14 @@
         el.autoTradeStatus.textContent =
           note && note !== "waiting for clear Best Side"
             ? `LIVE auto · ${note}`
-            : "LIVE auto · waiting for clear Best Side (≤1% bal)";
+            : "LIVE auto · buy clear edge · bank +10¢ · no late bags";
         el.autoTradeStatus.classList.add("is-live");
       } else {
         const note = autoTradeDisplayNote();
         el.autoTradeStatus.textContent =
           note && note !== "waiting for clear Best Side"
             ? `Demo auto · ${note}`
-            : "Demo auto · waiting for clear Best Side (≤1% bal)";
+            : "Demo auto · buy clear edge · bank +10¢ · no late bags";
       }
     }
   }
@@ -9030,13 +9182,21 @@
     return null;
   }
 
+  function autoCashFloorUsd(cash) {
+    const c = Number(cash);
+    if (!Number.isFinite(c)) return AUTO_CASH_FLOOR_USD;
+    if (c < AUTO_SMALL_CASH_USD) return AUTO_SMALL_CASH_FLOOR_USD;
+    return AUTO_CASH_FLOOR_USD;
+  }
+
   function autoStakeRespectsFloor(stake) {
     const s = Number(stake);
     if (!(s >= BUY_AMOUNT_MIN)) return null;
     const cash = autoCashAvailable();
     if (cash == null) return s;
-    if (cash <= AUTO_CASH_FLOOR_USD + 0.01) return null;
-    const maxSpend = cash - AUTO_CASH_FLOOR_USD;
+    const floor = autoCashFloorUsd(cash);
+    if (cash <= floor + 0.01) return null;
+    const maxSpend = cash - floor;
     if (maxSpend < BUY_AMOUNT_MIN) return null;
     return Math.min(s, maxSpend);
   }
@@ -9062,12 +9222,21 @@
       renderAutoTradeUi();
       return false;
     }
+    const askCheck = Math.round(Number(best.askCents) || 0);
+    if (
+      askCheck > 0 &&
+      (askCheck < AUTO_MIN_ENTRY_ASK || askCheck > AUTO_MAX_ENTRY_ASK)
+    ) {
+      lastAutoTradeNote = `skipped · ask ${askCheck}¢ outside ${AUTO_MIN_ENTRY_ASK}–${AUTO_MAX_ENTRY_ASK}¢ growth band`;
+      renderAutoTradeUi();
+      return false;
+    }
     const floorStake = autoStakeRespectsFloor(suggestStake);
     if (floorStake == null) {
       const cash = autoCashAvailable();
       lastAutoTradeNote =
         cash != null
-          ? `cash floor · $${cash.toFixed(2)} — keep $${AUTO_CASH_FLOOR_USD} (no auto buy)`
+          ? `cash floor · $${cash.toFixed(2)} — keep $${autoCashFloorUsd(cash)} (no auto buy)`
           : `cash floor · keep $${AUTO_CASH_FLOOR_USD} (no auto buy)`;
       renderAutoTradeUi();
       return false;
@@ -9631,7 +9800,7 @@
    * Hard cap for automatic Best Side / clear-edge suggested stake.
    * Manual buy chips stay independent ($1–$250).
    */
-  const MAX_BEST_RISK_PCT = 0.01;
+  const MAX_BEST_RISK_PCT = AUTO_STEADY_RISK_PCT;
 
   /** Bankroll used for Best Side suggested sizing. */
   function sizingBankroll() {
@@ -9656,12 +9825,21 @@
     return Number.isFinite(start) && start > 0 ? start : DEMO_DEFAULT_START;
   }
 
-  /** Max $ the automatic beat may suggest this trade (~1% of sizing bank). */
+  /** Max $ the automatic beat may suggest this trade (growth % of sizing bank). */
   function maxBestRiskUsd(bank) {
     const b = Math.max(0, Number(bank) || 0);
     if (!(b >= BUY_AMOUNT_MIN)) return 0;
-    // Round then floor at $1 — Math.floor(95*0.01)=0 used to block every auto buy.
-    const cap = Math.max(BUY_AMOUNT_MIN, Math.round(b * MAX_BEST_RISK_PCT));
+    if (b < AUTO_GROWTH_BANK_USD) {
+      const cap = Math.max(
+        BUY_AMOUNT_MIN,
+        Math.min(AUTO_GROWTH_RISK_CAP, Math.round(b * AUTO_GROWTH_RISK_PCT))
+      );
+      return Math.min(SUGGEST_AMOUNT_MAX, cap);
+    }
+    const cap = Math.max(
+      BUY_AMOUNT_MIN,
+      Math.min(AUTO_STEADY_RISK_CAP, Math.round(b * MAX_BEST_RISK_PCT))
+    );
     return Math.min(SUGGEST_AMOUNT_MAX, cap);
   }
 
@@ -9699,7 +9877,7 @@
 
   /**
    * Suggest $ for automatic Best Side / clear-edge (Green Spike).
-   * Fractional Kelly ~22–40%, hard-capped at 1% of bankroll per trade.
+   * Fractional Kelly ~22–40%, hard-capped at growth size (10% until $50, then 5%).
    * Manual slider/chips stay up to $250 and are not bound by this cap.
    */
   function suggestStakeForEdge(best) {
@@ -9717,7 +9895,7 @@
         pWin: Math.max(0.01, Math.min(0.99, Number(best.pWin) || 0.5)),
         atRiskCap: true,
         lowProb: false,
-        note: "need bal for 1% size",
+        note: "need bal for growth size",
       };
     }
     const hardCap = Math.max(
@@ -9775,7 +9953,7 @@
       roiIfWin: sized && !sized.empty ? sized.roiIfWin : unit.roiIfWin,
       bankPct: bank > 0 ? (stake / bank) * 100 : 0,
       streak: 0,
-      note: "≤1% bal",
+      note: "growth size",
     };
   }
 
@@ -10214,6 +10392,7 @@
       best.score > CLEAR_EDGE_MIN_SCORE &&
       best.pWin >= CLEAR_EDGE_MIN_PWIN &&
       !(secs > CLEAR_EDGE_EARLY_SECS && Math.abs(best.ev) < CLEAR_EDGE_EARLY_ABS_EV);
+    void maybeAutoManage(best);
 
     if (clear) {
       // Keep a matching held alert for open-time dedupe; only drop stale

@@ -162,7 +162,24 @@ AUTO_TRADE_CUTOFF_SECS = 5 * 60
 AUTO_FLIP_MIN_HOLD_SECS = 2 * 60
 AUTO_CLOSE_MIN_HOLD_SECS = AUTO_FLIP_MIN_HOLD_SECS
 # Never let Auto spend the account through this cash floor. Manual buys can.
+# Small accounts use a lower floor so Auto can still place $1 growth trades.
 AUTO_CASH_FLOOR_USD = 10.0
+AUTO_SMALL_CASH_USD = 25.0
+AUTO_SMALL_CASH_FLOOR_USD = 2.0
+# Growth Auto — bank winners / dump late mid-ask bags (Aug 5 playbook).
+# Not WAIT-close: edge-gone does not sell.
+AUTO_TAKE_PROFIT_CENTS = 10
+AUTO_TAKE_PROFIT_MIN_HOLD_SECS = 15
+AUTO_LATE_BAG_SECS = 2 * 60
+AUTO_HOLD_SETTLE_MIN_ASK = 68
+AUTO_MIN_ENTRY_ASK = 20
+AUTO_MAX_ENTRY_ASK = 80
+AUTO_MODEL_DEAD_PWIN = 0.38
+AUTO_GROWTH_BANK_USD = 50.0
+AUTO_GROWTH_RISK_PCT = 0.10
+AUTO_GROWTH_RISK_CAP = 5
+AUTO_STEADY_RISK_PCT = 0.05
+AUTO_STEADY_RISK_CAP = 20
 # Clear-edge buy gate — keep in sync with client CLEAR_EDGE_* constants.
 CLEAR_EDGE_MIN_PWIN = 0.51
 CLEAR_EDGE_MIN_EV = 0.005
@@ -293,6 +310,8 @@ def auto_trade_status() -> dict:
         "last_auto_trade_note": note,
         "last_auto_position": _last_auto_position,
         "cash_floor_usd": AUTO_CASH_FLOOR_USD,
+        "small_cash_floor_usd": AUTO_SMALL_CASH_FLOOR_USD,
+        "take_profit_cents": AUTO_TAKE_PROFIT_CENTS,
         "close_min_hold_secs": AUTO_CLOSE_MIN_HOLD_SECS,
         "attempts": attempts[-50:],
         "attempt_count": len(attempts),
@@ -1595,14 +1614,39 @@ def _suggest_bankroll() -> float | None:
     return cached if cached is not None else None
 
 
+def auto_cash_floor_usd(cash) -> float:
+    """$2 floor under $25 so a drained account can still place $1 Auto buys."""
+    try:
+        c = float(cash)
+    except (TypeError, ValueError):
+        return AUTO_CASH_FLOOR_USD
+    if c < AUTO_SMALL_CASH_USD:
+        return AUTO_SMALL_CASH_FLOOR_USD
+    return AUTO_CASH_FLOOR_USD
+
+
+def auto_risk_cap_usd(bankroll: float | None) -> int:
+    """Growth size while small; 5% once the account is past $50."""
+    try:
+        bank = float(bankroll) if bankroll is not None else None
+    except (TypeError, ValueError):
+        bank = None
+    if bank is None or bank <= 0:
+        return AUTO_GROWTH_RISK_CAP
+    if bank < AUTO_GROWTH_BANK_USD:
+        cap = int(round(bank * AUTO_GROWTH_RISK_PCT))
+        return max(1, min(AUTO_GROWTH_RISK_CAP, cap))
+    cap = int(round(bank * AUTO_STEADY_RISK_PCT))
+    return max(1, min(AUTO_STEADY_RISK_CAP, cap))
+
+
 def _green_spike_suggest(
     ask: float, p_win: float, bankroll: float | None = None
 ) -> int:
     """
     Suggested Best-buy / automatic-beat entry.
-    Hard-capped at ~1% of Kalshi bankroll when known; else ≤ $100.
-    Small accounts (<$100) still get a $1 floor when balance can cover it —
-    int(bank*0.01) used to floor $95 → $0 and block every auto buy.
+    Growth mode: ~10% of cash (cap $5) until $50, then ~5% (cap $20).
+    Small accounts still get a $1 floor when balance can cover it.
     Manual buy chips on the client stay independent of this cap.
     """
     cost = ask / 100.0
@@ -1617,8 +1661,7 @@ def _green_spike_suggest(
     except (TypeError, ValueError):
         bank = None
     if bank is not None and bank > 0:
-        risk_cap = int(round(bank * 0.01))
-        # Never return $0 when the account can afford a $1 entry.
+        risk_cap = auto_risk_cap_usd(bank)
         if bank >= 1:
             risk_cap = max(1, risk_cap)
         if risk_cap < 1:
@@ -1971,8 +2014,8 @@ def push_watcher_loop() -> None:
                 _clear_edge_latched = False
                 _edge_confirm_key = None
                 _edge_confirm_count = 0
-                # Trigger gone / WAIT does not auto-close. Hold until settle,
-                # you close, or Auto-flip reverses after the 2-minute hold.
+                # Trigger gone / WAIT does not auto-close. Growth exits
+                # (take-profit / late bag) run below via auto-manage.
                 # Only forget the edge after it has been gone for a while —
                 # prevents push loops when the score flickers around threshold.
                 if _last_edge_key is not None:
@@ -1982,6 +2025,15 @@ def push_watcher_loop() -> None:
                         _last_edge_key = None
                         _last_edge_ask = None
                         _last_edge_gone_at = 0.0
+            if ticker:
+                try:
+                    try_server_auto_manage(
+                        ticker=ticker,
+                        data=data,
+                        spot=spot,
+                    )
+                except Exception as manage_exc:
+                    print(f"[kalshi-btc-target] auto-manage error: {manage_exc}")
         except Exception as exc:
             print(f"[kalshi-btc-target] push watcher error: {exc}")
         time.sleep(PUSH_POLL_SEC)
@@ -3060,11 +3112,65 @@ def kalshi_fetch_market_position(ticker: str, creds: dict | None = None) -> dict
         except (TypeError, ValueError):
             net = 0
         break
+    entry_cents = None
+    if net != 0:
+        row = next(
+            (
+                r
+                for r in positions
+                if isinstance(r, dict)
+                and str(r.get("ticker") or "").strip() == ticker
+            ),
+            None,
+        )
+        if isinstance(row, dict):
+            entry_cents = _entry_cents_from_position_row(row, abs(net))
     if net > 0:
-        return {"ok": True, "side": "above", "contracts": net, "raw": payload}
+        return {
+            "ok": True,
+            "side": "above",
+            "contracts": net,
+            "entry_cents": entry_cents,
+            "raw": payload,
+        }
     if net < 0:
-        return {"ok": True, "side": "below", "contracts": abs(net), "raw": payload}
-    return {"ok": True, "side": None, "contracts": 0, "raw": payload}
+        return {
+            "ok": True,
+            "side": "below",
+            "contracts": abs(net),
+            "entry_cents": entry_cents,
+            "raw": payload,
+        }
+    return {"ok": True, "side": None, "contracts": 0, "entry_cents": None, "raw": payload}
+
+
+def _entry_cents_from_position_row(row: dict, contracts: int) -> int | None:
+    """Best-effort average entry in cents from a Kalshi position row."""
+    if contracts <= 0:
+        return None
+    dollars = _kalshi_fp_float(
+        row.get("average_price_dollars")
+        if row.get("average_price_dollars") is not None
+        else row.get("average_price")
+    )
+    if dollars is not None and 0 < dollars <= 1:
+        cents = int(round(dollars * 100))
+        if 1 <= cents <= 99:
+            return cents
+    exp = _kalshi_fp_float(
+        row.get("market_exposure_dollars")
+        if row.get("market_exposure_dollars") is not None
+        else (
+            (row.get("market_exposure") or 0) / 100.0
+            if row.get("market_exposure") is not None
+            else None
+        )
+    )
+    if exp is not None and exp > 0:
+        cents = int(round(100.0 * exp / float(contracts)))
+        if 1 <= cents <= 99:
+            return cents
+    return None
 
 
 def _auto_trade_secs_left(secs_left=None) -> float | None:
@@ -3120,6 +3226,8 @@ def auto_stake_after_cash_floor(
         if s < min_stake:
             return None, "size_zero"
         return s, None
+    if floor == AUTO_CASH_FLOOR_USD:
+        floor = auto_cash_floor_usd(c)
     if c <= float(floor) + 0.01:
         return None, "cash_floor"
     max_spend = c - float(floor)
@@ -3265,7 +3373,8 @@ def try_server_auto_trade(
     """
     Place a live Best Side buy when Auto-trade is armed on the server.
     Uses IOC with a small ask bump so fills land quickly as the book moves.
-    If opposite is open, Auto does not sell — it holds until settle or a manual close.
+    If opposite is open, Auto does not flip-sell. Growth exits (take-profit /
+    late bag) run separately via try_server_auto_manage.
     Dedupes per ticker:side; retries failed IOCs after AUTO_TRADE_RETRY_SEC.
     Every outcome is logged so we can verify the bot actually tried.
     Disengaged in the last 5 minutes of the window — no new auto buys.
@@ -3290,6 +3399,9 @@ def try_server_auto_trade(
             "already_flat",
             "cash_floor",
             "no_auto_sell",
+            "ask_band",
+            "manage_hold",
+            "manage_skip",
         ):
             log_auto_trade_attempt(
                 {
@@ -3483,6 +3595,16 @@ def _try_server_auto_trade_body(
         return finish({"ok": False, "error": "Invalid ask"}, kind="bad_ask")
     if ask < 1 or ask > 99:
         return finish({"ok": False, "error": "Ask must be 1–99¢"}, kind="bad_ask")
+    if ask < AUTO_MIN_ENTRY_ASK or ask > AUTO_MAX_ENTRY_ASK:
+        note = (
+            f"skipped · ask {ask}¢ outside {AUTO_MIN_ENTRY_ASK}–"
+            f"{AUTO_MAX_ENTRY_ASK}¢ growth band"
+        )
+        _last_auto_trade_note = note
+        return finish(
+            {"ok": True, "skipped": True, "error": note, "note": note, "key": key},
+            kind="ask_band",
+        )
 
     # Re-read the live book — edge ask goes stale in seconds on KXBTC15M.
     live_ask = _fresh_side_ask_cents(ticker, side)
@@ -3608,6 +3730,7 @@ def _try_server_auto_trade_body(
                 "side": side,
                 "contracts": fill_n,
                 "opened_at": time.time(),
+                "entry_cents": int(used_limit),
             }
         prefix = "flipped · " if flipped else ""
         note = (
@@ -3641,6 +3764,271 @@ def _try_server_auto_trade_body(
     return finish(out, kind="miss")
 
 
+def decide_auto_manage(
+    *,
+    entry_cents: int | None,
+    bid_cents: int | None,
+    secs_left: float | None,
+    held_secs: float,
+    settle_now_win: bool,
+    held_pwin: float | None,
+) -> tuple[str | None, str]:
+    """Growth exits only: take-profit, late mid-ask bag, or model-dead.
+
+    WAIT / trigger-gone is not a reason. Hold-to-settle (≥68¢ and winning
+    vs beat) is allowed through the last two minutes.
+    """
+    entry = _usable_bid_cents(entry_cents)
+    bid = _usable_bid_cents(bid_cents)
+    hold_ok = (
+        entry is not None
+        and entry >= AUTO_HOLD_SETTLE_MIN_ASK
+        and bool(settle_now_win)
+    )
+    if held_secs < AUTO_TAKE_PROFIT_MIN_HOLD_SECS and not (
+        secs_left is not None and secs_left <= AUTO_LATE_BAG_SECS
+    ):
+        return None, ""
+
+    if entry is not None and bid is not None:
+        edge = bid - entry
+        if edge >= AUTO_TAKE_PROFIT_CENTS:
+            return (
+                "take_profit",
+                f"bank +{edge}¢ vs entry {entry}¢ → bid {bid}¢",
+            )
+
+    if (
+        secs_left is not None
+        and 0 <= secs_left <= AUTO_LATE_BAG_SECS
+        and not hold_ok
+    ):
+        mid = entry is None or (
+            20 <= entry <= AUTO_HOLD_SETTLE_MIN_ASK - 1
+        )
+        why = "mid-ask bag" if mid else "not a hold-to-settle setup"
+        return "late_bag", f"<{AUTO_LATE_BAG_SECS // 60}m left · {why} — close"
+
+    if (
+        held_pwin is not None
+        and held_pwin < AUTO_MODEL_DEAD_PWIN
+        and not hold_ok
+        and held_secs >= 45
+    ):
+        return (
+            "model_dead",
+            f"model {held_pwin * 100:.0f}% on open side — cut loser",
+        )
+    return None, ""
+
+
+def try_server_auto_manage(
+    *,
+    ticker: str,
+    data: dict | None = None,
+    spot=None,
+    bid_cents=None,
+    yes_bid_cents=None,
+    no_bid_cents=None,
+    force: bool = False,
+) -> dict:
+    """Bank winners and dump late bags. Does not sell just because Best Side waits."""
+    global _last_auto_trade_note, _auto_trade_inflight, _last_auto_position
+
+    def finish(result: dict, *, kind: str) -> dict:
+        out = dict(result or {})
+        out.setdefault("auto", True)
+        out["kind"] = kind
+        out.setdefault("closed", False)
+        note = out.get("note") or out.get("error") or kind
+        if kind not in ("inflight", "manage_hold", "manage_skip", "already_flat", "not_armed"):
+            log_auto_trade_attempt(
+                {
+                    "kind": kind,
+                    "ticker": ticker,
+                    "side": out.get("side"),
+                    "ok": bool(out.get("ok")),
+                    "skipped": bool(out.get("skipped")),
+                    "closed": bool(out.get("closed")),
+                    "note": note,
+                    "error": out.get("error"),
+                }
+            )
+        elif note and kind in ("manage_hold", "already_flat"):
+            _last_auto_trade_note = str(note)
+        return out
+
+    ticker = (ticker or "").strip()
+    if not ticker:
+        return finish({"ok": False, "skipped": True, "error": "Need ticker"}, kind="bad_args")
+
+    creds = get_kalshi_credentials()
+    if not creds:
+        return finish({"ok": False, "skipped": True, "error": "Kalshi not connected"}, kind="not_armed")
+    if not creds.get("live_enabled") and not os.environ.get("KALSHI_LIVE_FORCE"):
+        return finish({"ok": False, "skipped": True, "error": "Live Kalshi buys off"}, kind="not_armed")
+    if not creds.get("auto_trade") and not force:
+        return finish({"ok": False, "skipped": True, "error": "Auto-trade off"}, kind="not_armed")
+
+    with _auto_trade_lock:
+        if _auto_trade_inflight:
+            return finish(
+                {"ok": False, "skipped": True, "error": "auto-trade in flight"},
+                kind="inflight",
+            )
+        _auto_trade_inflight = True
+
+    try:
+        held_side, held_contracts = _resolve_held_position(ticker, creds)
+        if not held_side or held_contracts < 1:
+            _clear_last_auto_fill(ticker)
+            note = "already flat"
+            _last_auto_trade_note = note
+            return finish(
+                {"ok": True, "skipped": True, "already_flat": True, "note": note},
+                kind="already_flat",
+            )
+
+        pos = kalshi_fetch_market_position(ticker, creds)
+        last = _last_auto_position if isinstance(_last_auto_position, dict) else None
+        entry = None
+        if last and last.get("ticker") == ticker:
+            entry = _usable_bid_cents(last.get("entry_cents"))
+        if entry is None:
+            entry = _usable_bid_cents((pos or {}).get("entry_cents"))
+
+        payload = data if isinstance(data, dict) else {}
+        if not payload:
+            try:
+                fetched = fetch_target_payload("15m")
+                if isinstance(fetched, dict):
+                    payload = fetched
+            except Exception:
+                payload = {}
+        if held_side == "above":
+            bid = (
+                _usable_bid_cents(yes_bid_cents)
+                or _usable_bid_cents(payload.get("yes_bid_pct"))
+                or _usable_bid_cents(bid_cents)
+                or _fresh_side_bid_cents(ticker, held_side)
+            )
+        else:
+            bid = (
+                _usable_bid_cents(no_bid_cents)
+                or _usable_bid_cents(payload.get("no_bid_pct"))
+                or _usable_bid_cents(bid_cents)
+                or _fresh_side_bid_cents(ticker, held_side)
+            )
+
+        secs = _auto_trade_secs_left(
+            payload.get("seconds_to_close") if payload else None
+        )
+        held = _auto_fill_held_secs(ticker)
+
+        beat = payload.get("price_to_beat")
+        if beat is None:
+            beat = payload.get("target")
+        settle_now_win = False
+        held_pwin = None
+        try:
+            spot_f = float(spot) if spot is not None else None
+            beat_f = float(beat) if beat is not None else None
+        except (TypeError, ValueError):
+            spot_f = None
+            beat_f = None
+        if spot_f is not None and beat_f is not None and math.isfinite(spot_f) and math.isfinite(beat_f):
+            settle_now_win = (
+                (held_side == "above" and spot_f >= beat_f)
+                or (held_side == "below" and spot_f < beat_f)
+            )
+            if secs is not None:
+                model = _model_prob_above(
+                    spot_f,
+                    beat_f,
+                    float(secs),
+                    bool(payload.get("settlement_mode")),
+                    payload.get("settlement_side"),
+                    payload.get("settlement_avg"),
+                )
+                if model is not None:
+                    held_pwin = model if held_side == "above" else 1.0 - model
+
+        reason, why = decide_auto_manage(
+            entry_cents=entry,
+            bid_cents=bid,
+            secs_left=secs,
+            held_secs=held,
+            settle_now_win=settle_now_win,
+            held_pwin=held_pwin,
+        )
+        if not reason:
+            return finish(
+                {
+                    "ok": True,
+                    "skipped": True,
+                    "note": "holding · no take-profit / late-bag yet",
+                    "side": held_side,
+                },
+                kind="manage_skip",
+            )
+
+        side_label = "Above" if held_side == "above" else "Below"
+        log_auto_trade_attempt(
+            {
+                "kind": "managing",
+                "ticker": ticker,
+                "side": held_side,
+                "ok": None,
+                "note": f"{reason} {side_label} {held_contracts} cts · {why}",
+            }
+        )
+        closed = _aggressive_close_held(
+            ticker=ticker,
+            held_side=held_side,
+            held_contracts=held_contracts,
+            creds=creds,
+            bid_cents=bid,
+            log_kind="managing",
+            log_note=why,
+        )
+        sold = closed.get("sold")
+        left = int(closed.get("left") or 0)
+        if not closed.get("ok") or left > 0:
+            err = closed.get("error") or "still open after close"
+            note = f"{reason} failed · still holding {left} cts · {err}"
+            _last_auto_trade_note = note
+            print(f"[kalshi-btc-target] MANAGE MISS {ticker}:{held_side} {err}")
+            return finish(
+                {
+                    "ok": False,
+                    "error": note,
+                    "note": note,
+                    "sell": sold,
+                    "side": held_side,
+                },
+                kind="manage_fail",
+            )
+
+        _clear_last_auto_fill(ticker)
+        note = f"{reason} · closed {side_label} · {why}"
+        _last_auto_trade_note = note
+        print(f"[kalshi-btc-target] MANAGE CLOSE {ticker}:{held_side} {note}")
+        return finish(
+            {
+                "ok": True,
+                "closed": True,
+                "reason": reason,
+                "note": note,
+                "side": held_side,
+                "sell": sold,
+            },
+            kind=reason,
+        )
+    finally:
+        with _auto_trade_lock:
+            _auto_trade_inflight = False
+
+
 def try_server_auto_close(
     *,
     ticker: str,
@@ -3650,8 +4038,8 @@ def try_server_auto_close(
     no_bid_cents=None,
     force: bool = False,
 ) -> dict:
-    """WAIT / trigger-gone auto-close is disabled. Trades hold until settle,
-    a manual close, or Auto-flip. Kept as a no-op so a stale app cannot dump.
+    """WAIT / trigger-gone auto-close is disabled. Stale apps cannot dump.
+    Growth exits go through try_server_auto_manage (take-profit / late bag).
     """
     note = "WAIT auto-close off — holding until settle, manual close, or Auto-flip"
     return {
@@ -4261,6 +4649,26 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(code, result)
             return
 
+        if path == "/api/kalshi/auto-manage":
+            result = try_server_auto_manage(
+                ticker=str(body.get("ticker") or "").strip(),
+                data=None,
+                spot=body.get("spot"),
+                bid_cents=body.get("bid_cents")
+                if body.get("bid_cents") is not None
+                else body.get("bidCents"),
+                yes_bid_cents=body.get("yes_bid_cents")
+                if body.get("yes_bid_cents") is not None
+                else body.get("yesBidCents"),
+                no_bid_cents=body.get("no_bid_cents")
+                if body.get("no_bid_cents") is not None
+                else body.get("noBidCents"),
+                force=bool(body.get("force")),
+            )
+            code = 200 if result.get("ok") or result.get("skipped") else 400
+            self._send_json(code, result)
+            return
+
         if path == "/api/kalshi/auto-close":
             result = try_server_auto_close(
                 ticker=str(body.get("ticker") or "").strip(),
@@ -4452,7 +4860,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.21",
+                    "version": "2.4.22",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

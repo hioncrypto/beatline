@@ -22,9 +22,9 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.80" />
+    <link rel="stylesheet" href="/styles.css?v=10.81" />
     <script src="/vendor/lightweight-charts.js?v=4.2.1" defer></script>
-    <script src="/app.js?v=10.80" defer></script>
+    <script src="/app.js?v=10.81" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -420,7 +420,7 @@
       <label class="options-row toggle-row auto-flip-row" for="auto-flip-toggle" id="auto-flip-row">
         <span>
           <strong>Auto-flip opposite</strong>
-          <em>Auto does not auto-sell. Close is manual, or hold to settle.</em>
+          <em>Auto-flip does not reverse. Take-profit and late-bag closes still run.</em>
         </span>
         <input id="auto-flip-toggle" type="checkbox" />
       </label>
@@ -429,16 +429,18 @@
         <strong>2)</strong> turn on Live Kalshi buys → <strong>3)</strong> turn on Auto-trade.
         Save &amp; connect leaves Auto-trade <strong>unchecked</strong> — you have to turn it
         on yourself. Auto buys the clear Best Side trigger immediately at the
-        <strong>live ask</strong> (with a small slip so IOC fills land), sized ≤1% of
-        balance — not penny-only. Auto <strong>never auto-sells</strong>. When Best Side
-        goes wait or flips, the open trade <strong>holds</strong> until settle or you
-        close it. Auto-flip will not dump or reverse. Auto will not spend through a
-        <strong>$10 cash floor</strong> (no auto buy that would
-        leave the account under $10); manual Buy Above / Below / Best still can.
-        At the
+        <strong>live ask</strong> (20–80¢ growth band, with a small slip so IOC fills land).
+        Size is about <strong>10% of cash (max $5)</strong> until the account is $50,
+        then about <strong>5%</strong>. Auto <strong>banks winners</strong> when the bid
+        is <strong>+10¢ vs entry</strong>, and <strong>closes late mid-ask bags</strong>
+        in the last 2 minutes (unless you are ≥68¢ and winning vs beat — those can
+        hold to settle). WAIT / trigger-gone does <strong>not</strong> dump a trade.
+        A drained account uses a <strong>$2 cash floor</strong> so $1 Auto buys can
+        still fire; at $25+ the floor is $10. Manual Buy Above / Below / Best can
+        still spend through the floor. At the
         <strong>5-minute mark</strong> Auto-trade <strong>disengages new buys</strong>
-        until the next 15m window. Manual Buy Above / Below /
-        Best can still set a Limit ¢. Fills run on the server even in the background.
+        until the next 15m window. Fills and take-profits run on the server even
+        in the background.
         Green <strong>Saved &amp; connected · bal $…</strong> means connect really worked.
       </p>
       <p id="auto-trade-verify" class="auto-trade-verify">Server auto: checking…</p>

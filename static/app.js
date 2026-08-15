@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.81";
+  const APP_VERSION = "10.82";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -34,6 +34,13 @@
   const CLEAR_EDGE_EARLY_SECS = 13 * 60;
   const CLEAR_EDGE_EARLY_ABS_EV = 0.02;
   const CLEAR_EDGE_PWIN_PCT = Math.round(CLEAR_EDGE_MIN_PWIN * 100);
+  /** Near-beat line entry — keep in sync with server NEAR_BEAT_*. */
+  const NEAR_BEAT_MIN_PWIN = 0.43;
+  const NEAR_BEAT_MIN_ASK = 48;
+  const NEAR_BEAT_MAX_ASK = 70;
+  const NEAR_BEAT_MAX_LEAD_USD = 50;
+  const NEAR_BEAT_MIN_EV = -0.05;
+  const NEAR_BEAT_CUTOFF_SECS = 2 * 60;
   /** Growth Auto — keep in sync with server AUTO_* manage constants. */
   const AUTO_TAKE_PROFIT_CENTS = 10;
   const AUTO_TAKE_PROFIT_MIN_HOLD_SECS = 15;
@@ -6200,7 +6207,7 @@
   }
 
   /** Live auto-buy via server (slip + flip + dedupe shared with background watcher). */
-  async function placeServerAutoBuy(side, suggestStake, askCents) {
+  async function placeServerAutoBuy(side, suggestStake, askCents, lineEntry) {
     const oppSide = side === "above" ? "below" : "above";
     const oppBid =
       oppSide === "above" ? lastRoiBids.above : lastRoiBids.below;
@@ -6217,6 +6224,7 @@
           bid_cents: sameBid,
           opposite_bid_cents: oppBid,
           secs_left: secondsLeft(),
+          line_entry: !!lineEntry,
         }),
       });
       const data = await res.json();
@@ -8143,9 +8151,10 @@
             : null,
     };
     best.suggestedStake = clampBestStake(best.suggestedStake);
+    best.lineEntry = !!(payload.lineEntry || payload.line_entry);
     // Auto-fill as soon as the alert arrives — don't wait for the next Best Side paint.
     if (
-      autoTradeArmed() &&
+      autoTradeArmed(best) &&
       best.suggestedStake != null &&
       best.suggestedStake >= BUY_AMOUNT_MIN &&
       !(demo.position && demo.position.side !== side && !autoFlipOn)
@@ -9047,13 +9056,15 @@
   }
 
 
-  function autoTradeLateWindow() {
+  function autoTradeLateWindow(best) {
     const secs = secondsLeft();
-    return secs != null && secs <= AUTO_TRADE_CUTOFF_SECS;
+    if (secs == null) return false;
+    if (best && best.lineEntry) return secs <= NEAR_BEAT_CUTOFF_SECS;
+    return secs <= AUTO_TRADE_CUTOFF_SECS;
   }
 
-  function autoTradeArmed() {
-    return !!autoTradeOn && tradingArmed() && !autoTradeLateWindow();
+  function autoTradeArmed(best) {
+    return !!autoTradeOn && tradingArmed() && !autoTradeLateWindow(best);
   }
 
   function renderAutoTradeUi() {
@@ -9076,9 +9087,13 @@
       if (!autoTradeOn) {
         el.autoTradeStatus.textContent =
           "Off — BeatLine will not place buys for you";
+      } else if (autoTradeLateWindow({ lineEntry: true })) {
+        el.autoTradeStatus.textContent =
+          "Disengaged · last 2 min — will not open a buy";
+        el.autoTradeStatus.classList.add("is-warn");
       } else if (autoTradeLateWindow()) {
         el.autoTradeStatus.textContent =
-          "Disengaged · last 5 min — will not open a buy";
+          "On · last 5 min · near-beat line entries only";
         el.autoTradeStatus.classList.add("is-warn");
       } else if (!kalshiLive.connected && !demo.on) {
         el.autoTradeStatus.textContent =
@@ -9207,18 +9222,20 @@
    * with a small ask bump so IOC orders fill fast.
    */
   async function maybeAutoTrade(best, suggestStake) {
-    if (!autoTradeArmed()) return false;
+    if (!autoTradeArmed(best)) return false;
     if (autoTradeBusy) return false;
     if (!best || !best.side) return false;
     if (!(suggestStake >= BUY_AMOUNT_MIN)) return false;
     const ticker = lastTicker || lastFifteenTicker || "";
     if (!ticker) return false;
     const secs = secondsLeft();
-    if (secs != null && secs <= AUTO_TRADE_CUTOFF_SECS) {
+    const cutoff = best.lineEntry ? NEAR_BEAT_CUTOFF_SECS : AUTO_TRADE_CUTOFF_SECS;
+    if (secs != null && secs <= cutoff) {
+      const windowTxt = best.lineEntry ? "last 2 min" : "last 5 min";
       lastAutoTradeNote =
         secs > 0
-          ? `disengaged · ${Math.max(1, Math.ceil(secs / 60))}m left (no auto buys in last 5 min)`
-          : "disengaged · window over (no auto buys in last 5 min)";
+          ? `disengaged · ${Math.max(1, Math.ceil(secs / 60))}m left (no auto buys in ${windowTxt})`
+          : `disengaged · window over (no auto buys in ${windowTxt})`;
       renderAutoTradeUi();
       return false;
     }
@@ -9286,7 +9303,8 @@
         let live = await placeServerAutoBuy(
           best.side,
           suggestStake,
-          askCents || (sized && sized.askCents)
+          askCents || (sized && sized.askCents),
+          !!best.lineEntry
         );
         if (live && live.already) {
           lastAutoTradeKey = live.key || key;
@@ -10300,6 +10318,24 @@
     }
   }
 
+  function nearBeatPick(scored, spot, beat, secs) {
+    if (spot == null || beat == null || !Number.isFinite(spot) || !Number.isFinite(beat)) {
+      return null;
+    }
+    if (!scored || !scored.length) return null;
+    if (secs != null && secs <= NEAR_BEAT_CUTOFF_SECS) return null;
+    const lead = Math.abs(spot - beat);
+    if (lead > NEAR_BEAT_MAX_LEAD_USD) return null;
+    const win = spot >= beat ? "above" : "below";
+    const row = scored.find((s) => s && s.side === win);
+    if (!row) return null;
+    const ask = Math.round(Number(row.askCents) || 0);
+    if (ask < NEAR_BEAT_MIN_ASK || ask > NEAR_BEAT_MAX_ASK) return null;
+    if (!(Number(row.pWin) >= NEAR_BEAT_MIN_PWIN)) return null;
+    if (!(Number(row.ev) > NEAR_BEAT_MIN_EV)) return null;
+    return row;
+  }
+
   function refreshBestSide() {
     if (!el.bestSide) return;
     const wasVisible = !el.bestSide.hidden;
@@ -10384,14 +10420,22 @@
     let best = scored[0];
     // Haircut noisy/thin books and early-window coin flips with tiny edge.
     if (lastThinBook) best = { ...best, score: best.score - 0.08 };
-    // Profile: Green Spike — favorite-ish clear edge (v10.80 a bit looser).
-    // No sticky latch, no cheap underdogs.
+    // Profile: Green Spike — favorite-ish clear edge, plus near-beat line
+    // entries (winning vs TO BEAT at a mid ask, like the 62¢ Above hug).
     clearEdgeLatched = false;
-    const clear =
+    const favoriteClear =
       best.ev > CLEAR_EDGE_MIN_EV &&
       best.score > CLEAR_EDGE_MIN_SCORE &&
       best.pWin >= CLEAR_EDGE_MIN_PWIN &&
       !(secs > CLEAR_EDGE_EARLY_SECS && Math.abs(best.ev) < CLEAR_EDGE_EARLY_ABS_EV);
+    const line = nearBeatPick(scored, spot, beat, secs);
+    let lineEntry = false;
+    if (line) {
+      best = { ...line, lineEntry: true };
+      lineEntry = true;
+    }
+    const clear = favoriteClear || lineEntry;
+    if (clear && !best.lineEntry) best = { ...best, lineEntry: false };
     void maybeAutoManage(best);
 
     if (clear) {

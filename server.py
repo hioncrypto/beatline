@@ -186,6 +186,15 @@ CLEAR_EDGE_MIN_EV = 0.005
 CLEAR_EDGE_MIN_SCORE = 0.025
 CLEAR_EDGE_EARLY_SECS = 13 * 60
 CLEAR_EDGE_EARLY_ABS_EV = 0.02
+# Near-beat line entry — buy the side that is winning vs TO BEAT when
+# price is hugging the line at a mid ask (the 62¢ Above / +$15 screenshot).
+# Keep in sync with client NEAR_BEAT_* constants.
+NEAR_BEAT_MIN_PWIN = 0.43
+NEAR_BEAT_MIN_ASK = 48
+NEAR_BEAT_MAX_ASK = 70
+NEAR_BEAT_MAX_LEAD_USD = 50.0
+NEAR_BEAT_MIN_EV = -0.05
+NEAR_BEAT_CUTOFF_SECS = 2 * 60
 
 
 def _fresh_side_ask_cents(ticker: str, side: str) -> int | None:
@@ -1785,7 +1794,17 @@ def evaluate_clear_edge(
         reject = "score"
     elif secs > CLEAR_EDGE_EARLY_SECS and abs(best["ev"]) < CLEAR_EDGE_EARLY_ABS_EV:
         reject = "early_window"
-    clear = reject is None
+    favorite_clear = reject is None
+    line = _near_beat_pick(scored, spot, beat, secs)
+    line_entry = False
+    if line:
+        # Prefer the side that is actually beating — not a cheap opposite.
+        best = line
+        reject = None
+        clear = True
+        line_entry = True
+    else:
+        clear = favorite_clear
 
     ask = float(best["ask_cents"])
     p_win = float(best["p_win"])
@@ -1797,12 +1816,45 @@ def evaluate_clear_edge(
         "score": best["score"],
         "clear": clear,
         "reject": reject,
+        "line_entry": line_entry,
         "suggest_stake": _green_spike_suggest(ask, p_win, _suggest_bankroll()),
         "profile": "green-spike",
         "secs_left": secs,
         "spot": float(spot),
         "beat": float(beat),
     }
+
+
+def _near_beat_pick(scored: list, spot, beat, secs) -> dict | None:
+    """Winning-vs-beat mid-ask hug. Matches the 62¢ Above near TO BEAT entry."""
+    try:
+        spot_f = float(spot)
+        beat_f = float(beat)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(spot_f) or not math.isfinite(beat_f):
+        return None
+    if secs is not None and secs <= NEAR_BEAT_CUTOFF_SECS:
+        return None
+    lead = abs(spot_f - beat_f)
+    if lead > NEAR_BEAT_MAX_LEAD_USD:
+        return None
+    win = "above" if spot_f >= beat_f else "below"
+    for row in scored:
+        if row.get("side") != win:
+            continue
+        try:
+            ask = int(row.get("ask_cents"))
+        except (TypeError, ValueError):
+            return None
+        if ask < NEAR_BEAT_MIN_ASK or ask > NEAR_BEAT_MAX_ASK:
+            return None
+        if float(row.get("p_win") or 0) < NEAR_BEAT_MIN_PWIN:
+            return None
+        if float(row.get("ev") or 0) <= NEAR_BEAT_MIN_EV:
+            return None
+        return row
+    return None
 
 
 def score_clear_edge(
@@ -1820,6 +1872,8 @@ def score_clear_edge(
         "score": evaluated["score"],
         "suggest_stake": evaluated["suggest_stake"],
         "profile": evaluated["profile"],
+        "line_entry": bool(evaluated.get("line_entry")),
+        "secs_left": evaluated.get("secs_left"),
     }
 
 
@@ -1867,6 +1921,7 @@ def current_clear_edge() -> dict:
         "secs_left": evaluated.get("secs_left"),
         "spot": evaluated.get("spot"),
         "profile": "green-spike",
+        "line_entry": bool(evaluated.get("line_entry")),
     }
     if evaluated["clear"]:
         return base
@@ -1982,6 +2037,7 @@ def push_watcher_loop() -> None:
                             opposite_bid_cents=opp_bid,
                             secs_left=edge.get("secs_left")
                             or data.get("seconds_to_close"),
+                            line_entry=bool(edge.get("line_entry")),
                         )
                     except Exception as auto_exc:
                         print(f"[kalshi-btc-target] auto-trade error: {auto_exc}")
@@ -1993,6 +2049,7 @@ def push_watcher_loop() -> None:
                             "ask_cents": edge["ask_cents"],
                             "p_win": edge["p_win"],
                             "suggest_stake": edge.get("suggest_stake"),
+                            "line_entry": bool(edge.get("line_entry")),
                             "ticker": ticker,
                             "beat": beat,
                             "price_to_beat": beat,
@@ -3369,6 +3426,7 @@ def try_server_auto_trade(
     opposite_bid_cents=None,
     force: bool = False,
     secs_left=None,
+    line_entry: bool = False,
 ) -> dict:
     """
     Place a live Best Side buy when Auto-trade is armed on the server.
@@ -3377,7 +3435,8 @@ def try_server_auto_trade(
     late bag) run separately via try_server_auto_manage.
     Dedupes per ticker:side; retries failed IOCs after AUTO_TRADE_RETRY_SEC.
     Every outcome is logged so we can verify the bot actually tried.
-    Disengaged in the last 5 minutes of the window — no new auto buys.
+    Favorite entries disengage in the last 5 minutes. Near-beat line
+    entries stay armed until the last 2 minutes.
     """
     global _last_auto_trade_key, _last_auto_trade_at, _last_auto_trade_note
     global _last_auto_trade_attempt_at, _last_auto_position, _auto_trade_inflight
@@ -3463,14 +3522,19 @@ def try_server_auto_trade(
         )
 
     secs = _auto_trade_secs_left(secs_left)
-    if secs is not None and secs <= AUTO_TRADE_CUTOFF_SECS:
+    cutoff = NEAR_BEAT_CUTOFF_SECS if line_entry else AUTO_TRADE_CUTOFF_SECS
+    if secs is not None and secs <= cutoff:
+        if line_entry:
+            window_txt = "last 2 min"
+        else:
+            window_txt = "last 5 min"
         if secs > 0:
             note = (
                 f"disengaged · {secs / 60.0:.1f}m left "
-                "(no auto buys in last 5 min)"
+                f"(no auto buys in {window_txt})"
             )
         else:
-            note = "disengaged · window over (no auto buys in last 5 min)"
+            note = f"disengaged · window over (no auto buys in {window_txt})"
         _last_auto_trade_note = note
         return finish(
             {
@@ -4644,6 +4708,11 @@ class Handler(BaseHTTPRequestHandler):
                 secs_left=body.get("secs_left")
                 if body.get("secs_left") is not None
                 else body.get("secsLeft"),
+                line_entry=bool(
+                    body.get("line_entry")
+                    if body.get("line_entry") is not None
+                    else body.get("lineEntry")
+                ),
             )
             code = 200 if result.get("ok") or result.get("skipped") else 400
             self._send_json(code, result)
@@ -4860,7 +4929,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.22",
+                    "version": "2.4.23",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

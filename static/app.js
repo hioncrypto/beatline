@@ -10547,6 +10547,7 @@
       suggestedStake: suggestStake,
       suggestion,
       atRiskCap,
+      lineEntry: !!best.lineEntry,
     };
     setBestHealthSnap({
       clear: true,

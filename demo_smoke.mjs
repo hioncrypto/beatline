@@ -122,10 +122,15 @@ async function main() {
     });
     ok("Buy Above enabled", !openDiag.disabled, JSON.stringify(openDiag));
 
-    // Prefer sticky dock buy (2-step). Pick side with a usable ask.
+    // Open the detailed sheet from Options. The sticky dock is a direct buy.
     const side = await page.evaluate(() => {
-      const a = parseInt(document.getElementById("dock-above-pct")?.textContent || "", 10);
-      const b = parseInt(document.getElementById("dock-below-pct")?.textContent || "", 10);
+      const cents = (id) => {
+        const text = document.getElementById(id)?.textContent || "";
+        const match = text.match(/@\s*(\d+)¢/);
+        return match ? Number(match[1]) : NaN;
+      };
+      const a = cents("dock-above-pct");
+      const b = cents("dock-below-pct");
       const good = (n) => Number.isFinite(n) && n >= 5 && n <= 95;
       if (good(a)) return "above";
       if (good(b)) return "below";
@@ -135,14 +140,14 @@ async function main() {
     });
     await page.evaluate((s) => {
       document
-        .getElementById(s === "above" ? "dock-buy-above" : "dock-buy-below")
+        .getElementById(s === "above" ? "demo-buy-above" : "demo-buy-below")
         .click();
     }, side);
     await wait(600);
 
     let buyOpen = await page.$eval("#buy-sheet", (el) => !el.hidden);
     const status = await page.$eval("#status", (el) => el.textContent.trim());
-    ok("Buy sheet pops out (dock 2-step)", buyOpen, status + " side=" + side);
+    ok("Detailed buy sheet opens", buyOpen, status + " side=" + side);
 
     if (!buyOpen) throw new Error("Buy sheet failed to open: " + status);
 
@@ -290,20 +295,67 @@ async function main() {
     await wait(450);
     await page.evaluate(() => {
       const chip = document.querySelector('.buy-chip[data-amt="25"]');
-      if (chip) {
-        chip.click();
-        chip.click();
-      }
+      if (chip) chip.click();
+    });
+    await wait(800);
+    const armed = await page.evaluate(() => {
+      const chip = document.querySelector('.buy-chip[data-amt="25"]');
+      return {
+        text: chip && chip.textContent,
+        armed: !!(chip && chip.classList.contains("is-armed")),
+        pos: JSON.parse(localStorage.getItem("kalshiDemoState") || "{}").position,
+      };
+    });
+    ok(
+      "First $25 tap arms, does not buy",
+      armed.armed && !armed.pos && /TAP/i.test(armed.text || ""),
+      JSON.stringify(armed)
+    );
+    await page.evaluate(() => {
+      const chip = document.querySelector('.buy-chip[data-amt="25"]');
+      if (chip) chip.click();
     });
     await wait(1000);
     const chipPos = await page.evaluate(
       () => JSON.parse(localStorage.getItem("kalshiDemoState") || "{}").position
     );
     ok(
-      "Double-tap $25 chip fires a buy",
+      "Second $25 tap fires a buy",
       !!(chipPos && chipPos.side === "below" && chipPos.contracts > 0),
       JSON.stringify(chipPos)
     );
+
+    await wait(700);
+    await page.evaluate(() => {
+      document.getElementById("demo-reset").click();
+      const stake = document.getElementById("stake-slider");
+      stake.value = "10";
+      stake.dispatchEvent(new Event("input", { bubbles: true }));
+      stake.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await wait(250);
+    const dockText = await page.$eval(
+      "#dock-above-pct",
+      (el) => el.textContent.trim()
+    );
+    ok("Direct dock shows dollar size", /^\$10\s*@/.test(dockText), dockText);
+    await page.evaluate(() => document.getElementById("dock-buy-above").click());
+    await wait(1800);
+    const dockPos = await page.evaluate(
+      () => JSON.parse(localStorage.getItem("kalshiDemoState") || "{}").position
+    );
+    ok(
+      "One dock tap buys Above immediately",
+      !!(dockPos && dockPos.side === "above" && dockPos.contracts > 0),
+      JSON.stringify(dockPos)
+    );
+    ok(
+      "Direct dock buy completes without another tap",
+      await page.$eval("#buy-sheet", (el) => el.hidden)
+    );
+
+    await page.evaluate(() => document.getElementById("demo-reset").click());
+    await wait(250);
 
     // Buy Best via sticky dock
     await page.evaluate(() => document.getElementById("dock-buy-best").click());

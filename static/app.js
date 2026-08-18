@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.83";
+  const APP_VERSION = "10.84";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -247,7 +247,7 @@
     },
     {
       title: "Set size, then buy",
-      body: "Use the Trade size slider to compare win, cost, and ROI across dollar amounts. Then tap Buy Above, Best, or Buy Below — confirm or edit dollars in the sheet and slide to fill. Same-side taps add to the open position (avg entry).",
+      body: "Use the Trade size slider to choose dollars. The bottom Buy Above / Buy Below buttons buy that amount immediately at the live ask; the amount is printed on each button. Tap Best or the Options buy controls to open the sheet for TAP TO BUY, chips, or the optional slider. Same-side buys add to the open position (avg entry).",
     },
     {
       title: "Rolling P/L",
@@ -681,8 +681,6 @@
   let buySheetSide = null; // above | below
   let buySheetAmount = 1;
   let lastChipTapAmt = null;
-  let lastChipTapAt = 0;
-  const CHIP_DOUBLE_MS = 500;
   let buySuggestStake = null;
   let buySlideDragging = false;
   let buySlideStartX = 0;
@@ -6655,6 +6653,9 @@
 
   function setBuyAmountUi(n, syncStake) {
     const amt = clampBuyAmount(n);
+    if (lastChipTapAmt != null && lastChipTapAmt !== amt) {
+      clearChipArm();
+    }
     buySheetAmount = amt;
     if (el.buyAmount && document.activeElement !== el.buyAmount) {
       el.buyAmount.value = String(amt);
@@ -6805,12 +6806,33 @@
     if (text) el.buyTap.textContent = text;
   }
 
-  function clearChipArm() {
-    lastChipTapAmt = null;
-    lastChipTapAt = 0;
-    document.querySelectorAll(".buy-chip.is-armed").forEach((btn) => {
+  function restoreChipLabels() {
+    document.querySelectorAll(".buy-chip").forEach((btn) => {
+      if (btn.dataset.label) btn.textContent = btn.dataset.label;
       btn.classList.remove("is-armed");
     });
+  }
+
+  function armBuyChip(btn) {
+    restoreChipLabels();
+    if (!btn) return;
+    if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+    btn.classList.add("is-armed");
+    btn.textContent = "TAP";
+    if (el.buyTapHint) {
+      const amt = Number(btn.dataset.amt);
+      el.buyTapHint.textContent = Number.isFinite(amt)
+        ? `Tap $${amt} again to buy · or TAP TO BUY`
+        : "Tap the same $ chip again to buy · or TAP TO BUY";
+    }
+  }
+
+  function clearChipArm() {
+    lastChipTapAmt = null;
+    restoreChipLabels();
+    if (el.buyTapHint) {
+      el.buyTapHint.textContent = "Tap a $ chip, tap it again to buy · slide is optional";
+    }
   }
 
   function renderBuySuggest(side, currentAmount) {
@@ -7041,14 +7063,20 @@
           ? sideSuggest.stake
           : null;
     // Prefer Best Side suggestion when buying the suggested side.
+    const directAmount =
+      opts.amount != null && Number.isFinite(Number(opts.amount))
+        ? clampBuyAmount(opts.amount)
+        : null;
     const preferred =
-      suggested != null
-        ? suggested
-        : buySheetAmount >= BUY_AMOUNT_MIN
-          ? buySheetAmount
-          : tradeStake >= BUY_AMOUNT_MIN
-            ? tradeStake
-            : BUY_AMOUNT_MIN;
+      directAmount != null
+        ? directAmount
+        : suggested != null
+          ? suggested
+          : buySheetAmount >= BUY_AMOUNT_MIN
+            ? buySheetAmount
+            : tradeStake >= BUY_AMOUNT_MIN
+              ? tradeStake
+              : BUY_AMOUNT_MIN;
     if (el.buyAmount) {
       el.buyAmount.min = String(BUY_AMOUNT_MIN);
       el.buyAmount.max = String(buyAmountCap());
@@ -7111,6 +7139,10 @@
     }
     clearChipArm();
     resetBuySlide();
+    if (opts.autoConfirm) {
+      void confirmBuyFromSheet();
+      return;
+    }
     requestAnimationFrame(() => {
       measureBuySlide();
       setBuySlideProgress(0);
@@ -7317,6 +7349,15 @@
       return;
     }
     openBuySheet(lastBestPick.side, { useSuggest: true, fromBest: true });
+  }
+
+  function buyNowFromDock(side) {
+    if (buyConfirming || buySheetOpen) return;
+    openBuySheet(side, {
+      useSuggest: false,
+      amount: tradeStake,
+      autoConfirm: true,
+    });
   }
 
   function resolveOutcomeForTicker(ticker, beatHint) {
@@ -10865,17 +10906,30 @@
     const canBelow = canBuySide("below");
     if (el.dockAbovePct) {
       el.dockAbovePct.textContent =
-        lastRoiAsks.above != null ? `${Math.round(lastRoiAsks.above)}¢` : "—";
+        lastRoiAsks.above != null
+          ? `$${tradeStake} @ ${Math.round(lastRoiAsks.above)}¢`
+          : `$${tradeStake} @ —`;
     }
     if (el.dockBelowPct) {
       el.dockBelowPct.textContent =
-        lastRoiAsks.below != null ? `${Math.round(lastRoiAsks.below)}¢` : "—";
+        lastRoiAsks.below != null
+          ? `$${tradeStake} @ ${Math.round(lastRoiAsks.below)}¢`
+          : `$${tradeStake} @ —`;
     }
     if (el.dockBuyAbove) {
       // Never HTML-disable opposite side — clicks must explain "close to flip".
       el.dockBuyAbove.disabled = false;
       el.dockBuyAbove.classList.toggle("is-locked", !canAbove);
       el.dockBuyAbove.setAttribute("aria-disabled", canAbove ? "false" : "true");
+      el.dockBuyAbove.setAttribute(
+        "aria-label",
+        canAbove
+          ? `Buy Above now for $${tradeStake}`
+          : "Close current position before buying Above"
+      );
+      el.dockBuyAbove.title = canAbove
+        ? `Buy Above now · $${tradeStake} at live ask`
+        : "Close current position before buying Above";
       const label = el.dockBuyAbove.querySelector(".dock-label");
       if (label) {
         label.textContent =
@@ -10890,6 +10944,15 @@
       el.dockBuyBelow.disabled = false;
       el.dockBuyBelow.classList.toggle("is-locked", !canBelow);
       el.dockBuyBelow.setAttribute("aria-disabled", canBelow ? "false" : "true");
+      el.dockBuyBelow.setAttribute(
+        "aria-label",
+        canBelow
+          ? `Buy Below now for $${tradeStake}`
+          : "Close current position before buying Below"
+      );
+      el.dockBuyBelow.title = canBelow
+        ? `Buy Below now · $${tradeStake} at live ask`
+        : "Close current position before buying Below";
       const label = el.dockBuyBelow.querySelector(".dock-label");
       if (label) {
         label.textContent =
@@ -12203,10 +12266,10 @@
       el.demoBuyBelow.addEventListener("click", () => openBuySheet("below"));
     }
     if (el.dockBuyAbove) {
-      el.dockBuyAbove.addEventListener("click", () => openBuySheet("above"));
+      el.dockBuyAbove.addEventListener("click", () => buyNowFromDock("above"));
     }
     if (el.dockBuyBelow) {
-      el.dockBuyBelow.addEventListener("click", () => openBuySheet("below"));
+      el.dockBuyBelow.addEventListener("click", () => buyNowFromDock("below"));
     }
     if (el.dockBuyBest) {
       el.dockBuyBest.addEventListener("click", () => demoBuyBest());
@@ -12326,21 +12389,17 @@
       btn.addEventListener("click", () => {
         const amt = Number(btn.dataset.amt);
         if (!Number.isFinite(amt)) return;
-        const now = Date.now();
-        const isDouble =
-          lastChipTapAmt === amt && now - lastChipTapAt <= CHIP_DOUBLE_MS;
-        lastChipTapAmt = amt;
-        lastChipTapAt = now;
+        const fire = lastChipTapAmt === amt;
         setBuyAmountUi(amt, true);
         if (el.buyAmount) el.buyAmount.value = String(buySheetAmount);
-        document.querySelectorAll(".buy-chip").forEach((other) => {
-          other.classList.toggle("is-armed", other === btn && !isDouble);
-        });
         refreshBuySheetPreview();
-        if (isDouble) {
+        if (fire) {
           clearChipArm();
           confirmBuyFromSheet();
+          return;
         }
+        lastChipTapAmt = amt;
+        armBuyChip(btn);
       });
     });
     if (el.buyTap) {

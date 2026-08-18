@@ -2399,11 +2399,18 @@ body.is-live-kalshi .mark {
 }
 
 .buy-chip.is-armed {
-  box-shadow: 0 0 0 2px rgba(26, 201, 107, 0.7);
+  box-shadow: 0 0 0 2px rgba(26, 201, 107, 0.85);
+  background: #1ac96b;
+  border-color: #1ac96b;
+  color: #04140c;
+  letter-spacing: 0.06em;
 }
 
 .buy-sheet.is-below .buy-chip.is-armed {
-  box-shadow: 0 0 0 2px rgba(212, 84, 84, 0.7);
+  box-shadow: 0 0 0 2px rgba(212, 84, 84, 0.85);
+  background: #d45454;
+  border-color: #d45454;
+  color: #1a0808;
 }
 
 .buy-slide {

@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.84";
+  const APP_VERSION = "10.85";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -681,6 +681,7 @@
   let buySheetSide = null; // above | below
   let buySheetAmount = 1;
   let lastChipTapAmt = null;
+  let stakeBubbleTimer = null;
   let buySuggestStake = null;
   let buySlideDragging = false;
   let buySlideStartX = 0;
@@ -10857,6 +10858,33 @@
     return true;
   }
 
+  function positionStakeBubble() {
+    if (!el.stakeStrip || !el.stakeSlider) return;
+    const min = Number(el.stakeSlider.min) || BUY_AMOUNT_MIN;
+    const max = Number(el.stakeSlider.max) || BUY_AMOUNT_MAX;
+    const pct = max > min ? ((tradeStake - min) / (max - min)) * 100 : 0;
+    el.stakeStrip.style.setProperty(
+      "--stake-left",
+      `${Math.max(0, Math.min(100, pct))}%`
+    );
+  }
+
+  function showStakeBubble(hideAfterMs = null) {
+    if (!el.stakeStrip) return;
+    if (stakeBubbleTimer) {
+      clearTimeout(stakeBubbleTimer);
+      stakeBubbleTimer = null;
+    }
+    el.stakeStrip.classList.add("is-adjusting");
+    positionStakeBubble();
+    if (hideAfterMs != null) {
+      stakeBubbleTimer = setTimeout(() => {
+        stakeBubbleTimer = null;
+        if (el.stakeStrip) el.stakeStrip.classList.remove("is-adjusting");
+      }, Math.max(0, Number(hideAfterMs) || 0));
+    }
+  }
+
   function syncStakeUi() {
     if (el.stakeSlider) {
       el.stakeSlider.max = String(BUY_AMOUNT_MAX);
@@ -10865,6 +10893,7 @@
       el.stakeSlider.setAttribute("aria-valuenow", String(tradeStake));
     }
     if (el.stakeValue) el.stakeValue.textContent = `$${tradeStake}`;
+    positionStakeBubble();
   }
 
   function renderRoi() {
@@ -12071,9 +12100,20 @@
     }
     if (el.stakeSlider) {
       syncStakeUi();
-      const onStake = () => setTradeStake(el.stakeSlider.value);
+      const onStake = () => {
+        setTradeStake(el.stakeSlider.value);
+        showStakeBubble();
+      };
+      const settleStake = () => showStakeBubble(900);
+      el.stakeSlider.addEventListener("pointerdown", () => showStakeBubble());
       el.stakeSlider.addEventListener("input", onStake);
-      el.stakeSlider.addEventListener("change", onStake);
+      el.stakeSlider.addEventListener("change", () => {
+        onStake();
+        settleStake();
+      });
+      el.stakeSlider.addEventListener("pointerup", settleStake);
+      el.stakeSlider.addEventListener("pointercancel", settleStake);
+      el.stakeSlider.addEventListener("blur", settleStake);
     }
     if (el.menuBtn) {
       el.menuBtn.addEventListener("click", () => {

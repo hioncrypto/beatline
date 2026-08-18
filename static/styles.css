@@ -2223,7 +2223,7 @@ body.is-live-kalshi .mark {
 
 .buy-quick {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
   margin-top: 10px;
 }
@@ -3686,16 +3686,16 @@ body.portrait-app {
   max-height: 100dvh;
   overflow: hidden;
   min-height: 0;
-  /* Match fixed buy-dock height so ROI cost lines aren't covered. */
-  padding-bottom: calc(78px + var(--safe-bottom));
+  /* Match fixed amount slider + buy-dock so content isn't covered. */
+  padding-bottom: calc(120px + var(--safe-bottom));
 }
 
 body.has-open-pl .app-shell {
-  padding-bottom: calc(168px + var(--safe-bottom));
+  padding-bottom: calc(210px + var(--safe-bottom));
 }
 
 body.has-open-pl.open-pl-collapsed .app-shell {
-  padding-bottom: calc(118px + var(--safe-bottom));
+  padding-bottom: calc(160px + var(--safe-bottom));
 }
 
 body.has-open-pl .summary-panel:not(.is-collapsed) {
@@ -4267,8 +4267,8 @@ body.portrait-app #chart {
   position: fixed;
   left: 0;
   right: 0;
-  /* Sit fully above the buy dock (dock ~64px + safe area). */
-  bottom: calc(72px + var(--safe-bottom));
+  /* Sit fully above the amount slider + buy dock. */
+  bottom: calc(114px + var(--safe-bottom));
   z-index: 31;
   margin: 0;
   padding: 0 0 8px;
@@ -4490,6 +4490,70 @@ body.portrait-app #chart {
   border-top: 1px solid var(--border);
   background: rgba(8, 14, 11, 0.97);
   backdrop-filter: blur(8px);
+}
+
+.dock-stake {
+  --stake-left: 0%;
+  position: relative;
+  grid-column: 1 / -1;
+  min-height: 36px;
+  margin: 0;
+  padding: 2px 4px 0;
+  border: 0;
+  background: transparent;
+}
+
+.dock-stake-label {
+  position: absolute;
+  left: 4px;
+  top: -1px;
+  z-index: 2;
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.dock-stake .stake-slider-wrap {
+  display: block;
+  margin: 7px 0 0;
+}
+
+.dock-stake .stake-slider {
+  display: block;
+  height: 28px;
+  margin: 0;
+  touch-action: none;
+}
+
+.dock-stake-bubble {
+  position: absolute;
+  z-index: 4;
+  left: clamp(24px, var(--stake-left), calc(100% - 24px));
+  top: -24px;
+  min-width: 46px;
+  padding: 5px 8px;
+  border: 1px solid rgba(26, 201, 107, 0.78);
+  border-radius: 999px;
+  background: #10251a;
+  color: #d7ffe8;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.45);
+  font-size: 0.92rem;
+  font-weight: 850;
+  line-height: 1;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 6px) scale(0.92);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.dock-stake.is-adjusting .dock-stake-bubble {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
 }
 
 .dock-btn {

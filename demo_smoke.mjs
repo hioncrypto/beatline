@@ -179,6 +179,10 @@ async function main() {
       "Slide remains optional",
       await page.$eval("#buy-slide", (el) => !!el && !el.hidden)
     );
+    ok(
+      "$2 quick chip present",
+      !!(await page.$('.buy-chip[data-amt="2"]'))
+    );
 
     await slideBuy(page, 0.35);
     await wait(350);
@@ -339,6 +343,15 @@ async function main() {
       (el) => el.textContent.trim()
     );
     ok("Direct dock shows dollar size", /^\$10\s*@/.test(dockText), dockText);
+    ok(
+      "Dock slider shows amount bubble while changing",
+      await page.$eval("#stake-strip", (el) => el.classList.contains("is-adjusting"))
+    );
+    await wait(1000);
+    ok(
+      "Dock slider amount bubble fades",
+      await page.$eval("#stake-strip", (el) => !el.classList.contains("is-adjusting"))
+    );
     await page.evaluate(() => document.getElementById("dock-buy-above").click());
     await wait(1800);
     const dockPos = await page.evaluate(

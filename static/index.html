@@ -22,9 +22,9 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2.6" />
     <link rel="icon" href="/icons/icon-192.png?v=2.6" sizes="192x192" type="image/png" />
     <title>BeatLine</title>
-    <link rel="stylesheet" href="/styles.css?v=10.84" />
+    <link rel="stylesheet" href="/styles.css?v=10.85" />
     <script src="/vendor/lightweight-charts.js?v=4.2.1" defer></script>
-    <script src="/app.js?v=10.84" defer></script>
+    <script src="/app.js?v=10.85" defer></script>
   </head>
   <body class="portrait-app">
     <div id="rotate-gate" class="rotate-gate" hidden>
@@ -259,32 +259,6 @@
       <div id="best-side-meta" class="best-side-meta">—</div>
     </div>
 
-    <div id="stake-strip" class="stake-strip" hidden>
-      <div class="roi-heading">
-        <span>Trade size</span>
-        <span id="stake-value" class="stake-value">$50</span>
-      </div>
-      <label class="stake-slider-wrap" for="stake-slider">
-        <input
-          id="stake-slider"
-          class="stake-slider"
-          type="range"
-          min="1"
-          max="250"
-          step="1"
-          value="1"
-          aria-valuemin="1"
-          aria-valuemax="250"
-          aria-valuenow="1"
-          aria-label="Trade size in dollars"
-        />
-        <div class="stake-ends">
-          <span>$1</span>
-          <span>$250</span>
-        </div>
-      </label>
-    </div>
-
     <section class="trade-panel">
       <div class="odds-block">
         <div class="odds-heading">
@@ -364,6 +338,25 @@
     </div>
 
     <section class="buy-dock" aria-label="Buy">
+      <div id="stake-strip" class="stake-strip dock-stake" hidden>
+        <span class="dock-stake-label">Buy size</span>
+        <output id="stake-value" class="stake-value dock-stake-bubble" for="stake-slider">$1</output>
+        <label class="stake-slider-wrap" for="stake-slider">
+          <input
+            id="stake-slider"
+            class="stake-slider"
+            type="range"
+            min="1"
+            max="250"
+            step="1"
+            value="1"
+            aria-valuemin="1"
+            aria-valuemax="250"
+            aria-valuenow="1"
+            aria-label="Immediate buy size in dollars"
+          />
+        </label>
+      </div>
       <button type="button" id="dock-buy-above" class="dock-btn above">
         <span class="dock-label">Buy Above</span>
         <span id="dock-above-pct" class="dock-pct">—</span>
@@ -893,6 +886,7 @@
         <button type="button" id="buy-suggest-use" class="buy-suggest-use">Use</button>
       </div>
       <div class="buy-quick" aria-label="Quick amounts">
+        <button type="button" class="buy-chip" data-amt="2">$2</button>
         <button type="button" class="buy-chip" data-amt="5">$5</button>
         <button type="button" class="buy-chip" data-amt="10">$10</button>
         <button type="button" class="buy-chip" data-amt="25">$25</button>

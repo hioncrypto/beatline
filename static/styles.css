@@ -2336,6 +2336,76 @@ body.is-live-kalshi .mark {
   font-variant-numeric: tabular-nums;
 }
 
+.buy-actions {
+  flex: 0 0 auto;
+  margin-top: 6px;
+}
+
+.buy-tap {
+  width: 100%;
+  min-height: 68px;
+  border: none;
+  border-radius: 16px;
+  background: #1ac96b;
+  color: #04140c;
+  font: inherit;
+  font-size: 1.45rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 8px 24px rgba(26, 201, 107, 0.28);
+}
+
+.buy-sheet.is-below .buy-tap {
+  background: #d45454;
+  color: #1a0808;
+  box-shadow: 0 8px 24px rgba(212, 84, 84, 0.28);
+}
+
+.buy-tap:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.buy-tap:disabled {
+  cursor: default;
+}
+
+.buy-tap.is-sending {
+  opacity: 0.85;
+}
+
+.buy-tap.is-filled {
+  background: #1ac96b !important;
+  color: #04140c !important;
+  box-shadow: none;
+  animation: buy-slide-filled-flash 0.55s ease-out 2;
+}
+
+.buy-tap.is-failed {
+  background: #2a1212 !important;
+  color: #ffe4e4 !important;
+  box-shadow: none;
+  border: 1px solid rgba(212, 84, 84, 0.9);
+}
+
+.buy-tap-hint {
+  margin: 6px 0 0;
+  text-align: center;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.buy-chip.is-armed {
+  box-shadow: 0 0 0 2px rgba(26, 201, 107, 0.7);
+}
+
+.buy-sheet.is-below .buy-chip.is-armed {
+  box-shadow: 0 0 0 2px rgba(212, 84, 84, 0.7);
+}
+
 .buy-slide {
   position: relative;
   flex: 0 0 auto;
@@ -2729,10 +2799,15 @@ body.is-live-kalshi .mark {
   font-size: 1.65rem;
 }
 
+.buy-tap {
+  min-height: 60px;
+  font-size: 1.28rem;
+}
+
 .buy-slide {
-  height: 56px;
+  height: 52px;
   flex: 0 0 auto;
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .target-panel {

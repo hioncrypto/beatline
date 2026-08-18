@@ -13,7 +13,7 @@
   const TRADE_HISTORY_KEY = "beatlineTradeHistory";
   const HISTORY_LIMIT = 50000;
   const DEMO_DEFAULT_START = 1000;
-  const APP_VERSION = "10.82";
+  const APP_VERSION = "10.83";
   /**
    * Best Side profile — catchy name for the August 5 winning setup.
    *
@@ -470,6 +470,8 @@
     buySuggestUse: document.getElementById("buy-suggest-use"),
     buyBalanceHint: document.getElementById("buy-balance-hint"),
     buyPreview: document.getElementById("buy-preview"),
+    buyTap: document.getElementById("buy-tap"),
+    buyTapHint: document.getElementById("buy-tap-hint"),
     buySlide: document.getElementById("buy-slide"),
     buySlideFill: document.getElementById("buy-slide-fill"),
     buySlideLabel: document.getElementById("buy-slide-label"),
@@ -678,6 +680,9 @@
   let buySheetOpen = false;
   let buySheetSide = null; // above | below
   let buySheetAmount = 1;
+  let lastChipTapAmt = null;
+  let lastChipTapAt = 0;
+  const CHIP_DOUBLE_MS = 500;
   let buySuggestStake = null;
   let buySlideDragging = false;
   let buySlideStartX = 0;
@@ -6106,6 +6111,12 @@
         : sized;
     const contracts =
       priced && priced.contracts > 0 ? priced.contracts : sized.contracts;
+    // Manual live buys chase a jumping ask (+3 / +8 / +18). Auto fallback
+    // already sends slipCents, so leave chase off unless the caller asks.
+    const chaseAsk =
+      opts && opts.chaseAsk != null
+        ? !!opts.chaseAsk
+        : !(opts && Number.isFinite(Number(opts.slipCents)));
     try {
       const res = await fetchWithTimeout(
         "/api/kalshi/order",
@@ -6117,6 +6128,8 @@
             side,
             contracts,
             ask_cents: askCents,
+            stake_usd: stakeUsd,
+            chase_ask: chaseAsk,
           }),
         },
         20_000
@@ -6757,14 +6770,47 @@
       const adding = !!(demo.position && demo.position.side === side);
       const label = adding
         ? side === "above"
-          ? "Slide to add Above"
-          : "Slide to add Below"
+          ? "or slide to add Above"
+          : "or slide to add Below"
         : side === "above"
-          ? "Slide to buy Above"
-          : "Slide to buy Below";
+          ? "or slide to buy Above"
+          : "or slide to buy Below";
       el.buySlideLabel.textContent = label;
     }
+    if (el.buyTap && !buyConfirming) {
+      setBuyTapUi({
+        text: buyTapDefaultLabel(side),
+        sending: false,
+        filled: false,
+        failed: false,
+      });
+    }
     renderBuySuggest(side, amount);
+  }
+
+  function buyTapDefaultLabel(side) {
+    const adding = !!(demo.position && demo.position.side === side);
+    if (adding) {
+      return side === "below" ? "TAP TO ADD BELOW" : "TAP TO ADD ABOVE";
+    }
+    return side === "below" ? "TAP TO BUY BELOW" : "TAP TO BUY ABOVE";
+  }
+
+  function setBuyTapUi({ text, sending, filled, failed } = {}) {
+    if (!el.buyTap) return;
+    el.buyTap.classList.toggle("is-sending", !!sending);
+    el.buyTap.classList.toggle("is-filled", !!filled);
+    el.buyTap.classList.toggle("is-failed", !!failed);
+    el.buyTap.disabled = !!(sending || filled);
+    if (text) el.buyTap.textContent = text;
+  }
+
+  function clearChipArm() {
+    lastChipTapAmt = null;
+    lastChipTapAt = 0;
+    document.querySelectorAll(".buy-chip.is-armed").forEach((btn) => {
+      btn.classList.remove("is-armed");
+    });
   }
 
   function renderBuySuggest(side, currentAmount) {
@@ -6852,6 +6898,12 @@
       el.buySlide.classList.remove("is-complete", "is-filled", "is-failed");
     }
     if (el.buySlideThumb) el.buySlideThumb.textContent = "››";
+    setBuyTapUi({
+      text: buyTapDefaultLabel(buySheetSide),
+      sending: false,
+      filled: false,
+      failed: false,
+    });
     setBuySlideProgress(0);
     refreshBuySheetPreview();
   }
@@ -6884,6 +6936,12 @@
     }
     if (el.buySlideLabel) el.buySlideLabel.textContent = bits.join(" · ");
     if (el.buySlideThumb) el.buySlideThumb.textContent = "✓";
+    setBuyTapUi({
+      text: bits.join(" · "),
+      sending: false,
+      filled: true,
+      failed: false,
+    });
     setBuySlideProgress(1);
     // Also flash the open-P/L peek so confirmation survives the sheet closing.
     if (el.openPlPeek) {
@@ -6913,6 +6971,12 @@
         : "FAILED · not filled";
     }
     if (el.buySlideThumb) el.buySlideThumb.textContent = "!";
+    setBuyTapUi({
+      text: msg ? `FAILED · ${String(msg).slice(0, 42)}` : "FAILED · not filled",
+      sending: false,
+      filled: false,
+      failed: true,
+    });
     setBuySlideProgress(1);
   }
 
@@ -7045,6 +7109,7 @@
                 : "Paper order · rolling P/L";
       }
     }
+    clearChipArm();
     resetBuySlide();
     requestAnimationFrame(() => {
       measureBuySlide();
@@ -7078,6 +7143,7 @@
         el.buyBackdrop.hidden = true;
         el.buyBackdrop.setAttribute("aria-hidden", "true");
       }
+      clearChipArm();
       resetBuySlide();
     };
     if (buySheetDismissTimer) {
@@ -7101,6 +7167,7 @@
     }
     if (el.buySlideLabel) el.buySlideLabel.textContent = "Sending…";
     if (el.buySlideThumb) el.buySlideThumb.textContent = "…";
+    setBuyTapUi({ text: "SENDING…", sending: true, filled: false, failed: false });
     setBuySlideProgress(1);
     const amount = readBuyAmount();
     const side = buySheetSide;
@@ -7137,10 +7204,13 @@
         return;
       }
       // Track locally for open P/L UI without debiting demo bankroll.
+      const fillAsk = Math.round(
+        live.ask_cents || live.limit_ask_cents || pricedAsk
+      );
       const ok = demoBuy(side, amount, {
         liveKalshi: true,
         order: live,
-        askCents: pricedAsk,
+        askCents: fillAsk,
       });
       if (!ok) {
         paintBuySlideFailed("Filled · local track failed");
@@ -7158,9 +7228,6 @@
       const fillCts = Math.round(
         live.fill_count || live.fills_count || sized.contracts
       );
-      const fillAsk = Math.round(
-        live.ask_cents || live.limit_ask_cents || pricedAsk
-      );
       paintBuySlideConfirmed({
         side,
         contracts: fillCts,
@@ -7168,11 +7235,15 @@
         added: adding,
         live: true,
       });
+      const chased =
+        Number(live.chase_slip_cents) > 0
+          ? ` · chased +${Math.round(Number(live.chase_slip_cents))}¢`
+          : "";
       setStatus(
         "ok",
         `Kalshi filled ${fillCts} cts · ${
           side === "above" ? "Above" : "Below"
-        } @${fillAsk}¢`
+        } @${fillAsk}¢${chased}`
       );
       dismissBuySheet(1600);
       return;
@@ -12255,11 +12326,30 @@
       btn.addEventListener("click", () => {
         const amt = Number(btn.dataset.amt);
         if (!Number.isFinite(amt)) return;
+        const now = Date.now();
+        const isDouble =
+          lastChipTapAmt === amt && now - lastChipTapAt <= CHIP_DOUBLE_MS;
+        lastChipTapAmt = amt;
+        lastChipTapAt = now;
         setBuyAmountUi(amt, true);
         if (el.buyAmount) el.buyAmount.value = String(buySheetAmount);
+        document.querySelectorAll(".buy-chip").forEach((other) => {
+          other.classList.toggle("is-armed", other === btn && !isDouble);
+        });
         refreshBuySheetPreview();
+        if (isDouble) {
+          clearChipArm();
+          confirmBuyFromSheet();
+        }
       });
     });
+    if (el.buyTap) {
+      el.buyTap.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        if (buyConfirming || !buySheetOpen) return;
+        confirmBuyFromSheet();
+      });
+    }
     if (el.buySlide) {
       el.buySlide.addEventListener("pointerdown", onBuySlidePointerDown);
       el.buySlide.addEventListener("pointermove", onBuySlidePointerMove);

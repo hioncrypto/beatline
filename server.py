@@ -154,6 +154,8 @@ _auto_trade_inflight = False
 _last_auto_position: dict | None = None
 AUTO_FILL_SLIP_CENTS = 8
 AUTO_FILL_RETRY_SLIP_CENTS = 18
+# Manual live buys: first IOC at the posted limit, then chase a jumping ask.
+LIVE_BUY_CHASE_SLIPS = (3, 8, 18)
 AUTO_TRADE_RETRY_SEC = 1.0
 AUTO_TRADE_LOG_LIMIT = 200
 # Disengage Auto-trade once ≤5 minutes remain — no new buys or auto-flip entries.
@@ -4326,6 +4328,105 @@ def _try_server_auto_close_body(
     )
 
 
+def live_buy_chase_limit(base_ask, live_ask, slip) -> int:
+    """Limit ¢ for a chase retry: max(posted ask, live book) + slip, clamped 1–99."""
+    try:
+        ask = int(base_ask)
+    except (TypeError, ValueError):
+        ask = 1
+    if live_ask is not None:
+        try:
+            ask = max(ask, int(live_ask))
+        except (TypeError, ValueError):
+            pass
+    try:
+        slip_n = int(slip)
+    except (TypeError, ValueError):
+        slip_n = 0
+    return min(99, max(1, ask + slip_n))
+
+
+def is_ask_jump_miss(result) -> bool:
+    """True when an IOC missed because the book moved (safe to chase)."""
+    if not isinstance(result, dict):
+        return False
+    try:
+        filled = float(result.get("fill_count") or 0)
+    except (TypeError, ValueError):
+        filled = 0.0
+    if result.get("ok") and filled > 0:
+        return False
+    err = str(result.get("error") or "").lower()
+    return "did not fill" in err or "ask may have moved" in err
+
+
+def place_kalshi_buy_chasing(
+    *,
+    ticker: str,
+    side: str,
+    contracts: int,
+    ask_cents: int,
+    stake_usd=None,
+    client_order_id: str | None = None,
+    chase_slips=None,
+) -> dict:
+    """
+    Place a manual live buy, then retry 3 times at +3¢ / +8¢ / +18¢
+    if the IOC misses because the ask jumped.
+    """
+    slips = tuple(chase_slips) if chase_slips else LIVE_BUY_CHASE_SLIPS
+    try:
+        used_limit = int(ask_cents)
+    except (TypeError, ValueError):
+        used_limit = 1
+    try:
+        used_contracts = int(contracts)
+    except (TypeError, ValueError):
+        used_contracts = 0
+    result = place_kalshi_buy(
+        ticker=ticker,
+        side=side,
+        contracts=used_contracts,
+        ask_cents=used_limit,
+        client_order_id=client_order_id,
+    )
+    out = dict(result or {})
+    out.setdefault("limit_ask_cents", used_limit)
+    out["chase_slip_cents"] = 0
+    out["chase_attempts"] = 1
+    if out.get("ok") and float(out.get("fill_count") or 0) > 0:
+        return out
+    if not is_ask_jump_miss(out):
+        return out
+
+    base_ask = used_limit
+    last = out
+    for i, slip in enumerate(slips, start=2):
+        live_ask = _fresh_side_ask_cents(ticker, side)
+        used_limit = live_buy_chase_limit(base_ask, live_ask, slip)
+        if stake_usd is not None:
+            resized = _auto_contracts_for_stake(used_limit, stake_usd)
+            if resized >= 1:
+                used_contracts = resized
+        last = place_kalshi_buy(
+            ticker=ticker,
+            side=side,
+            contracts=used_contracts,
+            ask_cents=used_limit,
+            client_order_id=str(uuid.uuid4()),
+        )
+        last = dict(last or {})
+        last["limit_ask_cents"] = used_limit
+        last["chase_slip_cents"] = int(slip)
+        last["chase_attempts"] = i
+        last["ask_cents"] = used_limit
+        if last.get("ok") and float(last.get("fill_count") or 0) > 0:
+            return last
+        if not is_ask_jump_miss(last):
+            return last
+    return last
+
+
 def place_kalshi_buy(
     *,
     ticker: str,
@@ -4798,16 +4899,44 @@ class Handler(BaseHTTPRequestHandler):
                         or body.get("clientOrderId"),
                     )
             else:
-                result = place_kalshi_buy(
-                    ticker=str(body.get("ticker") or "").strip(),
-                    side=side,
-                    contracts=body.get("contracts") or body.get("count"),
-                    ask_cents=body.get("ask_cents")
+                chase_raw = body.get("chase_ask")
+                if chase_raw is None:
+                    chase_raw = body.get("chaseAsk")
+                chase_on = bool(chase_raw)
+                slips_raw = body.get("chase_slips")
+                if slips_raw is None:
+                    slips_raw = body.get("chaseSlips")
+                chase_slips = None
+                if isinstance(slips_raw, (list, tuple)):
+                    parsed = []
+                    for n in slips_raw:
+                        try:
+                            parsed.append(int(n))
+                        except (TypeError, ValueError):
+                            continue
+                    if parsed:
+                        chase_slips = tuple(parsed)
+                stake_raw = body.get("stake_usd")
+                if stake_raw is None:
+                    stake_raw = body.get("stakeUsd")
+                buy_kwargs = {
+                    "ticker": str(body.get("ticker") or "").strip(),
+                    "side": side,
+                    "contracts": body.get("contracts") or body.get("count"),
+                    "ask_cents": body.get("ask_cents")
                     if body.get("ask_cents") is not None
                     else body.get("askCents") or body.get("price_cents") or body.get("price"),
-                    client_order_id=body.get("client_order_id")
+                    "client_order_id": body.get("client_order_id")
                     or body.get("clientOrderId"),
-                )
+                }
+                if chase_on:
+                    result = place_kalshi_buy_chasing(
+                        **buy_kwargs,
+                        stake_usd=stake_raw,
+                        chase_slips=chase_slips,
+                    )
+                else:
+                    result = place_kalshi_buy(**buy_kwargs)
             self._send_json(200 if result.get("ok") else 400, result)
             return
 
@@ -4929,7 +5058,7 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "kalshi-btc-target",
-                    "version": "2.4.23",
+                    "version": "2.4.24",
                     "best_side_profile": "green-spike",
                     "push": bool(_vapid_app_server_key or VAPID_PUBLIC_RAW.is_file()),
                     "subscribers": len(_push_subs),

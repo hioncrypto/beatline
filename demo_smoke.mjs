@@ -164,6 +164,17 @@ async function main() {
     const preview = await page.$eval("#buy-preview", (el) => el.textContent.trim());
     ok("Preview shows contracts + fees", /contract/i.test(preview) && /fee/i.test(preview), preview);
 
+    const tapLabel = await page.$eval("#buy-tap", (el) => (el.textContent || "").trim());
+    ok(
+      "TAP TO BUY button present",
+      /TAP TO BUY/i.test(tapLabel),
+      tapLabel
+    );
+    ok(
+      "Slide remains optional",
+      await page.$eval("#buy-slide", (el) => !!el && !el.hidden)
+    );
+
     await slideBuy(page, 0.35);
     await wait(350);
     ok(
@@ -243,6 +254,56 @@ async function main() {
     await page.click("#buy-sheet-x");
     await wait(300);
     ok("X cancels sheet", await page.$eval("#buy-sheet", (el) => el.hidden));
+
+    // TAP TO BUY + double-tap $ chip
+    await page.click("#menu-btn");
+    await wait(250);
+    await page.click("#demo-reset");
+    await wait(200);
+    await page.evaluate(() => document.getElementById("demo-buy-above").click());
+    await wait(450);
+    ok(
+      "Reopen Above for TAP TO BUY",
+      (await page.$eval("#buy-sheet-title", (el) => el.textContent.trim())) ===
+        "Buy Above" && (await page.$eval("#buy-sheet", (el) => !el.hidden))
+    );
+    await page.click("#buy-tap");
+    await wait(1000);
+    const tapPos = await page.evaluate(
+      () => JSON.parse(localStorage.getItem("kalshiDemoState") || "{}").position
+    );
+    ok(
+      "TAP TO BUY opens a position",
+      !!(tapPos && tapPos.side === "above" && tapPos.contracts > 0),
+      JSON.stringify(tapPos)
+    );
+    ok(
+      "Sheet dismisses after TAP TO BUY",
+      await page.$eval("#buy-sheet", (el) => el.hidden)
+    );
+
+    await page.click("#menu-btn");
+    await wait(250);
+    await page.click("#demo-reset");
+    await wait(200);
+    await page.evaluate(() => document.getElementById("demo-buy-below").click());
+    await wait(450);
+    await page.evaluate(() => {
+      const chip = document.querySelector('.buy-chip[data-amt="25"]');
+      if (chip) {
+        chip.click();
+        chip.click();
+      }
+    });
+    await wait(1000);
+    const chipPos = await page.evaluate(
+      () => JSON.parse(localStorage.getItem("kalshiDemoState") || "{}").position
+    );
+    ok(
+      "Double-tap $25 chip fires a buy",
+      !!(chipPos && chipPos.side === "below" && chipPos.contracts > 0),
+      JSON.stringify(chipPos)
+    );
 
     // Buy Best via sticky dock
     await page.evaluate(() => document.getElementById("dock-buy-best").click());

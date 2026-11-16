@@ -206,6 +206,7 @@ th.check, td.check { width: 36px; }
 tr:hover td { background: #f7f1e8; }
 tr.is-selected td { background: #f3e6dc; }
 tr.is-done td { color: var(--muted); }
+tr.is-quiet .who { font-weight: 650; }
 tr.is-overdue .due-cell, .overdue { color: var(--bad); font-weight: 700; }
 .empty { padding: 28px 12px; color: var(--muted); text-align: left; }
 
@@ -232,7 +233,8 @@ button.linkish:hover { text-decoration: underline; }
   font-weight: 650;
 }
 .pill-customer, .pill-won { background: var(--good-bg); color: var(--good); }
-.pill-churned, .pill-lost { background: var(--bad-bg); color: var(--bad); }
+.pill-churned, .pill-lost, .pill-quiet { background: var(--bad-bg); color: var(--bad); }
+.who .pill { margin-left: 6px; }
 .pill-qualified, .pill-proposal, .pill-negotiation, .pill-new { background: #e7eee9; color: var(--pine); }
 .tag {
   display: inline-flex;
@@ -271,6 +273,7 @@ button.linkish:hover { text-decoration: underline; }
 .deal-card { margin-bottom: 8px; padding: 10px; border: 1px solid var(--line); background: var(--paper); cursor: grab; }
 .deal-card strong, .deal-card span { display: block; }
 .deal-card .money { margin-top: 6px; font-variant-numeric: tabular-nums; font-weight: 700; }
+.deal-card .reason { color: var(--bad); font-size: 12px; font-weight: 650; }
 .deal-card .meta, .meta { color: var(--muted); font-size: 12px; }
 
 .scrim { position: fixed; inset: 0; z-index: 20; border: 0; background: rgba(28, 25, 21, 0.32); }
@@ -300,6 +303,14 @@ label.checkline { flex-direction: row; align-items: center; color: var(--ink); f
 .note { padding: 8px 0; border-top: 1px solid var(--line); }
 .note p { margin: 0; white-space: pre-wrap; }
 .form-error { margin: 0 0 8px; color: var(--bad); font-size: 13px; }
+.quiet-note { margin: 12px 0 0; color: var(--bad); font-size: 14px; }
+.lines { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.line { display: grid; grid-template-columns: minmax(0, 1.4fr) 72px 96px 34px; gap: 6px; align-items: center; }
+.line input { width: 100%; }
+.line button { height: 34px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+.history { margin: 0; padding: 0; list-style: none; }
+.history li { padding: 8px 0; border-top: 1px solid var(--line); }
+.history p { margin: 0; }
 .modal {
   position: fixed;
   top: 50%;
@@ -349,6 +360,7 @@ const TAGS = ["Priority", "Champion", "Renewal", "Partner", "Newsletter"];
 const SIZES = ["1–10", "11–50", "51–200", "201–1,000"];
 const INDUSTRIES = ["Manufacturing", "Architecture", "Food", "Logistics", "Publishing", "Healthcare", "Retail", "Legal", "Software", "Transportation"];
 const TASK_TYPES = ["Call", "Email", "Meeting", "Task"];
+const LOST_REASONS = ["Price", "Timing", "Competitor", "No budget", "No decision", "Other"];
 const DEAL_STAGES = [
   { id: "new", label: "New", probability: 10 },
   { id: "qualified", label: "Qualified", probability: 25 },
@@ -360,7 +372,7 @@ const DEAL_STAGES = [
 const DEFAULT_COLUMNS = {
   people: ["name", "title", "company", "email", "owner", "stage", "source", "tags", "last"],
   companies: ["name", "domain", "industry", "size", "city", "owner", "people", "pipeline"],
-  deals: ["name", "company", "amount", "stage", "probability", "close", "owner"],
+  deals: ["name", "company", "amount", "stage", "lostReason", "probability", "close", "owner"],
   tasks: ["due", "type", "subject", "related", "owner", "status"],
 };
 const BUILTINS = {
@@ -369,6 +381,7 @@ const BUILTINS = {
     { id: "mine", name: "My book", filters: { owner: "__me__" } },
     { id: "customers", name: "Customers", filters: { stage: "Customer" } },
     { id: "leads", name: "Open leads", filters: { stage: "Lead" } },
+    { id: "quiet", name: "Do not contact", filters: { reach: "yes" } },
   ],
   companies: [
     { id: "all", name: "All companies" },
@@ -472,6 +485,54 @@ function companyName(id) {
 function personName(id) {
   return state.people.find((person) => person.id === id)?.name || "";
 }
+function dealPeople(deal) {
+  const ids = [];
+  if (deal?.contactId) ids.push(deal.contactId);
+  (deal?.contactIds || []).forEach((id) => { if (id && !ids.includes(id)) ids.push(id); });
+  return ids;
+}
+function lineTotal(deal) {
+  return (deal?.lines || []).reduce((total, line) => total + (Number(line.qty) || 0) * (Number(line.price) || 0), 0);
+}
+function syncDealMoney(deal) {
+  if ((deal?.lines || []).length) deal.amount = lineTotal(deal);
+}
+function setPrimaryContact(deal, id) {
+  const others = dealPeople(deal).filter((item) => item !== id);
+  deal.contactId = id;
+  deal.contactIds = id ? [id, ...others] : others;
+}
+function rememberStage(record, from, to) {
+  if (String(from ?? "") === String(to ?? "")) return;
+  record.stageHistory = Array.isArray(record.stageHistory) ? record.stageHistory : [];
+  record.stageHistory.unshift({ at: new Date().toISOString(), from: from || "", to: to || "", by: state.currentUser });
+}
+function normalizePerson(person) {
+  person.doNotContact = !!person.doNotContact;
+  person.tags = Array.isArray(person.tags) ? person.tags : [];
+  person.notes = Array.isArray(person.notes) ? person.notes : [];
+  person.stageHistory = Array.isArray(person.stageHistory) ? person.stageHistory : [];
+  return person;
+}
+function normalizeDeal(deal) {
+  deal.tags = Array.isArray(deal.tags) ? deal.tags : [];
+  deal.notes = Array.isArray(deal.notes) ? deal.notes : [];
+  deal.lines = Array.isArray(deal.lines) ? deal.lines.filter((line) => line && line.id).map((line) => ({
+    id: String(line.id),
+    name: String(line.name || ""),
+    qty: Math.max(0, Number(line.qty) || 0),
+    price: Math.max(0, Number(line.price) || 0),
+  })) : [];
+  deal.lostReason = LOST_REASONS.includes(deal.lostReason) ? deal.lostReason : "";
+  deal.stageHistory = Array.isArray(deal.stageHistory) ? deal.stageHistory : [];
+  const ids = [];
+  if (deal.contactId) ids.push(deal.contactId);
+  (Array.isArray(deal.contactIds) ? deal.contactIds : []).forEach((id) => { if (id && !ids.includes(id)) ids.push(id); });
+  deal.contactIds = ids;
+  deal.contactId = ids[0] || "";
+  syncDealMoney(deal);
+  return deal;
+}
 function recordTitle(type, id) {
   const record = getRecord(type, id);
   return record?.name || record?.subject || "";
@@ -503,7 +564,7 @@ function lastTouch(type, id) {
   return times.at(-1) || "";
 }
 function defaultFilters(object) {
-  if (object === "people") return { q: "", owner: "", stage: "", source: "", company: "", tag: "", viewId: "all" };
+  if (object === "people") return { q: "", owner: "", stage: "", source: "", company: "", tag: "", reach: "", viewId: "all" };
   if (object === "companies") return { q: "", owner: "", industry: "", tag: "", viewId: "all" };
   if (object === "deals") return { q: "", owner: "", stage: "", tag: "", status: "open", viewId: "open" };
   return { q: "", owner: "", type: "", status: "open", viewId: "open" };
@@ -578,7 +639,7 @@ function freshUi(saved) {
 
 const COLUMN_DEFS = {
   people: [
-    { key: "name", label: "Name", lock: true, text: (row) => row.name, render: (row) => `<span class="who"><span class="avatar">${esc(initials(row.name))}</span>${esc(row.name)}</span>` },
+    { key: "name", label: "Name", lock: true, text: (row) => row.name, render: (row) => `<span class="who"><span class="avatar">${esc(initials(row.name))}</span>${esc(row.name)}${row.doNotContact ? `<span class="pill pill-quiet">Do not contact</span>` : ""}</span>` },
     { key: "title", label: "Title", text: (row) => row.title, render: (row) => esc(row.title || "—") },
     { key: "company", label: "Company", text: (row) => companyName(row.companyId), render: (row) => row.companyId ? `<button type="button" class="linkish" data-action="open-record" data-type="company" data-id="${esc(row.companyId)}">${esc(companyName(row.companyId) || "Company")}</button>` : "—" },
     { key: "email", label: "Email", text: (row) => row.email, render: (row) => row.email ? `<a href="mailto:${esc(row.email)}">${esc(row.email)}</a>` : "—" },
@@ -602,9 +663,10 @@ const COLUMN_DEFS = {
   deals: [
     { key: "name", label: "Deal", lock: true, text: (row) => row.name, render: (row) => `<strong>${esc(row.name)}</strong>` },
     { key: "company", label: "Company", text: (row) => companyName(row.companyId), render: (row) => row.companyId ? `<button type="button" class="linkish" data-action="open-record" data-type="company" data-id="${esc(row.companyId)}">${esc(companyName(row.companyId) || "Company")}</button>` : "—" },
-    { key: "contact", label: "Contact", text: (row) => personName(row.contactId), render: (row) => row.contactId ? `<button type="button" class="linkish" data-action="open-record" data-type="person" data-id="${esc(row.contactId)}">${esc(personName(row.contactId) || "Person")}</button>` : "—" },
+    { key: "contact", label: "Contact", text: (row) => dealPeople(row).map(personName).filter(Boolean).join(", "), render: (row) => dealPeople(row).map((id) => personName(id) ? `<button type="button" class="linkish" data-action="open-record" data-type="person" data-id="${esc(id)}">${esc(personName(id))}</button>` : "").filter(Boolean).join(", ") || "—" },
     { key: "amount", label: "Amount", num: true, text: (row) => Number(row.amount) || 0, render: (row) => money(row.amount) },
     { key: "stage", label: "Stage", text: (row) => stageLabel(row.stage), render: (row) => pill(stageLabel(row.stage)) },
+    { key: "lostReason", label: "Lost reason", text: (row) => row.stage === "lost" ? (row.lostReason || "Needs a reason") : "", render: (row) => row.stage === "lost" ? esc(row.lostReason || "Needs a reason") : "—" },
     { key: "probability", label: "Probability", num: true, text: (row) => Number(row.probability) || 0, render: (row) => `${Number(row.probability) || 0}%` },
     { key: "close", label: "Close date", text: (row) => row.close || "", render: (row) => esc(fmtDate(row.close)) },
     { key: "owner", label: "Owner", text: (row) => row.owner, render: (row) => esc(row.owner || "—") },
@@ -650,6 +712,8 @@ function query(object) {
       (!filters.source || row.source === filters.source) &&
       (!filters.company || row.companyId === filters.company) &&
       (!filters.tag || (row.tags || []).includes(filters.tag)) &&
+      (filters.reach !== "yes" || row.doNotContact) &&
+      (filters.reach !== "no" || !row.doNotContact) &&
       matchesQuery(blob([row.name, row.title, row.email, row.phone, companyName(row.companyId), ...(row.tags || [])]), filters.q)
     ));
   } else if (object === "companies") {
@@ -667,7 +731,7 @@ function query(object) {
       if (filters.stage && row.stage !== filters.stage) return false;
       if (filters.owner && row.owner !== filters.owner) return false;
       if (filters.tag && !(row.tags || []).includes(filters.tag)) return false;
-      return matchesQuery(blob([row.name, companyName(row.companyId), personName(row.contactId), ...(row.tags || [])]), filters.q);
+      return matchesQuery(blob([row.name, companyName(row.companyId), ...dealPeople(row).map(personName), ...(row.lines || []).map((line) => line.name), row.lostReason, ...(row.tags || [])]), filters.q);
     });
   } else {
     rows = rows.filter((row) => {
@@ -699,7 +763,7 @@ function seed() {
     { id: "c10", name: "Sable Transit", domain: "sabletransit.example", industry: "Transportation", size: "201–1,000", city: "Minneapolis", owner: "Sam Okonkwo", tags: [], notes: [], createdAt: stamp(-18) },
   ];
   const people = [
-    { id: "p1", name: "Mira Ellison", title: "VP Operations", email: "mira@haldenmills.example", phone: "(503) 555-0148", companyId: "c1", owner: "Avery Chen", stage: "Customer", source: "Referral", tags: ["Champion"], notes: [note("np1", "Wants the spring price before she takes it to the mill.", "Avery Chen", -2)], createdAt: stamp(-75) },
+    { id: "p1", name: "Mira Ellison", title: "VP Operations", email: "mira@haldenmills.example", phone: "(503) 555-0148", companyId: "c1", owner: "Avery Chen", stage: "Customer", source: "Referral", tags: ["Champion"], doNotContact: false, stageHistory: [{ at: stamp(-40), from: "Qualified", to: "Customer", by: "Avery Chen" }, { at: stamp(-60), from: "Lead", to: "Qualified", by: "Avery Chen" }], notes: [note("np1", "Wants the spring price before she takes it to the mill.", "Avery Chen", -2)], createdAt: stamp(-75) },
     { id: "p2", name: "Chris Adeyemi", title: "Buyer", email: "chris@haldenmills.example", phone: "(503) 555-0172", companyId: "c1", owner: "Jordan Hale", stage: "Qualified", source: "Outbound", tags: [], notes: [], createdAt: stamp(-20) },
     { id: "p3", name: "Elena Voss", title: "Principal", email: "elena@northglass.example", phone: "(206) 555-0114", companyId: "c2", owner: "Jordan Hale", stage: "Qualified", source: "Inbound", tags: ["Priority"], notes: [], createdAt: stamp(-48) },
     { id: "p4", name: "Noah Park", title: "Project manager", email: "noah@northglass.example", phone: "(206) 555-0190", companyId: "c2", owner: "Jordan Hale", stage: "Lead", source: "Event", tags: [], notes: [], createdAt: stamp(-15) },
@@ -710,22 +774,22 @@ function seed() {
     { id: "p9", name: "Andre Wallace", title: "Office manager", email: "andre@copperline.example", phone: "(512) 555-0127", companyId: "c6", owner: "Avery Chen", stage: "Qualified", source: "Event", tags: [], notes: [], createdAt: stamp(-21) },
     { id: "p10", name: "Ruth Keller", title: "Founder", email: "ruth@veldt.example", phone: "(303) 555-0155", companyId: "c7", owner: "Sam Okonkwo", stage: "Qualified", source: "Referral", tags: ["Partner"], notes: [], createdAt: stamp(-19) },
     { id: "p11", name: "Marcus Bell", title: "Partner", email: "marcus@marlowe.example", phone: "(617) 555-0194", companyId: "c8", owner: "Jordan Hale", stage: "Customer", source: "Partner", tags: ["Champion"], notes: [note("np11", "Retainer is signed. Introduce Lila before the next matter.", "Jordan Hale", -6)], createdAt: stamp(-27) },
-    { id: "p12", name: "Imani Brooks", title: "CEO", email: "imani@kindlinglabs.example", phone: "(415) 555-0102", companyId: "c9", owner: "Avery Chen", stage: "Churned", source: "Outbound", tags: [], notes: [], createdAt: stamp(-22) },
+    { id: "p12", name: "Imani Brooks", title: "CEO", email: "imani@kindlinglabs.example", phone: "(415) 555-0102", companyId: "c9", owner: "Avery Chen", stage: "Churned", source: "Outbound", tags: [], doNotContact: true, stageHistory: [{ at: stamp(-4), from: "Customer", to: "Churned", by: "Avery Chen" }], notes: [note("np12", "Asked not to be called or emailed after the pilot ended.", "Avery Chen", -4)], createdAt: stamp(-22) },
     { id: "p13", name: "Wes Calder", title: "Fleet lead", email: "wes@sabletransit.example", phone: "(612) 555-0177", companyId: "c10", owner: "Sam Okonkwo", stage: "Lead", source: "Inbound", tags: [], notes: [], createdAt: stamp(-8) },
     { id: "p14", name: "Lila Nguyen", title: "Counsel", email: "lila@marlowe.example", phone: "(617) 555-0140", companyId: "c8", owner: "Jordan Hale", stage: "Customer", source: "Referral", tags: [], notes: [], createdAt: stamp(-7) },
     { id: "p15", name: "Omar Farouk", title: "Chef", email: "omar@brineco.example", phone: "(510) 555-0188", companyId: "c3", owner: "Avery Chen", stage: "Lead", source: "Event", tags: ["Newsletter"], notes: [], createdAt: stamp(-5) },
     { id: "p16", name: "Grace Kim", title: "Clinic lead", email: "grace@copperline.example", phone: "(512) 555-0119", companyId: "c6", owner: "Avery Chen", stage: "Customer", source: "Inbound", tags: [], notes: [], createdAt: stamp(-16) },
   ];
   const deals = [
-    { id: "d1", name: "Spring cloth contract", companyId: "c1", contactId: "p1", amount: 84000, stage: "negotiation", probability: 75, close: dayOffset(12), owner: "Avery Chen", tags: ["Renewal"], notes: [], createdAt: stamp(-18) },
+    { id: "d1", name: "Spring cloth contract", companyId: "c1", contactId: "p1", contactIds: ["p1", "p2"], amount: 84000, stage: "negotiation", probability: 75, close: dayOffset(12), owner: "Avery Chen", tags: ["Renewal"], lines: [{ id: "ld1", name: "Spring cloth", qty: 400, price: 210 }], stageHistory: [{ at: stamp(-6), from: "proposal", to: "negotiation", by: "Avery Chen" }, { at: stamp(-12), from: "qualified", to: "proposal", by: "Avery Chen" }, { at: stamp(-16), from: "new", to: "qualified", by: "Avery Chen" }], notes: [], createdAt: stamp(-18) },
     { id: "d2", name: "Lobby renovation", companyId: "c2", contactId: "p3", amount: 126000, stage: "proposal", probability: 50, close: dayOffset(30), owner: "Jordan Hale", tags: ["Priority"], notes: [], createdAt: stamp(-14) },
     { id: "d3", name: "Catering rollout", companyId: "c3", contactId: "p5", amount: 18500, stage: "qualified", probability: 25, close: dayOffset(20), owner: "Avery Chen", tags: [], notes: [], createdAt: stamp(-10) },
-    { id: "d4", name: "West coast lanes", companyId: "c4", contactId: "p6", amount: 240000, stage: "negotiation", probability: 75, close: dayOffset(8), owner: "Sam Okonkwo", tags: ["Priority"], notes: [note("nd4", "Legal is the only open item. Ops already said yes.", "Sam Okonkwo", -1)], createdAt: stamp(-16) },
+    { id: "d4", name: "West coast lanes", companyId: "c4", contactId: "p6", contactIds: ["p6", "p7"], amount: 240000, stage: "negotiation", probability: 75, close: dayOffset(8), owner: "Sam Okonkwo", tags: ["Priority"], lines: [], notes: [note("nd4", "Legal is the only open item. Ops already said yes.", "Sam Okonkwo", -1)], createdAt: stamp(-16) },
     { id: "d5", name: "Spring catalog", companyId: "c5", contactId: "p8", amount: 22000, stage: "new", probability: 10, close: dayOffset(45), owner: "Jordan Hale", tags: [], notes: [], createdAt: stamp(-3) },
     { id: "d6", name: "Patient reminders", companyId: "c6", contactId: "p9", amount: 41000, stage: "proposal", probability: 50, close: dayOffset(18), owner: "Avery Chen", tags: [], notes: [], createdAt: stamp(-9) },
-    { id: "d7", name: "Wholesale program", companyId: "c7", contactId: "p10", amount: 67000, stage: "qualified", probability: 25, close: dayOffset(25), owner: "Sam Okonkwo", tags: ["Partner"], notes: [], createdAt: stamp(-6) },
+    { id: "d7", name: "Wholesale program", companyId: "c7", contactId: "p10", amount: 67000, stage: "qualified", probability: 25, close: dayOffset(25), owner: "Sam Okonkwo", tags: ["Partner"], lines: [{ id: "ld7a", name: "Field jacket", qty: 200, price: 180 }, { id: "ld7b", name: "Day pack", qty: 100, price: 310 }], notes: [], createdAt: stamp(-6) },
     { id: "d8", name: "Research retainer", companyId: "c8", contactId: "p11", amount: 54000, stage: "won", probability: 100, close: dayOffset(-5), owner: "Jordan Hale", tags: ["Champion"], notes: [], createdAt: stamp(-26) },
-    { id: "d9", name: "Design partner", companyId: "c9", contactId: "p12", amount: 15000, stage: "lost", probability: 0, close: dayOffset(-12), owner: "Avery Chen", tags: [], notes: [], createdAt: stamp(-21) },
+    { id: "d9", name: "Design partner", companyId: "c9", contactId: "p12", amount: 15000, stage: "lost", probability: 0, lostReason: "No budget", close: dayOffset(-12), owner: "Avery Chen", tags: [], stageHistory: [{ at: stamp(-12), from: "qualified", to: "lost", by: "Avery Chen" }], notes: [], createdAt: stamp(-21) },
     { id: "d10", name: "Depot software", companyId: "c10", contactId: "p13", amount: 98000, stage: "new", probability: 10, close: dayOffset(40), owner: "Sam Okonkwo", tags: [], notes: [], createdAt: stamp(-2) },
     { id: "d11", name: "Replenishment order", companyId: "c1", contactId: "p2", amount: 31000, stage: "qualified", probability: 25, close: dayOffset(22), owner: "Avery Chen", tags: [], notes: [], createdAt: stamp(-4) },
     { id: "d12", name: "Signage package", companyId: "c2", contactId: "p4", amount: 27500, stage: "won", probability: 100, close: dayOffset(-20), owner: "Jordan Hale", tags: [], notes: [], createdAt: stamp(-30) },
@@ -779,9 +843,9 @@ function payload() {
 function bookFrom(data) {
   return {
     currentUser: OWNERS.includes(data.currentUser) ? data.currentUser : "Avery Chen",
-    people: data.people,
+    people: data.people.map(normalizePerson),
     companies: data.companies,
-    deals: data.deals,
+    deals: data.deals.map(normalizeDeal),
     tasks: data.tasks,
     savedViews: Array.isArray(data.savedViews) ? data.savedViews : [],
     ui: freshUi(data.ui),
@@ -842,9 +906,9 @@ function applyView(object, id) {
 }
 function blank(type) {
   const owner = state.currentUser;
-  if (type === "person") return { name: "", title: "", email: "", phone: "", companyId: "", owner, stage: "Lead", source: "Inbound", tags: [], notes: [] };
+  if (type === "person") return { name: "", title: "", email: "", phone: "", companyId: "", owner, stage: "Lead", source: "Inbound", tags: [], doNotContact: false, stageHistory: [], notes: [] };
   if (type === "company") return { name: "", domain: "", industry: "Software", size: "1–10", city: "", owner, tags: [], notes: [] };
-  if (type === "deal") return { name: "", companyId: "", contactId: "", amount: 0, stage: "new", probability: 10, close: dayOffset(30), owner, tags: [], notes: [] };
+  if (type === "deal") return { name: "", companyId: "", contactId: "", contactIds: [], amount: 0, stage: "new", probability: 10, lostReason: "", close: dayOffset(30), owner, tags: [], lines: [], stageHistory: [], notes: [] };
   return { subject: "", type: "Task", due: todayISO(), done: false, owner, relatedType: "person", relatedId: "", note: "", notes: [] };
 }
 function unlink(type, id) {
@@ -852,7 +916,10 @@ function unlink(type, id) {
     state.people.forEach((person) => { if (person.companyId === id) person.companyId = ""; });
     state.deals.forEach((deal) => { if (deal.companyId === id) deal.companyId = ""; });
   }
-  if (type === "person") state.deals.forEach((deal) => { if (deal.contactId === id) deal.contactId = ""; });
+  if (type === "person") state.deals.forEach((deal) => {
+    deal.contactIds = dealPeople(deal).filter((item) => item !== id);
+    deal.contactId = deal.contactIds[0] || "";
+  });
   state.tasks.forEach((task) => { if (task.relatedType === type && task.relatedId === id) task.relatedId = ""; });
 }
 function eachSelected(fn) {
@@ -876,6 +943,23 @@ function selectField(prefix, key, label, pairs, value, extra = "") {
 }
 function tagField(tags) {
   return `<div class="span-2"><span class="lbl">Tags</span><div class="tagset">${TAGS.map((tag) => `<button type="button" data-action="toggle-tag" data-tag="${esc(tag)}" aria-pressed="${(tags || []).includes(tag) ? "true" : "false"}">${esc(tag)}</button>`).join("")}</div></div>`;
+}
+function buyerField(record) {
+  const chosen = new Set((record.contactIds || []).filter((id) => id && id !== record.contactId));
+  const list = [];
+  state.people.forEach((person) => {
+    const atCompany = record.companyId && person.companyId === record.companyId && person.id !== record.contactId;
+    const already = chosen.has(person.id);
+    if (atCompany || already) list.push(person);
+  });
+  if (!list.length) return `<p class="meta span-2">Other people at this company show up here.</p>`;
+  const buttons = list.map((person) => `<button type="button" data-action="toggle-buyer" data-id="${esc(person.id)}" aria-pressed="${chosen.has(person.id) ? "true" : "false"}">${esc(person.name)}</button>`).join("");
+  return `<div class="span-2"><span class="lbl">Also on this deal</span><div class="tagset">${buttons}</div></div>`;
+}
+function linesField(prefix, record) {
+  const rows = (record.lines || []).map((line) => `<div class="line"><input id="${prefix}-line-${esc(line.id)}-name" data-field="lineName" data-line="${esc(line.id)}" value="${esc(line.name)}" placeholder="What they are buying" aria-label="Item" autocomplete="off"><input id="${prefix}-line-${esc(line.id)}-qty" data-field="lineQty" data-line="${esc(line.id)}" type="number" min="0" value="${esc(line.qty)}" aria-label="Quantity"><input id="${prefix}-line-${esc(line.id)}-price" data-field="linePrice" data-line="${esc(line.id)}" type="number" min="0" step="1" value="${esc(line.price)}" aria-label="Price"><button type="button" data-action="remove-line" data-line="${esc(line.id)}" aria-label="Remove ${esc(line.name || "line")}">×</button></div>`).join("");
+  const total = (record.lines || []).length ? `<p class="meta">Total ${money(lineTotal(record))}</p>` : "";
+  return `<div class="span-2"><span class="lbl">What they are buying</span><div class="lines">${rows}<button type="button" class="btn" data-action="add-line">Add a line</button></div>${total}</div>`;
 }
 function companyPairs(current) {
   const pairs = [["", "No company"], ...state.companies.map((company) => [company.id, company.name])];
@@ -907,6 +991,7 @@ function fieldsFor(type, record, prefix) {
       selectField(prefix, "owner", "Owner", OWNERS.map((owner) => [owner, owner]), record.owner),
       selectField(prefix, "stage", "Stage", CONTACT_STAGES.map((stage) => [stage, stage]), record.stage),
       selectField(prefix, "source", "Source", SOURCES.map((source) => [source, source]), record.source, "span-2"),
+      `<label class="checkline span-2"><input id="${prefix}-doNotContact" data-field="doNotContact" type="checkbox"${record.doNotContact ? " checked" : ""}> Do not contact</label>`,
       tagField(record.tags),
     ].join("");
   }
@@ -926,8 +1011,13 @@ function fieldsFor(type, record, prefix) {
       textField(prefix, "name", "Deal", record.name, "text", "span-2"),
       selectField(prefix, "companyId", "Company", companyPairs(record.companyId), record.companyId || ""),
       selectField(prefix, "contactId", "Contact", contactPairs(record.companyId, record.contactId), record.contactId || ""),
-      textField(prefix, "amount", "Amount", record.amount, "number"),
+      buyerField(record),
+      linesField(prefix, record),
+      (record.lines || []).length
+        ? `<label>Amount<input id="${prefix}-amount" data-field="amount" type="number" value="${esc(lineTotal(record))}" readonly></label>`
+        : textField(prefix, "amount", "Amount", record.amount, "number"),
       selectField(prefix, "stage", "Stage", DEAL_STAGES.map((stage) => [stage.id, stage.label]), record.stage),
+      record.stage === "lost" ? selectField(prefix, "lostReason", "Why it was lost", [["", "Choose a reason"], ...LOST_REASONS.map((reason) => [reason, reason])], record.lostReason || "", "span-2") : "",
       textField(prefix, "probability", "Probability", record.probability, "number"),
       textField(prefix, "close", "Close date", record.close, "date"),
       selectField(prefix, "owner", "Owner", OWNERS.map((owner) => [owner, owner]), record.owner, "span-2"),
@@ -978,6 +1068,7 @@ function toolbar(object) {
     parts.push(selectFilter("stage", "Stage", [["", "All stages"], ...CONTACT_STAGES.map((stage) => [stage, stage])], filters.stage));
     parts.push(selectFilter("source", "Source", [["", "All sources"], ...SOURCES.map((source) => [source, source])], filters.source));
     parts.push(selectFilter("company", "Company", [["", "All companies"], ...state.companies.map((company) => [company.id, company.name])], filters.company));
+    parts.push(selectFilter("reach", "Contact", [["", "Anyone"], ["yes", "Do not contact"], ["no", "Ok to contact"]], filters.reach));
   }
   if (object === "companies") parts.push(selectFilter("industry", "Industry", [["", "All industries"], ...INDUSTRIES.map((item) => [item, item])], filters.industry));
   if (object === "deals") {
@@ -1024,6 +1115,7 @@ function table(object, rows) {
       state.ui.selection.includes(row.id) ? "is-selected" : "",
       row.done ? "is-done" : "",
       object === "tasks" && !row.done && row.due && row.due < todayISO() ? "is-overdue" : "",
+      object === "people" && row.doNotContact ? "is-quiet" : "",
     ].filter(Boolean).join(" ");
     const cells = columns.map((column) => `<td class="${column.num ? "num" : ""} ${column.key === "due" ? "due-cell" : ""}">${column.render(row)}</td>`).join("");
     return `<tr class="${classes}" data-action="open-record" data-type="${type}" data-id="${esc(row.id)}"><td class="check"><input type="checkbox" data-action="toggle-select" data-id="${esc(row.id)}" aria-label="Select ${esc(row.name || row.subject || "row")}"${state.ui.selection.includes(row.id) ? " checked" : ""}></td>${cells}</tr>`;
@@ -1034,7 +1126,12 @@ function table(object, rows) {
 function board(rows) {
   return `<div class="board">${DEAL_STAGES.map((stage) => {
     const cards = rows.filter((deal) => deal.stage === stage.id);
-    return `<section class="column" data-drop-stage="${stage.id}"><header><strong>${esc(stage.label)}</strong><span>${cards.length} · ${money(sumAmount(cards))}</span></header>${cards.map((deal) => `<article class="deal-card" draggable="true" data-drag-id="${esc(deal.id)}" data-action="open-record" data-type="deal" data-id="${esc(deal.id)}"><strong>${esc(deal.name)}</strong><span>${esc(companyName(deal.companyId) || "No company")}</span><span class="money">${money(deal.amount)}</span><span class="meta">${esc(fmtDate(deal.close))} · ${esc(deal.owner)}</span></article>`).join("")}${cards.length ? "" : `<p class="meta">Drop a deal here</p>`}</section>`;
+    return `<section class="column" data-drop-stage="${stage.id}"><header><strong>${esc(stage.label)}</strong><span>${cards.length} · ${money(sumAmount(cards))}</span></header>${cards.map((deal) => {
+      const names = dealPeople(deal).map(personName).filter(Boolean);
+      const who = names.length > 1 ? `${names[0]} +${names.length - 1}` : (names[0] || "No contact");
+      const reason = deal.stage === "lost" ? `<span class="reason">${esc(deal.lostReason || "Needs a reason")}</span>` : "";
+      return `<article class="deal-card" draggable="true" data-drag-id="${esc(deal.id)}" data-action="open-record" data-type="deal" data-id="${esc(deal.id)}"><strong>${esc(deal.name)}</strong><span>${esc(companyName(deal.companyId) || "No company")}</span><span>${esc(who)}</span>${reason}<span class="money">${money(deal.amount)}</span><span class="meta">${esc(fmtDate(deal.close))} · ${esc(deal.owner)}</span></article>`;
+    }).join("")}${cards.length ? "" : `<p class="meta">Drop a deal here</p>`}</section>`;
   }).join("")}</div>`;
 }
 
@@ -1075,17 +1172,39 @@ function overview() {
       <article><p class="kicker">Won</p><p class="stat">${money(sumAmount(won))}</p><p class="sub">${won.length} closed · ${money(sumAmount(lost))} lost</p></article>
       <article><p class="kicker">Open tasks</p><p class="stat">${openTasks.length}</p><p class="sub">${overdue} overdue</p></article>
     </section>
+    ${quietNote()}
     <div class="split">
       <section class="panel"><h2>Pipeline by stage</h2><div class="bars">${bars}</div></section>
       <section class="panel"><h2>Tasks due</h2>${taskList}</section>
     </div>
     <section class="panel feed"><h2>Recent activity</h2>${feed}</section>`;
 }
+function quietNote() {
+  const people = state.people.filter((person) => person.doNotContact);
+  const missing = state.deals.filter((deal) => deal.stage === "lost" && !deal.lostReason);
+  const parts = [];
+  if (people.length === 1) parts.push(`${people[0].name} asked not to be contacted.`);
+  else if (people.length) parts.push(`${people.length} people asked not to be contacted.`);
+  if (missing.length === 1) parts.push(`${missing[0].name} is lost and still needs a reason.`);
+  else if (missing.length) parts.push(`${missing.length} lost deals still need a reason.`);
+  return parts.length ? `<p class="quiet-note">${esc(parts.join(" "))}</p>` : "";
+}
+function historySentence(type, entry) {
+  const label = (value) => type === "deal" ? stageLabel(value) : (value || "—");
+  if (!entry.from) return `${entry.by} set the stage to ${label(entry.to)}.`;
+  return `${entry.by} moved this from ${label(entry.from)} to ${label(entry.to)}.`;
+}
+function historyBlock(type, record) {
+  const rows = record.stageHistory || [];
+  if (!rows.length) return "";
+  return `<section><h3>Stage history</h3><ul class="history">${rows.map((entry) => `<li><p>${esc(historySentence(type, entry))}</p><p class="meta">${esc(fmtDate(entry.at))}</p></li>`).join("")}</ul></section>`;
+}
 function activityFeed() {
   const items = [];
   [["person", state.people], ["company", state.companies], ["deal", state.deals]].forEach(([type, rows]) => {
     rows.forEach((row) => {
       (row.notes || []).forEach((entry) => items.push({ at: entry.at, label: `${entry.author} on ${row.name}`, detail: entry.body }));
+      (row.stageHistory || []).forEach((entry) => items.push({ at: entry.at, label: `${entry.by} on ${row.name}`, detail: historySentence(type, entry) }));
     });
   });
   state.tasks.forEach((task) => items.push({ at: task.createdAt, label: `${task.type}: ${task.subject}`, detail: recordTitle(task.relatedType, task.relatedId) || task.owner }));
@@ -1113,14 +1232,14 @@ function relatedBlock(type, record) {
   let body = "";
   if (type === "person") {
     const company = record.companyId ? [{ type: "company", id: record.companyId, label: companyName(record.companyId) || "Company" }] : [];
-    const deals = state.deals.filter((deal) => deal.contactId === record.id).map((deal) => ({ type: "deal", id: deal.id, label: deal.name }));
+    const deals = state.deals.filter((deal) => dealPeople(deal).includes(record.id)).map((deal) => ({ type: "deal", id: deal.id, label: deal.name }));
     body = `<h3>Company</h3>${relatedButtons(company)}<h3>Deals</h3>${relatedButtons(deals)}`;
   } else if (type === "company") {
     body = `<h3>People</h3>${relatedButtons(peopleAt(record.id).map((person) => ({ type: "person", id: person.id, label: person.name })))}<h3>Deals</h3>${relatedButtons(state.deals.filter((deal) => deal.companyId === record.id).map((deal) => ({ type: "deal", id: deal.id, label: `${deal.name} · ${money(deal.amount)}` })))}`;
   } else if (type === "deal") {
     const links = [];
     if (record.companyId) links.push({ type: "company", id: record.companyId, label: companyName(record.companyId) || "Company" });
-    if (record.contactId) links.push({ type: "person", id: record.contactId, label: personName(record.contactId) || "Person" });
+    dealPeople(record).forEach((id) => links.push({ type: "person", id, label: personName(id) || "Person" }));
     body = `<h3>Linked records</h3>${relatedButtons(links)}`;
   } else if (record.relatedId) {
     body = `<h3>Linked record</h3>${relatedButtons([{ type: record.relatedType, id: record.relatedId, label: recordTitle(record.relatedType, record.relatedId) || "Record" }])}`;
@@ -1142,7 +1261,7 @@ function drawer() {
   if (!current) return "";
   const record = getRecord(current.type, current.id);
   if (!record) return "";
-  return `<button type="button" class="scrim" data-action="close-drawer" aria-label="Close details"></button><aside class="drawer" role="dialog" aria-label="${esc(typeLabel(current.type))}"><div class="drawer-top"><p class="kicker">${esc(typeLabel(current.type))}</p><button type="button" class="btn" data-action="close-drawer">Close</button></div><div data-editor="record"><div class="fields">${fieldsFor(current.type, record, "d")}</div>${relatedBlock(current.type, record)}${current.type === "task" ? "" : activityBlock(current.type, current.id)}${notesBlock(record)}</div><button type="button" class="btn danger" data-action="delete-record">Delete</button></aside>`;
+  return `<button type="button" class="scrim" data-action="close-drawer" aria-label="Close details"></button><aside class="drawer" role="dialog" aria-label="${esc(typeLabel(current.type))}"><div class="drawer-top"><p class="kicker">${esc(typeLabel(current.type))}</p><button type="button" class="btn" data-action="close-drawer">Close</button></div><div data-editor="record"><div class="fields">${fieldsFor(current.type, record, "d")}</div>${current.type === "person" || current.type === "deal" ? historyBlock(current.type, record) : ""}${relatedBlock(current.type, record)}${current.type === "task" ? "" : activityBlock(current.type, current.id)}${notesBlock(record)}</div><button type="button" class="btn danger" data-action="delete-record">Delete</button></aside>`;
 }
 function modal() {
   if (!state.ui.modal || !state.ui.draft) return "";
@@ -1195,9 +1314,19 @@ function createRecord() {
   const record = { ...draft, tags: [...(draft.tags || [])], notes: [], id: uid(type.slice(0, 1)), createdAt: new Date().toISOString() };
   if (type === "person" || type === "company" || type === "deal") record.name = label;
   if (type === "task") record.subject = label;
+  if (type === "person") {
+    record.doNotContact = !!draft.doNotContact;
+    record.stageHistory = [];
+    rememberStage(record, "", record.stage);
+  }
   if (type === "deal") {
-    record.amount = Math.max(0, Number(record.amount) || 0);
+    record.lines = (draft.lines || []).map((line) => ({ ...line }));
+    record.contactIds = [...(draft.contactIds || [])];
+    record.stageHistory = [];
+    syncDealMoney(record);
+    if (!record.lines.length) record.amount = Math.max(0, Number(record.amount) || 0);
     record.probability = record.stage === "won" ? 100 : record.stage === "lost" ? 0 : Math.max(0, Math.min(100, Number(record.probability) || stageProb(record.stage)));
+    rememberStage(record, "", record.stage);
   }
   collection(type).unshift(record);
   state.ui.modal = null;
@@ -1263,22 +1392,43 @@ function updateField(editor, element, restoreIfBlank) {
   const record = editor.dataset.editor === "draft" ? state.ui.draft : getRecord(state.ui.drawer?.type, state.ui.drawer?.id);
   if (!record) return;
   const key = element.dataset.field;
+  if (element.dataset.line) {
+    const line = (record.lines || []).find((item) => item.id === element.dataset.line);
+    if (!line) return;
+    if (key === "lineName") line.name = element.value;
+    if (key === "lineQty") line.qty = Math.max(0, Number(element.value) || 0);
+    if (key === "linePrice") line.price = Math.max(0, Number(element.value) || 0);
+    syncDealMoney(record);
+    if (editor.dataset.editor === "record") persist();
+    render();
+    return;
+  }
   if ((key === "name" || key === "subject") && !String(element.value).trim()) {
     if (restoreIfBlank) render();
     return;
   }
-  if (key === "amount") record.amount = Math.max(0, Number(element.value) || 0);
-  else if (key === "probability") record.probability = Math.max(0, Math.min(100, Number(element.value) || 0));
+  const previous = record[key];
+  if (key === "amount") {
+    if ((record.lines || []).length) return;
+    record.amount = Math.max(0, Number(element.value) || 0);
+  } else if (key === "probability") record.probability = Math.max(0, Math.min(100, Number(element.value) || 0));
   else if (element.type === "checkbox") record[key] = element.checked;
   else record[key] = element.value;
   const isDeal = (editor.dataset.editor === "draft" && state.ui.modal === "deal") || (editor.dataset.editor === "record" && state.ui.drawer?.type === "deal");
+  const isPerson = (editor.dataset.editor === "draft" && state.ui.modal === "person") || (editor.dataset.editor === "record" && state.ui.drawer?.type === "person");
+  if (key === "stage" && (isDeal || isPerson)) rememberStage(record, previous, record[key]);
   if (isDeal && key === "stage") {
     if (record.stage === "won") record.probability = 100;
     if (record.stage === "lost") record.probability = 0;
   }
+  if (isDeal && key === "contactId") setPrimaryContact(record, record.contactId);
   if (isDeal && key === "companyId") {
-    const contact = state.people.find((person) => person.id === record.contactId);
-    if (contact && record.companyId && contact.companyId !== record.companyId) record.contactId = "";
+    const keep = dealPeople(record).filter((id) => {
+      const person = state.people.find((item) => item.id === id);
+      return person && (!record.companyId || person.companyId === record.companyId);
+    });
+    record.contactId = keep[0] || "";
+    record.contactIds = keep;
   }
   if (editor.dataset.editor === "record") persist();
   render();
@@ -1404,6 +1554,27 @@ function onClick(event) {
     task.done = !task.done;
     persist();
     render();
+  } else if (action === "toggle-buyer") {
+    const editor = element.closest("[data-editor]");
+    const record = editor?.dataset.editor === "draft" ? state.ui.draft : getRecord(state.ui.drawer?.type, state.ui.drawer?.id);
+    if (!record) return;
+    const id = element.dataset.id;
+    const extras = new Set((record.contactIds || []).filter((item) => item && item !== record.contactId));
+    if (extras.has(id)) extras.delete(id);
+    else extras.add(id);
+    record.contactIds = record.contactId ? [record.contactId, ...extras] : [...extras];
+    if (editor?.dataset.editor === "record") persist();
+    render();
+  } else if (action === "add-line" || action === "remove-line") {
+    const editor = element.closest("[data-editor]");
+    const record = editor?.dataset.editor === "draft" ? state.ui.draft : getRecord(state.ui.drawer?.type, state.ui.drawer?.id);
+    if (!record) return;
+    record.lines = record.lines || [];
+    if (action === "add-line") record.lines.push({ id: uid("l"), name: "", qty: 1, price: 0 });
+    else record.lines = record.lines.filter((line) => line.id !== element.dataset.line);
+    syncDealMoney(record);
+    if (editor?.dataset.editor === "record") persist();
+    render();
   } else if (action === "toggle-tag") {
     const editor = element.closest("[data-editor]");
     const record = editor?.dataset.editor === "draft" ? state.ui.draft : getRecord(state.ui.drawer?.type, state.ui.drawer?.id);
@@ -1423,7 +1594,9 @@ function onClick(event) {
     const stage = document.getElementById("bulk-stage")?.value;
     if (!stage) return;
     eachSelected((record) => {
+      const from = record.stage;
       record.stage = stage;
+      rememberStage(record, from, stage);
       if (state.ui.view === "deals" && stage === "won") record.probability = 100;
       if (state.ui.view === "deals" && stage === "lost") record.probability = 0;
     });
@@ -1552,7 +1725,9 @@ function bind() {
     event.preventDefault();
     const deal = getRecord("deal", event.dataTransfer.getData("text/plain"));
     if (!deal) return;
+    const from = deal.stage;
     deal.stage = column.dataset.dropStage;
+    rememberStage(deal, from, deal.stage);
     if (deal.stage === "won") deal.probability = 100;
     if (deal.stage === "lost") deal.probability = 0;
     persist();
